@@ -48,6 +48,38 @@ PrimeDictate supports polite send phrases like "thank you" and strips them befor
 
 ![Impact dashboard and WPM tracking](assets/settings_impact.jpg)
 
+## Automation Story
+
+### The problem
+
+The keyboard is no longer the primary interface for work. Your voice is.
+
+### The automation approach
+
+Voice is the new interface. PrimeDictate turns speech into a practical local workflow: hotkey, speak, review, commit.
+
+### Qualified result
+
+Most people type around 50 to 70 WPM. Dictation can run around 160 WPM in real workflows. The impact dashboard tracks this in-app so results are visible.
+
+### What it costs
+
+PrimeDictate is free and runs on your own computer.
+
+For the best experience, use stronger local hardware:
+
+- a modern CPU
+- a capable GPU
+- or a Copilot+ PC with NPU support
+
+We continue improving model options and plan to keep upgrading quantized model support as newer variants become available.
+
+### Why this matters for FlowDevs
+
+This is one of the internal tools our engineering team uses to move faster. As one of our engineers put it: this tool changed his life.
+
+See how FlowDevs builds practical automation systems at [FlowDevs](https://flowdevs.io).
+
 ## Why It Wins
 
 - **Global control**: Configurable hotkeys for start/stop toggle, emergency stop/discard, and history.
