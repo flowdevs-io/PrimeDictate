@@ -368,10 +368,16 @@ jobs:
           choco push $packagePath --source $chocoSource --api-key $env:CHOCO_API_KEY --debug --verbose 2>&1 | Tee-Object -Variable pushLines
           if ($LASTEXITCODE -ne 0) {
             $pushOutput = ($pushLines | Out-String)
+            $isChocolateyCommunitySource = ($chocoSource -match '(^|://)(push\.)?chocolatey\.org(/|$)')
             if ($pushOutput -match 'already exists' -or
                 $pushOutput -match 'already contains' -or
                 $pushOutput -match '409 \(Conflict\)') {
               Write-Warning "Chocolatey package version already exists on source; skipping duplicate push."
+              exit 0
+            }
+
+            if ($isChocolateyCommunitySource -and $pushOutput -match '422 \(Unprocessable Entity\)') {
+              Write-Warning "Chocolatey push returned 422 on community source. This commonly indicates the version was already uploaded or is pending moderation. Continuing release pipeline."
               exit 0
             }
 
