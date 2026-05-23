@@ -2,8 +2,8 @@ $ErrorActionPreference = 'Stop'
 $packageParameters = Get-PackageParameters
 $packageVersion = if ([string]::IsNullOrWhiteSpace($env:ChocolateyPackageVersion)) { '4.4.0' } else { $env:ChocolateyPackageVersion }
 $releaseTag = "v$packageVersion"
-$x64Url = "https://github.com/CakeRepository/PrimeDictate/releases/download/$releaseTag/PrimeDictate-Setup-$releaseTag-x64.msi"
-$arm64Url = "https://github.com/CakeRepository/PrimeDictate/releases/download/$releaseTag/PrimeDictate-Setup-$releaseTag-arm64.msi"
+$x64Url = "https://github.com/flowdevs-io/PrimeDictate/releases/download/$releaseTag/PrimeDictate-Setup-$releaseTag-x64.msi"
+$arm64Url = "https://github.com/flowdevs-io/PrimeDictate/releases/download/$releaseTag/PrimeDictate-Setup-$releaseTag-arm64.msi"
 $x64Checksum = '__PRIMEDICTATE_X64_SHA256__'
 $arm64Checksum = '__PRIMEDICTATE_ARM64_SHA256__'
 

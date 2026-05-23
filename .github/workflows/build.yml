@@ -181,10 +181,10 @@ jobs:
             ForEach-Object { Join-Path $_.FullName "publish" } |
             Where-Object { Test-Path $_ }
           $filesToSign = foreach ($publishDir in $publishDirs) {
-            Get-ChildItem -Path $publishDir -Include *.exe,*.dll -File -Recurse | Select-Object -ExpandProperty FullName
+            Get-ChildItem -Path $publishDir -Filter "PrimeDictate.exe" -File -Recurse | Select-Object -ExpandProperty FullName
           }
           if (-not $filesToSign -or $filesToSign.Count -eq 0) {
-            throw "No publish payload binaries found to sign under $env:PUBLISH_ROOT"
+            throw "No PrimeDictate publish executables found to sign under $env:PUBLISH_ROOT"
           }
 
           foreach ($path in $filesToSign) {
@@ -323,6 +323,48 @@ jobs:
           & gh release upload $tag $assets --repo $repo --clobber
           if ($LASTEXITCODE -ne 0) {
             throw "Failed to upload release assets for tag $tag"
+          }
+
+      - name: Build Chocolatey package
+        if: github.event_name == 'push' && steps.version.outputs.is_semver_tag == 'true' && (github.event_name != 'workflow_dispatch' || !inputs.submit_winget_only)
+        id: chocolatey_pack
+        shell: pwsh
+        run: |
+          $packagePath = .\scripts\Build-ChocolateyPackage.ps1 `
+            -PackageVersion "${{ steps.version.outputs.package_version }}" `
+            -ReleaseAssetDirectory "${{ steps.release_assets.outputs.asset_dir }}" `
+            -Repository "${{ github.repository }}" `
+            -OutputDirectory (Join-Path $env:GITHUB_WORKSPACE "artifacts\chocolatey")
+
+          if ([string]::IsNullOrWhiteSpace($packagePath)) {
+            throw "Build-ChocolateyPackage.ps1 did not return a package path."
+          }
+
+          if (-not (Test-Path $packagePath)) {
+            throw "Generated Chocolatey package does not exist: $packagePath"
+          }
+
+          "package_path=$packagePath" >> $env:GITHUB_OUTPUT
+
+      - name: Push Chocolatey package (optional)
+        if: github.event_name == 'push' && steps.version.outputs.is_semver_tag == 'true' && (github.event_name != 'workflow_dispatch' || !inputs.submit_winget_only)
+        shell: pwsh
+        env:
+          CHOCOLATEY_API_KEY: ${{ secrets['CHOCOLATEY_API_KEY'] }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:CHOCOLATEY_API_KEY)) {
+            Write-Host "CHOCOLATEY_API_KEY is not configured; skipping Chocolatey push."
+            exit 0
+          }
+
+          $packagePath = "${{ steps.chocolatey_pack.outputs.package_path }}"
+          if ([string]::IsNullOrWhiteSpace($packagePath) -or -not (Test-Path $packagePath)) {
+            throw "Chocolatey package path is missing: $packagePath"
+          }
+
+          choco push $packagePath --source https://push.chocolatey.org/ --api-key $env:CHOCOLATEY_API_KEY
+          if ($LASTEXITCODE -ne 0) {
+            throw "Chocolatey push failed with exit code $LASTEXITCODE"
           }
 
       - name: Resolve release MSI assets for submit-winget-only mode

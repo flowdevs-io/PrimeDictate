@@ -1,6 +1,6 @@
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
-     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util"
-     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util"
+  xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <Package
       Name="PrimeDictate"
       Language="1033"
@@ -19,37 +19,6 @@
     <WixVariable Id="WixUILicenseRtf" Value="$(sys.SOURCEFILEDIR)..\assets\License.rtf" />
     <Property Id="LAUNCHATLOGIN" Value="1" />
 
-    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch PrimeDictate (Ready=Blue, Recording=Red, Error=Yellow tray status)" />
-    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
-    <CustomAction
-        Id="SetWixShellExecTarget"
-        Property="WixShellExecTarget"
-        Value="[INSTALLFOLDER]PrimeDictate.exe"
-        Execute="immediate" />
-    <CustomAction
-        Id="LaunchApplication"
-        BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
-        DllEntry="WixShellExec"
-        Execute="immediate"
-        Impersonate="yes"
-        Return="ignore" />
-    <UI>
-      <Publish
-          Dialog="ExitDialog"
-          Control="Finish"
-          Event="DoAction"
-          Value="SetWixShellExecTarget"
-          Order="1"
-          Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed" />
-      <Publish
-          Dialog="ExitDialog"
-          Control="Finish"
-          Event="DoAction"
-          Value="LaunchApplication"
-          Order="2"
-          Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed" />
-    </UI>
-
     <Feature
         Id="Main"
         Title="PrimeDictate"
@@ -58,11 +27,6 @@
       <ComponentGroupRef Id="AppComponents" />
       <ComponentGroupRef Id="StartMenuShortcutComponents" />
       <ComponentGroupRef Id="LaunchAtLoginComponents" />
-      <ComponentGroupRef Id="OnlineScriptComponents" />
     </Feature>
-
-    <InstallExecuteSequence>
-      <Custom Action="RunDownloadModel" After="InstallFiles" Condition="NOT REMOVE" />
-    </InstallExecuteSequence>
   </Package>
 </Wix>

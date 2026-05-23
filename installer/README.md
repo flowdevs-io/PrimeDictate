@@ -2,21 +2,21 @@
 
 Installers are native **x64** and **ARM64** Windows Installer packages (`.msi`) built with the [WiX Toolset](https://wixtoolset.org/) **through NuGet** (`WixToolset.Sdk`). You only need the **.NET 8 SDK**; you do **not** install WiX separately.
 
-The **online** MSI references **`WixToolset.Util.wixext`** (elevated model download). See that package’s [license / terms](https://github.com/wixtoolset/wix/blob/main/OSMFEULA.txt) if you redistribute installers.
+The **online** MSI installs the PrimeDictate app payload only. Model acquisition happens inside PrimeDictate's first-run setup and Settings window.
 
 | MSI | Contents |
 |-----|----------|
 | **Online x64** (`PrimeDictate-*-Windows-x64-Online.msi`) | x64 app under `Program Files\PrimeDictate`, **Start Menu** shortcut, all-users launch-at-login Startup shortcut by default, and **Add/Remove Programs** icon. The x64 MSI is blocked on ARM64 Windows so Copilot+ PCs use the native ARM64/QNN build. |
 | **Online ARM64** (`PrimeDictate-*-Windows-arm64-Online.msi`) | Native ARM64 app under `Program Files\PrimeDictate` with the same installer behavior and QNN-capable ARM64 runtime payload. |
 
-After files are installed, a **deferred QuietExec** custom action (LocalSystem) runs **`DownloadModel.cmd`** so **`curl`** can write under Program Files. Console output (including **`curl --progress-bar`**) is captured in the MSI log, not in a separate window. **`RunDownloadModelElevated.cmd`** is included if you prefer a visible UAC/console flow.
+After install, users open PrimeDictate and choose a model in first-run setup or Settings. The app can download supported models itself or browse to an existing local model folder.
 
 ## Installer UX
 
-- **Online MSI**: Uses WiX UI with **“Launch PrimeDictate when setup completes”** (checked by default). If checked, setup launches `[INSTALLFOLDER]PrimeDictate.exe` from the finish dialog after the deferred model download custom action runs in execute sequence.
+- **Online MSI**: Uses WiX UI to install the app payload only. The MSI does not run external download commands or launch PrimeDictate from the finish dialog.
 - **Launch at login**: Setup installs `PrimeDictate.lnk` in the all-users Windows Startup folder by default so PrimeDictate runs after users sign in. Silent installs can opt out with `LAUNCHATLOGIN=0`.
-- **First-run app entry**: Launching at install finish lands users in the app’s first-run setup when `%LocalAppData%\PrimeDictate\settings.json` is not yet completed.
-- **Branding continuity**: ARP metadata, MSI names, Start Menu shortcut text, and finish-page launch prompt now align with the app’s branded status language (**Ready=Blue, Recording=Red, Error=Yellow**).
+- **First-run app entry**: Open PrimeDictate from the Start Menu or Startup shortcut after install to complete first-run setup, including model selection or download.
+- **Branding continuity**: ARP metadata, MSI names, and Start Menu shortcut text align with the app’s branded status language (**Ready=Blue, Recording=Red, Error=Yellow**).
 - **Upgrade continuity**: The online MSI keeps the existing product identity (`Name` + `UpgradeCode`) for clean upgrades.
 - **Language**: The installer is pinned to `en-US` UI resources for consistent English setup dialogs.
 
@@ -40,7 +40,7 @@ PrimeDictate publishes to winget from the same tagged release pipeline as the MS
 
 - Package id: `FlowDevs.PrimeDictate`
 - Community manifests: `https://github.com/microsoft/winget-pkgs`
-- Source/release assets: `https://github.com/CakeRepository/PrimeDictate/releases`
+- Source/release assets: `https://github.com/flowdevs-io/PrimeDictate/releases`
 - Product overview/docs: `https://www.flowdevs.io/portfolio/project/primedictate-local-ai-dictation-app`
 
 ### Maintainer flow (recommended)
@@ -85,10 +85,10 @@ Use this when winget reviewers request metadata changes for an existing version.
 | `wix/shared/Branding.wxs` | ARP icon + common Add/Remove Programs metadata |
 | `wix/shared/StartMenuShortcuts.wxs` | Shared Start Menu shortcut component used by the online installer |
 | `wix/shared/LaunchAtLogin.wxs` | Optional all-users Startup-folder shortcut controlled by `LAUNCHATLOGIN` |
-| `wix/online/` | Online package, **Util** QuietExec download, helper `.cmd` scripts |
+| `wix/online/` | Online package for the app payload only; no install-time model download or finish-page app launch |
 | `wix/assets/PrimeDictate.ico` | App + installer icon (also **`ApplicationIcon`** on `PrimeDictate.exe`) |
-| `wix/assets/DownloadModel.cmd` | Curl download used by QuietExec and by the elevated helper |
-| `wix/assets/RunDownloadModelElevated.cmd` | Optional manual re-download with visible UAC |
+| `wix/assets/DownloadModel.cmd` | Legacy helper retained for maintainer reference; not invoked by the online MSI |
+| `wix/assets/RunDownloadModelElevated.cmd` | Legacy helper retained for maintainer reference; not invoked by the online MSI |
 
 ## Version
 

@@ -2,7 +2,7 @@ VERIFICATION
 Verification is intended to assist package reviewers and future maintainers.
 
 1. Download the official release installers for the package version from:
-   https://github.com/CakeRepository/PrimeDictate/releases
+   https://github.com/flowdevs-io/PrimeDictate/releases
 
 2. Compute SHA256 checksums of the downloaded x64 and ARM64 MSIs.
 
@@ -10,7 +10,7 @@ Verification is intended to assist package reviewers and future maintainers.
    tools\chocolateyInstall.ps1
 
 4. This package is built from source and release automation in:
-   https://github.com/CakeRepository/PrimeDictate
+   https://github.com/flowdevs-io/PrimeDictate
 
 Notes:
 - The Chocolatey package downloads release MSIs from GitHub instead of bundling them.

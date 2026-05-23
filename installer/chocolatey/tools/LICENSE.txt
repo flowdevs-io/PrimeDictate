@@ -5,11 +5,11 @@ This Chocolatey package bundles the PrimeDictate installer binary for
 distribution through Chocolatey.
 
 PrimeDictate source and project information:
-https://github.com/CakeRepository/PrimeDictate
+https://github.com/flowdevs-io/PrimeDictate
 
 License details are documented by the project maintainers in the repository
 README license section:
-https://github.com/CakeRepository/PrimeDictate?tab=readme-ov-file#license
+https://github.com/flowdevs-io/PrimeDictate?tab=readme-ov-file#license
 
 Third-party dependencies used by PrimeDictate have their own licenses.
 See the project repository and upstream dependency documentation for details.

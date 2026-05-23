@@ -4,7 +4,7 @@
   Publishes the app and builds WiX online MSIs using only the .NET SDK.
 
 .PARAMETER Installer
-  Online (downloads models after install). The offline installer is currently not built by this helper.
+    Online (ships the app payload only; models are downloaded or browsed from first-run setup). The offline installer is currently not built by this helper.
 
 .PARAMETER RuntimeIdentifier
   Windows runtime identifier(s) to build. Use win-x64, win-arm64, or all.

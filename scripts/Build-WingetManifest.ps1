@@ -7,16 +7,16 @@ param(
     [string] $PackageIdentifier = "FlowDevs.PrimeDictate",
     [Parameter(Mandatory = $true)]
     [string] $PackageVersion,
-    [string] $Repository = "CakeRepository/PrimeDictate",
+    [string] $Repository = "flowdevs-io/PrimeDictate",
     [string] $InstallerDirectory,
     [string] $OutputRoot,
     [string] $DefaultLocale = "en-US",
     [string] $Publisher = "FlowDevs",
     [string] $PublisherUrl = "https://flowdevs.io",
-    [string] $PublisherSupportUrl = "https://github.com/CakeRepository/PrimeDictate/issues",
+    [string] $PublisherSupportUrl = "https://github.com/flowdevs-io/PrimeDictate/issues",
     [string] $Author = "Justin Trantham",
     [string] $PackageName = "PrimeDictate",
-    [string] $PackageUrl = "https://github.com/CakeRepository/PrimeDictate",
+    [string] $PackageUrl = "https://github.com/flowdevs-io/PrimeDictate",
     [string] $Moniker = "primedictate",
     [string] $License = "Proprietary",
     [string] $ShortDescription = "Locally hosted global hotkey dictation for fast Windows desktop workflows.",
@@ -55,10 +55,10 @@ function Get-MsiProperty {
         return $value.Trim()
     }
     finally {
-        if ($view -ne $null) {
+        if ($null -ne $view) {
             [void] [System.Runtime.InteropServices.Marshal]::ReleaseComObject($view)
         }
-        if ($database -ne $null) {
+        if ($null -ne $database) {
             [void] [System.Runtime.InteropServices.Marshal]::ReleaseComObject($database)
         }
         [void] [System.Runtime.InteropServices.Marshal]::ReleaseComObject($installer)

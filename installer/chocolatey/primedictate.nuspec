@@ -5,14 +5,14 @@
     <version>0.0.0</version>
     <title>PrimeDictate</title>
     <authors>FlowDevs</authors>
-    <projectUrl>https://github.com/CakeRepository/PrimeDictate</projectUrl>
-    <projectSourceUrl>https://github.com/CakeRepository/PrimeDictate</projectSourceUrl>
-    <bugTrackerUrl>https://github.com/CakeRepository/PrimeDictate/issues</bugTrackerUrl>
+    <projectUrl>https://github.com/flowdevs-io/PrimeDictate</projectUrl>
+    <projectSourceUrl>https://github.com/flowdevs-io/PrimeDictate</projectSourceUrl>
+    <bugTrackerUrl>https://github.com/flowdevs-io/PrimeDictate/issues</bugTrackerUrl>
     <docsUrl>https://www.flowdevs.io/portfolio/project/primedictate-local-ai-dictation-app</docsUrl>
-    <packageSourceUrl>https://github.com/CakeRepository/PrimeDictate</packageSourceUrl>
-    <iconUrl>https://raw.githubusercontent.com/CakeRepository/PrimeDictate/main/installer/wix/assets/PrimeDictate-chocolatey-icon.png</iconUrl>
-    <licenseUrl>https://github.com/CakeRepository/PrimeDictate?tab=readme-ov-file#license</licenseUrl>
-    <releaseNotes>https://github.com/CakeRepository/PrimeDictate/releases</releaseNotes>
+    <packageSourceUrl>https://github.com/flowdevs-io/PrimeDictate</packageSourceUrl>
+    <iconUrl>https://raw.githubusercontent.com/flowdevs-io/PrimeDictate/main/installer/wix/assets/PrimeDictate-chocolatey-icon.png</iconUrl>
+    <licenseUrl>https://github.com/flowdevs-io/PrimeDictate?tab=readme-ov-file#license</licenseUrl>
+    <releaseNotes>https://github.com/flowdevs-io/PrimeDictate/releases</releaseNotes>
     <tags>dictation speech-to-text whisper local-ai wpf windows</tags>
     <summary>PrimeDictate is a fast, local speech-to-text application for Windows.</summary>
     <description>PrimeDictate is a Windows tray dictation app built with .NET and WPF. It uses local Whisper transcription for privacy-first speech-to-text, global hotkey capture, live overlay preview, and final-only text injection into the active app.</description>

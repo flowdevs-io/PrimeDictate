@@ -2,8 +2,8 @@
   <img src="assets/flowdevs_icon.png" alt="PrimeDictate icon" width="300" />
   <br/>
   <h1>PrimeDictate</h1>
-  <a href="https://github.com/CakeRepository/PrimeDictate/actions/workflows/build.yml">
-    <img src="https://github.com/CakeRepository/PrimeDictate/actions/workflows/build.yml/badge.svg" alt="Build Status">
+  <a href="https://github.com/flowdevs-io/PrimeDictate/actions/workflows/build.yml">
+    <img src="https://github.com/flowdevs-io/PrimeDictate/actions/workflows/build.yml/badge.svg" alt="Build Status">
   </a>
   <p><b>A locally hosted, global hotkey dictation utility for fast desktop workflows.</b></p>
   <p>It captures the default microphone, shows live local transcription in a small overlay, and types the final transcript into the current application after a silence auto-commit or manual stop using SharpHook (no synthetic paste, no clipboard round-trip on the hot path).</p>
@@ -178,7 +178,7 @@ Public installers target **64-bit x64 and ARM64 Windows**. Maintainers build **M
 
 | MSI | When to use |
 |-----|-------------|
-| **Online** | Installs the app under **Program Files** with Start Menu and ARP branding, then downloads models during install through **`DownloadModel.cmd`** / **`RunDownloadModelElevated.cmd`** and an elevated **WiX QuietExec** step. `curl` progress is written to the MSI log (for example `msiexec /i PrimeDictate-….msi /l*v install.log`). |
+| **Online** | Installs the app under **Program Files** with Start Menu and ARP branding. Model download happens inside PrimeDictate during first-run setup or later in Settings, so the MSI itself does not run external download commands during install. |
 
 **Build the online installer**:
 
@@ -219,10 +219,10 @@ If `git ls-remote` prints an existing tag, do not recreate it; choose the correc
 
 Tagged pushes that match `vX.Y.Z` keep the workflow artifact upload for CI debugging and also publish installer assets to the matching GitHub Release. If the Release does not exist yet, the workflow creates it first. Release downloads come from **GitHub Releases**, not the temporary workflow artifact ZIP. If Azure Key Vault signing secrets are unavailable, the release flow still publishes assets as unsigned builds instead of failing before release upload.
 
-- Release page: `https://github.com/CakeRepository/PrimeDictate/releases/tag/vX.Y.Z`
-- Direct x64 MSI asset: `https://github.com/CakeRepository/PrimeDictate/releases/download/vX.Y.Z/PrimeDictate-Setup-vX.Y.Z-x64.msi`
-- Direct ARM64 MSI asset: `https://github.com/CakeRepository/PrimeDictate/releases/download/vX.Y.Z/PrimeDictate-Setup-vX.Y.Z-arm64.msi`
-- Latest release page: `https://github.com/CakeRepository/PrimeDictate/releases/latest`
+- Release page: `https://github.com/flowdevs-io/PrimeDictate/releases/tag/vX.Y.Z`
+- Direct x64 MSI asset: `https://github.com/flowdevs-io/PrimeDictate/releases/download/vX.Y.Z/PrimeDictate-Setup-vX.Y.Z-x64.msi`
+- Direct ARM64 MSI asset: `https://github.com/flowdevs-io/PrimeDictate/releases/download/vX.Y.Z/PrimeDictate-Setup-vX.Y.Z-arm64.msi`
+- Latest release page: `https://github.com/flowdevs-io/PrimeDictate/releases/latest`
 - winget package identifier: `FlowDevs.PrimeDictate`
 
 Because the MSI filenames include the tag and architecture, Webflow should either link to the release page/latest page or update both direct MSI URLs each time a new release tag is published.
@@ -234,7 +234,7 @@ winget manifest generation is part of the same `vX.Y.Z` tag release flow so MSI,
 - winget package id: `FlowDevs.PrimeDictate`
 - winget source repository: `https://github.com/microsoft/winget-pkgs`
 - Product overview page: `https://www.flowdevs.io/portfolio/project/primedictate-local-ai-dictation-app`
-- Official release downloads: `https://github.com/CakeRepository/PrimeDictate/releases`
+- Official release downloads: `https://github.com/flowdevs-io/PrimeDictate/releases`
 
 The tag-triggered workflow submits to winget only when `WINGET_CREATE_GITHUB_TOKEN` is present. Without that secret, the workflow still publishes release assets to GitHub and logs that winget submission was skipped.
 
@@ -267,7 +267,7 @@ PrimeDictate now runs as a **WPF tray app** (no console window in normal use):
 - **Impact dashboard**: Settings includes a local stats tab with productivity cards, a 14-day words chart, and milestone achievements.
 - **Built-in update checks**: After first-run setup, PrimeDictate checks GitHub Releases at most once per day when automatic checks are enabled. Failed install attempts clear the check timestamp so the next launch can retry. The tray menu also has **Check for updates** for a manual check.
 - **Installer continuity**: The online MSI keeps one product identity for clean upgrades.
-- **Installer finish launch**: The online MSI exposes **“Launch PrimeDictate when setup completes”** (checked by default), which starts the app after install.
+- **Installer model flow**: The online MSI installs PrimeDictate only. First-run setup and Settings handle model download or browsing to an existing local model folder after install.
 - **Launch at login**: MSI installs add an all-users Windows Startup shortcut by default. Use `LAUNCHATLOGIN=0` for silent MSI installs or a winget `--override "LAUNCHATLOGIN=0"` install when you do not want PrimeDictate to start when users sign in. The Settings window can move startup to the current user’s Startup folder or disable it later.
 
 **Publish folder only** (no installer):
