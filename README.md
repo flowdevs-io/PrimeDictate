@@ -10,7 +10,7 @@
   <br/>
   <img src="assets/overlay_full.png" alt="Live Dictation Overlay" width="600" />
   <br/><br/>
-  <img src="assets/workspace.png" alt="Workspace Dashboard" width="600" />
+  <img src="assets/settings_dictation.png" alt="Commands and voice phrase settings" width="600" />
 </div>
 
 ## What It Does
@@ -64,6 +64,32 @@ PrimeDictate supports polite send phrases like "thank you" and strips them befor
 - **Local rewrite modes**: Optional Ollama integration can post-process dictated text with context-aware prompt modes.
 
 ![Compact Mic Overlay](assets/overlay_compact.png)
+
+## Product Walkthrough
+
+### Model setup
+
+Pick your backend, compute interface, and model from the Settings model tab.
+
+![Model setup (Whisper.net)](assets/settings_model_whispernet.png)
+
+### Commands and phrases
+
+Map hotkeys, voice phrases, and optional command actions so speaking and committing feels natural in your daily workflow.
+
+![Commands and phrases](assets/settings_dictation.png)
+
+### Transcript replacements
+
+Tune frequent phrases before final typing so recurring terms normalize automatically.
+
+![Transcript replacements](assets/settings_replacements.jpg)
+
+### Transcript history
+
+Review previous sessions, delivery targets, and transcript details in the history window.
+
+![Transcript history](assets/history.png)
 
 ## Get PrimeDictate
 
