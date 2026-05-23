@@ -330,11 +330,11 @@ jobs:
         id: chocolatey_pack
         shell: pwsh
         run: |
-          $packagePath = .\scripts\Build-ChocolateyPackage.ps1 `
+          $packagePath = (.\scripts\Build-ChocolateyPackage.ps1 `
             -PackageVersion "${{ steps.version.outputs.package_version }}" `
             -ReleaseAssetDirectory "${{ steps.release_assets.outputs.asset_dir }}" `
             -Repository "${{ github.repository }}" `
-            -OutputDirectory (Join-Path $env:GITHUB_WORKSPACE "artifacts\chocolatey")
+            -OutputDirectory (Join-Path $env:GITHUB_WORKSPACE "artifacts\chocolatey") | Select-Object -Last 1).Trim()
 
           if ([string]::IsNullOrWhiteSpace($packagePath)) {
             throw "Build-ChocolateyPackage.ps1 did not return a package path."
