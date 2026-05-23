@@ -350,10 +350,11 @@ jobs:
         if: github.event_name == 'push' && steps.version.outputs.is_semver_tag == 'true' && (github.event_name != 'workflow_dispatch' || !inputs.submit_winget_only)
         shell: pwsh
         env:
-          CHOCOLATEY_API_KEY: ${{ secrets['CHOCOLATEY_API_KEY'] }}
+          CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
+          CHOCO_SOURCE_URL: ${{ secrets.CHOCO_SOURCE_URL }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:CHOCOLATEY_API_KEY)) {
-            Write-Host "CHOCOLATEY_API_KEY is not configured; skipping Chocolatey push."
+          if ([string]::IsNullOrWhiteSpace($env:CHOCO_API_KEY)) {
+            Write-Host "CHOCO_API_KEY is not configured; skipping Chocolatey push."
             exit 0
           }
 
@@ -362,7 +363,8 @@ jobs:
             throw "Chocolatey package path is missing: $packagePath"
           }
 
-          choco push $packagePath --source https://push.chocolatey.org/ --api-key $env:CHOCOLATEY_API_KEY
+          $chocoSource = if ([string]::IsNullOrWhiteSpace($env:CHOCO_SOURCE_URL)) { "https://push.chocolatey.org/" } else { $env:CHOCO_SOURCE_URL }
+          choco push $packagePath --source $chocoSource --api-key $env:CHOCO_API_KEY
           if ($LASTEXITCODE -ne 0) {
             throw "Chocolatey push failed with exit code $LASTEXITCODE"
           }
