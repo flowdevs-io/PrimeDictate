@@ -1,123 +1,202 @@
 <div align="center">
-  <img src="assets/flowdevs_icon.png" alt="PrimeDictate icon" width="300" />
+  <img src="assets/flowdevs_icon.png" alt="PrimeDictate icon" width="260" />
   <br/>
   <h1>PrimeDictate</h1>
   <a href="https://github.com/flowdevs-io/PrimeDictate/actions/workflows/build.yml">
     <img src="https://github.com/flowdevs-io/PrimeDictate/actions/workflows/build.yml/badge.svg" alt="Build Status">
   </a>
-  <p><b>A locally hosted, global hotkey dictation utility for fast desktop workflows.</b></p>
-  <p>It captures the default microphone, shows live local transcription in a small overlay, and types the final transcript into the current application after a silence auto-commit or manual stop using SharpHook (no synthetic paste, no clipboard round-trip on the hot path).</p>
+  <p><b>Local AI dictation for Windows with a global hotkey, live overlay preview, and final-only text injection.</b></p>
+  <p>PrimeDictate records the default microphone, runs transcription locally, shows live hypotheses in a non-activating overlay, and types only the final result into the active application.</p>
   <br/>
   <img src="assets/overlay_full.png" alt="Live Dictation Overlay" width="600" />
   <br/><br/>
   <img src="assets/workspace.png" alt="Workspace Dashboard" width="600" />
-  <br/>
 </div>
 
-## Features
+## What It Does
 
-- **Global hotkeys**: Configurable global shortcuts for start/stop toggle (default `Ctrl+Shift+Space`), emergency stop/discard (default `Ctrl+Shift+Enter`), and transcript history (default `Ctrl+Shift+H`).
-- **Voice commands**: Optional phrases can be detected while dictating. Defaults are `thank you` to commit the active capture, `potato farmer` to discard it, and `show me the money` to open history; command phrases are removed before final text injection. Custom computer commands can run local command prompt actions and either stop the commit or continue with the remaining dictated text.
-- **Tray workspace UI**: Open **Workspace** from the tray icon to browse per-session dictation threads and global runtime logs in a clearer, column-based dashboard layout.
-- **AI Prompt Modes (Ollama Integration)**: Automatically rewrite and format your transcripts using a local Ollama instance. Includes dynamic prompt modes (like Bug, Update, and Blog) and injects the active application's context into the LLM for application-aware output.
-- **Log signal over noise**: Repeated adjacent log entries are collapsed (for example `(... x12)`) and history is capped to keep memory usage predictable.
-- **Live preview overlay**: While recording, the app periodically re-transcribes the growing buffer with the selected local backend and shows the current hypothesis in a non-activating overlay.
-- **Compact mic overlay**: The default overlay mode keeps a small lower-right microphone visible as a ready/listening indicator. Clicking it temporarily expands the larger transcript panel without changing your saved default mode.
+PrimeDictate is a tray-first Windows dictation app built for fast desktop workflows, coding, and local-only speech-to-text.
+
+- Starts and stops from configurable global hotkeys
+- Captures the default Windows microphone with WASAPI
+- Runs local transcription engines and local model files only
+- Shows live preview text in an overlay instead of mutating the target app while you speak
+- Injects only the final committed transcript using SharpHook Unicode text entry
+- Supports first-run setup, settings, history, updates, launch-at-login, and optional prompt rewriting with Ollama
+
+The current typing path does not rely on clipboard paste. That avoids clipboard races and paste timing issues in editors and browsers.
+
+What makes it different from basic desktop dictation tools:
+
+- Live corrections stay in the overlay instead of fighting your editor while you speak.
+- Final injection happens once, on commit, instead of backspacing and retyping into the target app.
+- Models run locally, so the core transcription path does not depend on a cloud API.
+- The app is optimized around tray-first use, fast toggling, and low-friction first-run setup.
+
+## Why People Use It
+
+PrimeDictate is a good fit when you want:
+
+- local dictation without sending speech to a hosted transcription service
+- a coding-friendly workflow where your editor is not constantly rewritten during live recognition
+- a tray app you can leave running all day and toggle instantly from anywhere in Windows
+- Windows-native packaging through direct MSI downloads, winget, or Chocolatey
+
+## Highlights
+
+- **Global control**: Configurable hotkeys for start/stop toggle, emergency stop/discard, and history.
+- **Live preview overlay**: Non-activating overlay shows local transcript hypotheses while dictation is in progress.
+- **Final-only injection**: The focused app receives the final result once, after stop or silence auto-commit.
+- **Voice commands**: Built-in phrases can commit, discard, open history, or trigger command prompt actions.
+- **Tray workspace UI**: Open Workspace from the tray to review sessions, logs, and history in a clearer dashboard layout.
+- **History and recovery**: Every committed transcript is saved locally with metadata and delivery status.
+- **Impact stats**: Tracks local productivity metrics, milestones, average speaking rate, and recent usage history.
+- **Model picker and downloads**: First-run setup and Settings can download supported models or browse to existing local folders.
+- **Optional coding mode**: Sends Enter after a successful final injection.
+- **Launch at login**: Installers enable launch at login by default; MSI and winget installs can opt out.
+- **Built-in updater**: Checks GitHub Releases, downloads the matching MSI, verifies checksums, and hands off to Windows Installer.
+- **Local rewrite modes**: Optional Ollama integration can post-process dictated text with context-aware prompt modes.
 
 ![Compact Mic Overlay](assets/overlay_compact.png)
-- **Silence auto-commit**: When speech has stopped for the configured delay (default 3 seconds), PrimeDictate stops capture, runs a final transcription pass, and sends the final text once. Set the delay to `0` to commit only with the start/stop hotkey.
-- **Transcript history**: Every committed transcript is saved to local history so you can review past dictations, recover text sent to the wrong app, and copy transcript text (with or without metadata).
-- **Impact stats and achievements**: Successful dictations update local-only productivity stats, including words typed, estimated net time saved, average speaking WPM, last-14-day bars, and milestone notifications.
-- **History filters and detail view**: History includes a filter dropdown (**All**, **Injected**, **NotInjected**) plus an expanded detail pane for full transcript and target metadata.
-- **History entry points**: Open history from the tray menu, the history hotkey, voice command, the settings window, or the workspace toolbar.
-- **Final-only target typing**: The target editor is not mutated while recording. Live corrections stay in the overlay so code editors and IntelliSense are not fighting backspace/retype updates.
-- **Coding mode**: Optional setting sends an Enter key immediately after a successful transcript commit.
-- **Foreground guard**: The foreground window is captured when recording starts; by default PrimeDictate still skips injection if focus changes before the transcript is ready.
-- **Return to original target (optional)**: A dictation setting can deliver the final transcript back to the window that had focus when recording started, first trying a safe direct write to the captured edit control on Windows and otherwise reactivating that window before typing.
-- **Built-in pointer cue**: If Windows Mouse Sonar is enabled, PrimeDictate pulses it on recording/processing transitions by tapping Ctrl. It does not draw a custom pointer overlay or change the user's Windows setting.
-- **Custom audio earcons**: PrimeDictate can play its own short start/stop tones so you hear when recording begins and when capture hands off to transcription.
-- **Launch at login**: Installers enable automatic startup by default with a Windows Startup-folder shortcut so PrimeDictate is ready after a reboot. Silent MSI and winget installs can opt out, and Settings can switch between off, current-user startup, and all-users startup.
-- **Built-in updates**: The tray app can check GitHub Releases directly, prompt when a newer release is available, download the matching x64/ARM64 MSI, verify its `.sha256` sidecar, and hand off to Windows Installer.
-- **Audio**: Windows default capture device via NAudio **WASAPI** (`WasapiCapture`), resampled to **16 kHz, 16-bit, mono PCM** for local transcription engines.
-- **Mic isolation mode (best effort)**: Optional exclusive-capture setting can block other apps from the mic on supported devices; if exclusive capture fails, PrimeDictate automatically falls back to shared mode and continues dictation.
-- **Inference**: A shared transcription engine abstraction with Whisper, Parakeet, and Moonshine ONNX models through [sherpa-onnx](https://www.nuget.org/packages/org.k2fsa.sherpa.onnx), Whisper.net GGML for GPU/NPU-capable local Whisper runs, and experimental Qualcomm AI Hub Whisper packages for Snapdragon X NPU runs.
-- **Injection**: [SharpHook](https://www.nuget.org/packages/SharpHook) `EventSimulator` for Unicode text entry (no synthetic paste, no clipboard round-trip on the hot path).
+
+## Install
+
+PrimeDictate currently targets Windows x64 and ARM64.
+
+### End-user install options
+
+| Option | Best for | Command / link |
+|------|------|------|
+| GitHub Releases | Direct MSI download | `https://github.com/flowdevs-io/PrimeDictate/releases/latest` |
+| winget | Standard Windows package install | `winget install --id FlowDevs.PrimeDictate --exact` |
+| Chocolatey | Chocolatey-managed environments | `choco install primedictate -y` |
+
+Important:
+
+- The MSI installs the app only. Model download happens in PrimeDictate during first-run setup or later in Settings.
+- Chocolatey Community Repository pages show only approved versions publicly. A successful upload may remain invisible until moderation completes.
+- ARM64 Windows should use the native ARM64 installer or package when available.
+
+### Which install path should you use?
+
+- **GitHub Releases** if you want the newest MSI directly
+- **winget** if you already manage desktop apps with winget
+- **Chocolatey** if your environment already standardizes on Chocolatey
+
+### Silent install and upgrade commands
+
+- MSI install x64: `msiexec /i PrimeDictate-Setup-vX.Y.Z-x64.msi /qn /norestart`
+- MSI install ARM64: `msiexec /i PrimeDictate-Setup-vX.Y.Z-arm64.msi /qn /norestart`
+- MSI install without launch at login: `msiexec /i PrimeDictate-Setup-vX.Y.Z-<arch>.msi LAUNCHATLOGIN=0 /qn /norestart`
+- MSI uninstall: `msiexec /x PrimeDictate-Setup-vX.Y.Z-<arch>.msi /qn /norestart`
+- winget install: `winget install --id FlowDevs.PrimeDictate --exact --silent --accept-package-agreements --accept-source-agreements`
+- winget install without launch at login: `winget install --id FlowDevs.PrimeDictate --exact --silent --accept-package-agreements --accept-source-agreements --override "LAUNCHATLOGIN=0"`
+- winget upgrade: `winget upgrade --id FlowDevs.PrimeDictate --exact --silent --accept-package-agreements --accept-source-agreements`
+- winget uninstall: `winget uninstall --id FlowDevs.PrimeDictate --exact --silent`
+- Chocolatey install: `choco install primedictate -y`
+- Chocolatey upgrade: `choco upgrade primedictate -y`
+- Chocolatey uninstall: `choco uninstall primedictate -y`
+
+## Quick Start
+
+1. Install PrimeDictate.
+2. Launch it from Start Menu or let the Startup shortcut run it after sign-in.
+3. Complete first-run setup.
+4. Pick a backend and download or browse to a local model.
+5. Focus the target app and use the dictation hotkey.
+
+First-run setup covers:
+
+- backend and model selection
+- command phrases and transcript replacements
+- overlay style and silence auto-commit timing
+- coding mode, impact stats, and other core behavior
+
+The runtime flow is straightforward:
+
+```mermaid
+flowchart LR
+  A[Press hotkey] --> B[Record microphone]
+  B --> C[Show live overlay preview]
+  C --> D[Stop or silence auto-commit]
+  D --> E[Run final transcription]
+  E --> F[Inject final text once]
+```
+
+Default behavior:
+
+- Start/stop toggle hotkey: `Ctrl+Shift+Space`
+- Emergency stop/discard hotkey: `Ctrl+Shift+Enter`
+- History hotkey: `Ctrl+Shift+H`
+- Silence auto-commit delay: 3 seconds
+
+Practical usage notes:
+
+- Keep the caret in the field where you want text before starting.
+- Do not switch apps while PrimeDictate is processing the final transcript if you want focus safety checks to pass.
+- Use the overlay as live feedback; the target editor is updated only on final commit.
+- Set silence delay to `0` if you want commits only from the hotkey.
+- If you are testing model quality, start with short phrases first; larger models and longer recordings increase turnaround time.
 
 ## Requirements
 
-- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) (or a compatible SDK that can build `net8.0` projects).
-- **Windows** is the primary target (WASAPI capture path). Other platforms may require a different capture implementation.
-- The transcription backend uses local model files only. sherpa-onnx backends require ONNX model folders with tokens; Whisper.net uses GGML `.bin` files and optional OpenVINO sidecars.
+- Windows is the primary supported platform.
+- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) is required to build from source.
+- Local transcription uses local model files only.
+- sherpa-onnx backends require extracted ONNX model folders and tokens.
+- Whisper.net uses GGML `.bin` files and optional hardware-specific sidecars.
 
----
+## Local Models and Backends
 
-<details>
-<summary><b>🛠️ Local transcription backends and model files</b></summary>
+PrimeDictate supports multiple local transcription backends. Setup and Settings expose a curated picker and download flow.
 
-## Local transcription backends and model files
+### Which backend should you start with?
 
-PrimeDictate includes a curated backend + model picker during first-run setup and in Settings.
-
-![Model Selection Settings](assets/settings_model.png)
-
-### Whisper
-
-The built-in Whisper catalog currently includes:
-
-| Model | Typical use |
+| If you want... | Start here |
 |------|------|
-| `Tiny English ONNX` | **Recommended** fastest setup and lowest CPU cost for English dictation |
-| `Base English ONNX` | **Recommended** balanced English dictation on CPU |
-| `Distil Small English ONNX` | Faster distilled English model for longer sessions |
-| `Small English ONNX` | Higher English accuracy with more compute cost |
-| `Tiny/Base/Small Multilingual ONNX` | Non-English dictation with the same ONNX folder layout |
+| The simplest English setup | `Base English ONNX` |
+| The lightest/faster English setup | `Tiny English ONNX` |
+| Better English accuracy with more compute | `Small English ONNX` or Whisper.net |
+| An alternative English backend | Parakeet or Moonshine |
+| Snapdragon X NPU experimentation | Qualcomm AI Hub Whisper on native ARM64 |
 
-When you download a Whisper model inside the app, PrimeDictate stores it under **`%LocalAppData%\PrimeDictate\models\whisper`** and saves the exact folder path in settings.
+### Backend summary
 
-PrimeDictate expects a Whisper ONNX model folder containing:
+| Backend | Typical use | Notes |
+|------|------|------|
+| Whisper ONNX | General-purpose local dictation | Uses sherpa-onnx encoder/decoder/token layout |
+| Whisper.net GGML | Larger Whisper variants and optional GPU/NPU paths | Compute options depend on local runtime support |
+| Parakeet ONNX | Alternative English local backend | Uses encoder/decoder/joiner/tokens layout |
+| Moonshine ONNX | Lightweight English local backend | Smaller non-Whisper option |
+| Qualcomm AI Hub Whisper | Experimental Snapdragon X NPU path | Native Windows ARM64 only |
+
+### Model storage
+
+Downloaded models are stored under `%LocalAppData%\PrimeDictate\models`.
+
+- Whisper ONNX: `%LocalAppData%\PrimeDictate\models\whisper`
+- Parakeet: `%LocalAppData%\PrimeDictate\models\parakeet`
+- Moonshine: `%LocalAppData%\PrimeDictate\models\moonshine`
+- Qualcomm AI Hub Whisper: `%LocalAppData%\PrimeDictate\models\qualcomm-aihub-whisper`
+
+During development, PrimeDictate can also discover repo-local model folders under `models\...`.
+
+### Expected model folder contents
+
+Whisper ONNX expects:
 
 - `*-encoder.int8.onnx` or `*-encoder.onnx`
 - `*-decoder.int8.onnx` or `*-decoder.onnx`
 - `*-tokens.txt`
 
-The runtime checks managed downloads, installed app-local models under `models\whisper`, and repo-local `models\whisper` folders during development.
-
-### Whisper.net (GGML)
-
-PrimeDictate also supports **Whisper.net GGML** models for larger Whisper variants and hardware acceleration. The compute picker only shows locally supported choices:
-
-- **CPU** is always available.
-- **GPU** is shown when a supported Whisper.net GPU runtime is present and the machine exposes CUDA or Vulkan.
-- **NPU** is shown for supported GGML models with OpenVINO encoder sidecars.
-
-When an older saved setting asks for an unsupported hardware path, PrimeDictate normalizes it at startup. If an installed Whisper.net hardware configuration is available, it prefers that; otherwise it falls back to CPU rather than trying an unsupported provider.
-
-### Parakeet
-
-PrimeDictate also supports **Parakeet ONNX via sherpa-onnx**. The current catalog starts with:
-
-| Model | Typical use |
-|------|------|
-| `Parakeet TDT 0.6B v3` | Try a newer local English STT backend without leaving the PrimeDictate workflow |
-
-Downloaded Parakeet models are stored under **`%LocalAppData%\PrimeDictate\models\parakeet`**. PrimeDictate expects a model folder containing:
+Parakeet expects:
 
 - `encoder.int8.onnx`
 - `decoder.int8.onnx`
 - `joiner.int8.onnx`
 - `tokens.txt`
 
-You can either download the managed Parakeet model in-app or browse to an existing extracted model folder.
-
-### Moonshine
-
-PrimeDictate also supports **Moonshine ONNX via sherpa-onnx** for another lightweight local English path. The current catalog includes:
-
-| Model | Typical use |
-|------|------|
-| `Moonshine Base (English)` | Fast local English dictation when you want a smaller non-Whisper backend than Parakeet |
-
-Downloaded Moonshine models are stored under **`%LocalAppData%\PrimeDictate\models\moonshine`**. PrimeDictate expects a model folder containing:
+Moonshine expects:
 
 - `preprocess.onnx`
 - `encode.int8.onnx`
@@ -125,74 +204,133 @@ Downloaded Moonshine models are stored under **`%LocalAppData%\PrimeDictate\mode
 - `cached_decode.int8.onnx`
 - `tokens.txt`
 
-You can either download the managed Moonshine model in-app or browse to an existing extracted model folder.
+### Whisper.net compute behavior
 
-### Qualcomm QNN (Experimental)
+PrimeDictate normalizes unsupported saved Whisper.net hardware settings at startup.
 
-PrimeDictate includes an **experimental Qualcomm QNN backend** for **native Windows ARM64** builds. The primary path uses **Qualcomm AI Hub Whisper** packages compiled for Snapdragon X devices. PrimeDictate installs the matching `precompiled_qnn_onnx` package, because the raw `qnn_context_binary` ZIP contains only `encoder.bin` and `decoder.bin`; ONNX Runtime needs the small `encoder.onnx` and `decoder.onnx` EPContext wrapper files to load those context binaries.
+- CPU is always available.
+- GPU appears only when supported local Whisper.net GPU runtime support is present.
+- NPU appears only for supported GGML models with the required sidecars.
 
-The first catalog entry is:
+### Experimental Qualcomm QNN path
 
-| Model | Target | Package used by PrimeDictate |
-|------|------|------|
-| `Qualcomm AI Hub Whisper Small (Snapdragon X Elite)` | Snapdragon X Elite / X Plus class NPU | `whisper_small-precompiled_qnn_onnx-float-qualcomm_snapdragon_x_elite.zip` |
+The Qualcomm backend is experimental and intended for native Windows ARM64 builds on supported Snapdragon X devices.
 
-The backend can attempt **QNN HTP / Qualcomm NPU** execution when the following are all true:
+It requires:
 
-- the process is running as **Windows ARM64**
-- the build contains the QNN runtime assets (`QnnHtp.dll`, `onnxruntime_providers_qnn.dll`, `QnnSystem.dll`)
-- the selected Qualcomm AI Hub Whisper folder is present under `%LocalAppData%\PrimeDictate\models\qualcomm-aihub-whisper`
-- the folder contains `encoder.onnx`, `decoder.onnx`, `encoder_qairt_context.bin`, `decoder_qairt_context.bin`, `metadata.json`, and `multilingual.tiktoken`
-- the EPContext sessions can be created with **CPU fallback disabled**
+- Windows ARM64 process/runtime
+- QNN runtime assets in the build output
+- Qualcomm AI Hub Whisper wrapper package files, including `encoder.onnx`, `decoder.onnx`, context binaries, metadata, and tokenizer files
+- Successful EPContext session creation without CPU fallback when strict validation is requested
 
-If you browse to the raw `qnn_context_binary` package from Qualcomm AI Hub, PrimeDictate detects it and asks you to use the catalog download instead. That raw package is useful source material, but it is not directly runnable by ONNX Runtime without wrappers.
+Maintainer environment knobs:
 
-Maintainer knobs for the experimental Qualcomm backend:
+- `PRIMEDICTATE_QNN_STRICT=1`
+- `PRIMEDICTATE_QNN_CONTEXT_CACHE=0|1`
+- `PRIMEDICTATE_QNN_CONTEXT_EMBED=0|1`
+- `PRIMEDICTATE_QNN_PROFILE=basic|detailed|optrace`
+- `PRIMEDICTATE_QNN_PROFILE_DIR=<path>`
 
-- `PRIMEDICTATE_QNN_STRICT=1`: require QNN HTP session creation and inference with CPU fallback disabled
-- `PRIMEDICTATE_QNN_CONTEXT_CACHE=0|1`: disable or enable QNN context caching (default `1`)
-- `PRIMEDICTATE_QNN_CONTEXT_EMBED=0|1`: control QNN context embed mode (default `1`)
-- `PRIMEDICTATE_QNN_PROFILE=basic|detailed|optrace`: optional QNN profiling, off by default
-- `PRIMEDICTATE_QNN_PROFILE_DIR=<path>`: where profiling CSV output should be written
+## Build and Run From Source
 
-**Important:** Qualcomm QNN support is validated per model package and per device. PrimeDictate can prove strict QNN HTP activation only when the selected EPContext sessions actually load on QNN with CPU fallback disabled.
-
-**Example (PowerShell, from repo root)**, downloading the default bundled model manually:
+From the repository root:
 
 ```powershell
-New-Item -ItemType Directory -Force -Path "models\whisper" | Out-Null
-Invoke-WebRequest -Uri "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-base.en.tar.bz2" -OutFile "models\whisper\sherpa-onnx-whisper-base.en.tar.bz2"
-tar -xjf "models\whisper\sherpa-onnx-whisper-base.en.tar.bz2" -C "models\whisper"
+dotnet run
 ```
 
-Larger models take longer to download and load. The first transcription after launch may still do noticeable disk I/O while the ONNX runtime initializes.
+The app starts in the tray. On first launch, complete setup, choose a model, then focus another application and start dictation.
 
-</details>
+Most contributors only need `dotnet run` and `dotnet build`. Publishing and installer generation are only needed when validating release outputs.
 
-<details>
-<summary><b>📦 Public Windows release (installers)</b></summary>
-
-## Public Windows release (installers)
-
-Public installers target **64-bit x64 and ARM64 Windows**. Maintainers build **MSI packages** with the [WiX Toolset](https://wixtoolset.org/) **via NuGet** (`WixToolset.Sdk`). Only the **[.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)** is required—no separate Inno Setup or WiX install.
-
-| MSI | When to use |
-|-----|-------------|
-| **Online** | Installs the app under **Program Files** with Start Menu and ARP branding. Model download happens inside PrimeDictate during first-run setup or later in Settings, so the MSI itself does not run external download commands during install. |
-
-**Build the online installer**:
+Common build commands:
 
 ```powershell
+dotnet build -c Release
+.\scripts\Publish-Windows.ps1
 .\scripts\Build-Installers.ps1
 ```
 
-Outputs: `artifacts\installer\`. Version comes from `Directory.Build.props`.
+Note: A running `PrimeDictate.exe` from `dotnet run` can lock the apphost on Windows. Stop the running instance before rebuilding if you hit copy or file-lock errors.
 
-See [installer/README.md](installer/README.md) for details. Redistribute ONNX model files only in compliance with their license/terms.
+## Windows Installers
 
-### Maintainer release commands
+PrimeDictate ships MSI installers for x64 and ARM64 Windows using WiX through NuGet. No separate WiX installation is required.
 
-Use this from a clean `main` worktree when publishing a new release. Replace `4.3.1` with the next version.
+| MSI | Behavior |
+|-----|----------|
+| Online x64 | Installs the x64 app under Program Files with Start Menu entry, ARP branding, and launch-at-login enabled by default |
+| Online ARM64 | Installs the native ARM64 app with the same installer behavior and ARM64 runtime payload |
+
+Installer characteristics:
+
+- Installs app payload only; no install-time model download
+- Does not launch the app from the finish dialog
+- Uses consistent English installer UI resources
+- Keeps upgrade identity for clean MSI upgrades
+- Supports `LAUNCHATLOGIN=0` for unattended installs that should not auto-start on sign-in
+
+For installer-specific details, see `installer/README.md`.
+
+## Release and Distribution
+
+Tagged pushes that match `vX.Y.Z` build the app, produce release assets, and publish to GitHub Releases.
+
+In practice, the release pipeline keeps three public distribution channels aligned:
+
+- GitHub Releases for direct MSI downloads
+- winget for Windows package management
+- Chocolatey for Chocolatey-managed environments
+
+If you only want to install or evaluate PrimeDictate, you can stop reading here. The remaining release details are maintainer-facing.
+
+### GitHub Releases
+
+- Release page: `https://github.com/flowdevs-io/PrimeDictate/releases/tag/vX.Y.Z`
+- Latest release: `https://github.com/flowdevs-io/PrimeDictate/releases/latest`
+- Direct x64 MSI asset: `https://github.com/flowdevs-io/PrimeDictate/releases/download/vX.Y.Z/PrimeDictate-Setup-vX.Y.Z-x64.msi`
+- Direct ARM64 MSI asset: `https://github.com/flowdevs-io/PrimeDictate/releases/download/vX.Y.Z/PrimeDictate-Setup-vX.Y.Z-arm64.msi`
+
+If signing secrets are unavailable, the release flow still publishes unsigned assets instead of failing before upload.
+
+### winget
+
+- Package identifier: `FlowDevs.PrimeDictate`
+- Source repository: `https://github.com/microsoft/winget-pkgs`
+
+The same tag-triggered workflow generates versioned manifests from the release MSI assets, validates them, and optionally submits a winget PR when `WINGET_CREATE_GITHUB_TOKEN` is configured.
+
+For resubmission without rebuilding binaries, use `workflow_dispatch` with:
+
+- `submit_winget_only=true`
+- `target_version=X.Y.Z`
+
+### Chocolatey
+
+- Package id: `primedictate`
+- Community package page: `https://community.chocolatey.org/packages/primedictate`
+- Community feed source: `https://community.chocolatey.org/api/v2/`
+- Community push source: `https://push.chocolatey.org/`
+- Moderation queue: `https://ch0.co/moderation`
+
+The tag-triggered workflow also builds a Chocolatey `.nupkg` from the release assets and attempts to push it to the configured source.
+
+GitHub Actions secrets:
+
+- `CHOCO_API_KEY`
+- `CHOCO_SOURCE_URL` (optional; defaults to `https://push.chocolatey.org/`)
+
+Important moderation note:
+
+- Chocolatey Community Repository only shows approved versions publicly.
+- A version can be uploaded successfully and still remain invisible on the public package page while pending automated checks or human moderation.
+
+### Maintainer release flow
+
+<details>
+<summary><b>Maintainer release details</b></summary>
+
+From a clean `main` worktree:
 
 ```powershell
 $Version = "4.3.1"
@@ -209,193 +347,77 @@ git tag -a "v$Version" -m "v$Version"
 
 git push origin main
 git push origin "v$Version"
-
-git status --short --branch
 ```
 
-If `git ls-remote` prints an existing tag, do not recreate it; choose the correct next version or inspect the existing release first.
-
-### GitHub Releases and Webflow links
-
-Tagged pushes that match `vX.Y.Z` keep the workflow artifact upload for CI debugging and also publish installer assets to the matching GitHub Release. If the Release does not exist yet, the workflow creates it first. Release downloads come from **GitHub Releases**, not the temporary workflow artifact ZIP. If Azure Key Vault signing secrets are unavailable, the release flow still publishes assets as unsigned builds instead of failing before release upload.
-
-- Release page: `https://github.com/flowdevs-io/PrimeDictate/releases/tag/vX.Y.Z`
-- Direct x64 MSI asset: `https://github.com/flowdevs-io/PrimeDictate/releases/download/vX.Y.Z/PrimeDictate-Setup-vX.Y.Z-x64.msi`
-- Direct ARM64 MSI asset: `https://github.com/flowdevs-io/PrimeDictate/releases/download/vX.Y.Z/PrimeDictate-Setup-vX.Y.Z-arm64.msi`
-- Latest release page: `https://github.com/flowdevs-io/PrimeDictate/releases/latest`
-- winget package identifier: `FlowDevs.PrimeDictate`
-
-Because the MSI filenames include the tag and architecture, Webflow should either link to the release page/latest page or update both direct MSI URLs each time a new release tag is published.
-
-### winget release alignment
-
-winget manifest generation is part of the same `vX.Y.Z` tag release flow so MSI, docs, and package metadata stay aligned. The workflow generates versioned installer/defaultLocale/version manifests from the release MSIs and validates them before optional submission.
-
-- winget package id: `FlowDevs.PrimeDictate`
-- winget source repository: `https://github.com/microsoft/winget-pkgs`
-- Product overview page: `https://www.flowdevs.io/portfolio/project/primedictate-local-ai-dictation-app`
-- Official release downloads: `https://github.com/flowdevs-io/PrimeDictate/releases`
-
-The tag-triggered workflow submits to winget only when `WINGET_CREATE_GITHUB_TOKEN` is present. Without that secret, the workflow still publishes release assets to GitHub and logs that winget submission was skipped.
-
-For moderation retries, use `workflow_dispatch` with `submit_winget_only=true` and `target_version=X.Y.Z` to regenerate/revalidate manifests from the existing GitHub Release MSI assets and resubmit.
-
-### Silent install and update commands (Windows)
-
-- MSI install x64 (silent): `msiexec /i PrimeDictate-Setup-vX.Y.Z-x64.msi /qn /norestart`
-- MSI install ARM64 (silent): `msiexec /i PrimeDictate-Setup-vX.Y.Z-arm64.msi /qn /norestart`
-- MSI install without launch at login: `msiexec /i PrimeDictate-Setup-vX.Y.Z-<arch>.msi LAUNCHATLOGIN=0 /qn /norestart`
-- MSI upgrade (silent): `msiexec /i PrimeDictate-Setup-vX.Y.Z-<arch>.msi /qn /norestart`
-- MSI uninstall (silent): `msiexec /x PrimeDictate-Setup-vX.Y.Z-<arch>.msi /qn /norestart`
-- winget install (silent): `winget install --id FlowDevs.PrimeDictate --exact --silent --accept-package-agreements --accept-source-agreements`
-- winget install without launch at login: `winget install --id FlowDevs.PrimeDictate --exact --silent --accept-package-agreements --accept-source-agreements --override "LAUNCHATLOGIN=0"`
-- winget upgrade (silent): `winget upgrade --id FlowDevs.PrimeDictate --exact --silent --accept-package-agreements --accept-source-agreements`
-- winget uninstall (silent): `winget uninstall --id FlowDevs.PrimeDictate --exact --silent`
-
-### Tray shell and first-run setup
-
-PrimeDictate now runs as a **WPF tray app** (no console window in normal use):
-
-- **Tray shell**: Notification-area icon with **Open Workspace**, **Settings**, and **Exit** menu items.
-- **Tray status colors**: **Ready = Blue**, **Recording = Red**, **Processing = Green**, **Error = Yellow**. Tooltip text follows app state (`Ready`, `Listening`, `Processing transcript`, `Error`).
-- **First launch**: If `%LocalAppData%\PrimeDictate\settings.json` is missing or incomplete, a guided setup window appears with **Welcome**, **Model**, **Commands**, **Replacements**, and **Impact** tabs.
-- **Configurable commands**: Global toggle, emergency stop, and history shortcuts are loaded from saved settings and applied to `GlobalHotkeyListener` at startup. Voice phrases for commit, emergency stop, history, and command prompt actions, including chained `type ...` text and Stop/Continue behavior, are configurable from the Commands tab.
-- **Backend picker + download**: Setup and Settings include curated Whisper, Parakeet, Moonshine, Whisper.net, and Qualcomm AI Hub model options, local download progress, and a manual browse fallback.
-- **Experimental ARM64 QNN path**: Native `win-arm64` builds can expose an experimental Qualcomm AI Hub Whisper backend that uses ONNX Runtime QNN EPContext wrappers with explicit QNN diagnostics.
-- **Runtime model switching**: Changing the selected backend or model causes the next transcription session to reload the correct engine automatically.
-- **Preview settings**: Setup window includes the overlay style, silence auto-commit delay, optional coding-mode Enter key, PrimeDictate audio cues, and mic capture behavior.
-- **Impact dashboard**: Settings includes a local stats tab with productivity cards, a 14-day words chart, and milestone achievements.
-- **Built-in update checks**: After first-run setup, PrimeDictate checks GitHub Releases at most once per day when automatic checks are enabled. Failed install attempts clear the check timestamp so the next launch can retry. The tray menu also has **Check for updates** for a manual check.
-- **Installer continuity**: The online MSI keeps one product identity for clean upgrades.
-- **Installer model flow**: The online MSI installs PrimeDictate only. First-run setup and Settings handle model download or browsing to an existing local model folder after install.
-- **Launch at login**: MSI installs add an all-users Windows Startup shortcut by default. Use `LAUNCHATLOGIN=0` for silent MSI installs or a winget `--override "LAUNCHATLOGIN=0"` install when you do not want PrimeDictate to start when users sign in. The Settings window can move startup to the current user’s Startup folder or disable it later.
-
-**Publish folder only** (no installer):
-
-```powershell
-.\scripts\Publish-Windows.ps1
-```
+If the tag already exists, inspect the existing release instead of recreating it blindly.
 
 </details>
 
-<details>
-<summary><b>💻 Build and run</b></summary>
+## Configuration and Local Data
 
-## Build and run
+### User settings
 
-```powershell
-cd path\to\PrimeDictate
-dotnet run
-```
+User settings live at `%LocalAppData%\PrimeDictate\settings.json` and include:
 
-The app starts in the tray. On first launch, complete setup, then focus another application and use your configured hotkey to start dictation. A live transcript appears in the overlay while you speak. PrimeDictate commits after the configured silence delay or when you press the start/stop toggle again. Set silence delay to `0` if you want the toggle hotkey to be the only commit trigger. The emergency stop shortcut and stop phrase discard the active capture without typing text.
+- first-run completion
+- launch-at-login scope
+- hotkeys
+- voice commands
+- selected backend and model path
+- overlay style and placement
+- silence auto-commit delay
+- return-to-original-target behavior
+- audio cue toggle
+- automatic update checks
+- coding mode
+- baseline typing speed for impact estimates
 
-**Note:** Stopping a running `dotnet run` (or any running `PrimeDictate.exe`) may be required before `dotnet build` can replace `bin\...\PrimeDictate.exe` on Windows (file lock on the apphost).
+### Local data files
 
-### Using dictation reliably
+- Transcript history: `%LocalAppData%\PrimeDictate\history.json`
+- Impact stats: `%LocalAppData%\PrimeDictate\stats.json`
 
-- Keep the **caret** in the field where you want text before starting. The app does not move focus for you.
-- Do not click into another application while the tray says **Processing transcript**; if the foreground window changes, injection is skipped for safety.
-- Use the overlay as the live feedback surface. The focused editor receives only the final committed transcript.
-- For a built-in mouse cue, enable Windows' "show location of pointer when I press CTRL key" setting. PrimeDictate uses that OS feature when available.
-- Long monologues are heavier than short phrases because Whisper preview reprocesses snapshots and the final pass processes the full recording. A faster or smaller model helps if this becomes limiting.
-
-</details>
-
-<details>
-<summary><b>⚙️ Configuration surface & Architecture</b></summary>
-
-## Configuration surface
-
-| Mechanism | Purpose |
-|-----------|---------|
-| `--enable-launch-at-login` / `--disable-launch-at-login` | Command line switches that add or remove `PrimeDictate.lnk` from the current-user or all-users Windows Startup folder. All-users changes request elevation when needed. |
-| User settings + first-run | Stored at `%LocalAppData%\PrimeDictate\settings.json` with `FirstRunCompleted`, launch-at-login scope, dictation/stop/history hotkeys, optional voice command phrases, selected backend, selected model id, resolved model path, optional exclusive mic capture toggle, overlay style, silence auto-commit delay, return-to-original-target toggle, audio cue toggle, automatic update checks, overlay placement, coding-mode Enter toggle, and baseline typing speed for impact estimates. |
-| `PRIMEDICTATE_QNN_*` env vars | Maintainer and validation controls for the experimental Qualcomm QNN backend, including strict no-CPU-fallback mode, context caching, and optional QNN profiling output. |
-
-![Dictation Settings](assets/settings_dictation.png)
-
-| Transcript history | Stored at `%LocalAppData%\PrimeDictate\history.json` with timestamp, transcript text, thread id, delivery status, target display name, optional error, and audio duration metadata. |
-| Impact stats | Stored at `%LocalAppData%\PrimeDictate\stats.json` with local aggregate word counts, audio duration, daily buckets, and unlocked achievements. |
-
-## Architecture (high level)
+## Architecture Overview
 
 | Area | Technology |
 |------|------------|
-| Hotkey | SharpHook `SimpleGlobalHook`, keyboard only; toggle, emergency stop, and history gestures are loaded from settings and matched on `KeyPressed`. |
-| Capture | NAudio `WasapiCapture` + `MediaFoundationResampler` to 16 kHz mono PCM. |
-| Live preview | `DictationController.LivePreviewLoopAsync` snapshots the growing PCM buffer, re-runs the selected local backend for the overlay, and watches recent RMS level for silence. |
-| Transcription | `TranscriptionEngineHost` selects and owns the active engine. Whisper, Parakeet, and Moonshine use ONNX models through sherpa-onnx `OfflineRecognizer`. Whisper.net handles GGML GPU/OpenVINO paths. The experimental Qualcomm backend drives Qualcomm AI Hub Whisper EPContext wrappers directly with ONNX Runtime and can attempt strict QNN HTP execution on native Windows ARM64. |
-| Overlay | `TranscriptionOverlayWindow` is topmost, non-activating, and click-through so the target editor keeps focus. |
-| Typing | `WhisperTextInjectionPipeline.TranscribeAsync` builds the final transcript, then `InjectTextToTarget` sends it once; optional coding mode follows with `VcEnter`. |
-| Target safety + pointer cue | `WindowsInputHelpers.cs` captures the foreground window and focused control at recording start, can optionally restore that target for final injection, and uses Windows Mouse Sonar if enabled. |
+| Hotkey | SharpHook `SimpleGlobalHook` |
+| Audio capture | NAudio `WasapiCapture` + `MediaFoundationResampler` to 16 kHz mono PCM |
+| Live preview | `DictationController.LivePreviewLoopAsync` snapshots the buffer and re-runs the selected backend |
+| Transcription | Shared engine host over Whisper, Parakeet, Moonshine, Whisper.net, and experimental Qualcomm paths |
+| Overlay | WPF `TranscriptionOverlayWindow`, topmost and non-activating |
+| Final injection | `WhisperTextInjectionPipeline` + SharpHook `EventSimulator.SimulateTextEntry` |
+| Target safety | Foreground capture/restore helpers in `WindowsInputHelpers.cs` |
 
-### Experimental Qualcomm QNN maintainer workflow
+Why the app avoids clipboard paste:
 
-Build the app and native ARM64 publish output as usual:
+- Clipboard restore races can cause the target app to paste stale clipboard data.
+- Final-only simulated Unicode entry is the current baseline because it is more predictable across apps.
 
-```powershell
-dotnet build PrimeDictate.sln
-.\scripts\Publish-Windows.ps1 -RuntimeIdentifier win-arm64
-```
+## Troubleshooting
 
-The app catalog downloads the Qualcomm AI Hub Whisper Small Snapdragon X Elite `precompiled_qnn_onnx` package into:
+- **No text injected**: Check whether focus changed between recording start and final processing.
+- **Model not loading**: Verify the selected folder contains the expected files for that backend.
+- **Build cannot replace PrimeDictate.exe**: Stop any running app instance before rebuilding.
+- **Chocolatey version not visible**: Check the moderation queue; public package pages only show approved versions.
 
-```powershell
-$qaihubWhisperDir = Join-Path $env:LOCALAPPDATA 'PrimeDictate\models\qualcomm-aihub-whisper\whisper_small-precompiled_qnn_onnx-float-qualcomm_snapdragon_x_elite'
-```
+## For Maintainers
 
-To validate that the precompiled Qualcomm AI Hub Whisper wrapper sessions can be created on QNN HTP:
-
-```powershell
-dotnet run -- --qnn-whisper-smoke $qaihubWhisperDir Npu
-dotnet run -- --qnn-whisper-proof $qaihubWhisperDir true
-```
-
-If you want the JSON result persisted to a file instead of relying on stdout, add an optional trailing output path:
-
-```powershell
-$output = Join-Path $env:TEMP 'primedictate-qnn-smoke.json'
-dotnet run -- --qnn-whisper-smoke $qaihubWhisperDir Npu $output
-```
-
-The older Moonshine QNN harness remains available for maintainer experiments with hand-prepared QDQ artifacts:
-
-```powershell
-$moonshineDir = Join-Path $env:LOCALAPPDATA 'PrimeDictate\models\moonshine\sherpa-onnx-moonshine-base-en-int8'
-dotnet run -- --qnn-smoke $moonshineDir Cpu
-dotnet run -- --qnn-proof $moonshineDir true
-```
-
-The Whisper-specific harness can also validate standard Whisper ONNX encoder/decoder session creation. For standard sherpa Whisper folders this is session-creation-only; for Qualcomm AI Hub Whisper folders it validates the precompiled EPContext wrappers:
-
-```powershell
-$whisperDir = Join-Path $env:LOCALAPPDATA 'PrimeDictate\models\whisper\sherpa-onnx-whisper-small.en'
-dotnet run -- --qnn-whisper-smoke $whisperDir Cpu
-dotnet run -- --qnn-whisper-proof $whisperDir true
-```
-
-You can add an optional trailing output path to persist the JSON result to a file instead of relying on stdout.
-
-If strict validation passes, the result reports that QNN HTP session creation and inference succeeded with CPU fallback disabled. If it fails, PrimeDictate should not be treated as NPU-validated on that model/device combination.
-
-### Why not clipboard + Ctrl+V?
-
-An earlier design put the transcript on the clipboard, simulated **Paste**, then restored the previous clipboard. Many applications handle paste **asynchronously**, so the restore often ran **before** the app read the new clipboard, and users saw the **old** clipboard (for example, a recently copied URL). The current design avoids that class of race by not using the clipboard for injection in the first place.
-
-</details>
-
----
+- Installer-specific packaging details live in `installer/README.md`
+- Release automation is centered in `.github/workflows/build.yml`
+- Versioning is driven from `Directory.Build.props`
+- Chocolatey publishing uses `CHOCO_API_KEY` and optional `CHOCO_SOURCE_URL`
+- winget submission requires `WINGET_CREATE_GITHUB_TOKEN`
 
 ## License
 
-This repository’s application code is provided as in-repo source; follow the licenses of the dependencies (sherpa-onnx, NAudio, SharpHook, and the ONNX model terms from their respective publishers) when redistributing.
+This repository's application code is provided as in-repo source. Follow the licenses of dependencies and the model publishers' terms when redistributing binaries or model files.
 
-## About FlowDevs & The Author
+## About FlowDevs
 
 **PrimeDictate** is built by **Justin Trantham**, Co-Founder and Prime Automator at [FlowDevs](https://flowdevs.io).
 
-Founded in 2023, FlowDevs bridges the gap between business goals and scalable tech. We stop you from running your company on spreadsheets by building custom internal tools, client portals, and Power Platform solutions that actually scale. We specialize in workflow automation, integrations, and internal apps for Minnesota businesses.
+FlowDevs builds internal tools, workflow automation, integrations, and business software for teams that have outgrown spreadsheet-driven operations.
 
 - [Visit FlowDevs.io](https://flowdevs.io)
 - [Meet the Team](https://flowdevs.io/team)
