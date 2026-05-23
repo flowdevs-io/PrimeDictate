@@ -364,8 +364,15 @@ jobs:
           }
 
           $chocoSource = if ([string]::IsNullOrWhiteSpace($env:CHOCO_SOURCE_URL)) { "https://push.chocolatey.org/" } else { $env:CHOCO_SOURCE_URL }
-          choco push $packagePath --source $chocoSource --api-key $env:CHOCO_API_KEY
+          $pushLines = @()
+          choco push $packagePath --source $chocoSource --api-key $env:CHOCO_API_KEY 2>&1 | Tee-Object -Variable pushLines
           if ($LASTEXITCODE -ne 0) {
+            $pushOutput = ($pushLines | Out-String)
+            if ($pushOutput -match '422 \(Unprocessable Entity\)' -or $pushOutput -match 'already exists') {
+              Write-Warning "Chocolatey package version already exists on source; skipping duplicate push."
+              exit 0
+            }
+
             throw "Chocolatey push failed with exit code $LASTEXITCODE"
           }
 
