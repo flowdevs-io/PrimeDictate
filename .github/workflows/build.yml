@@ -365,15 +365,17 @@ jobs:
 
           $chocoSource = if ([string]::IsNullOrWhiteSpace($env:CHOCO_SOURCE_URL)) { "https://push.chocolatey.org/" } else { $env:CHOCO_SOURCE_URL }
           $pushLines = @()
-          choco push $packagePath --source $chocoSource --api-key $env:CHOCO_API_KEY 2>&1 | Tee-Object -Variable pushLines
+          choco push $packagePath --source $chocoSource --api-key $env:CHOCO_API_KEY --debug --verbose 2>&1 | Tee-Object -Variable pushLines
           if ($LASTEXITCODE -ne 0) {
             $pushOutput = ($pushLines | Out-String)
-            if ($pushOutput -match '422 \(Unprocessable Entity\)' -or $pushOutput -match 'already exists') {
+            if ($pushOutput -match 'already exists' -or
+                $pushOutput -match 'already contains' -or
+                $pushOutput -match '409 \(Conflict\)') {
               Write-Warning "Chocolatey package version already exists on source; skipping duplicate push."
               exit 0
             }
 
-            throw "Chocolatey push failed with exit code $LASTEXITCODE"
+            throw "Chocolatey push failed with exit code $LASTEXITCODE`n$pushOutput"
           }
 
       - name: Resolve release MSI assets for submit-winget-only mode
