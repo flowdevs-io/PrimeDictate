@@ -7,13 +7,13 @@ on:
     branches: [main, master]
   workflow_dispatch:
     inputs:
-      push_only:
-        description: "Skip build/sign/release and only push existing Chocolatey nupkg"
+      submit_winget_only:
+        description: "Skip build/sign/release and only submit winget manifest from existing GitHub Release MSI assets"
         required: false
         default: false
         type: boolean
       target_version:
-        description: "Version to push in push-only mode (example: 3.2.0)"
+        description: "Version to submit in submit-winget-only mode (example: 3.2.0)"
         required: false
         type: string
 
@@ -49,10 +49,10 @@ jobs:
           $releaseTag = ""
           $isSemverTag = "false"
 
-          if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.push_only }}" -eq "true") {
+          if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.submit_winget_only }}" -eq "true") {
             $manualVersion = "${{ inputs.target_version }}".Trim()
             if ([string]::IsNullOrWhiteSpace($manualVersion)) {
-              throw "workflow_dispatch push_only=true requires target_version (for example 3.2.0)."
+              throw "workflow_dispatch submit_winget_only=true requires target_version (for example 3.2.0)."
             }
 
             if ($manualVersion -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z][0-9A-Za-z\.-]*)?$') {
@@ -97,7 +97,7 @@ jobs:
 
       - name: Resolve signing mode
         id: signing
-        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || !inputs.push_only)
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || !inputs.submit_winget_only)
         shell: pwsh
         env:
           AZURESIGNTOOL_KEYVAULT_URL: ${{ secrets.AZURESIGNTOOL_KEYVAULT_URL }}
@@ -124,7 +124,7 @@ jobs:
           }
 
       - name: Restore + build
-        if: github.event_name != 'workflow_dispatch' || !inputs.push_only
+        if: github.event_name != 'workflow_dispatch' || !inputs.submit_winget_only
         run: >
           dotnet build -c Release
           -p:Version=${{ steps.version.outputs.package_version }}
@@ -133,7 +133,7 @@ jobs:
           -p:InformationalVersion=${{ steps.version.outputs.informational_version }}
 
       - name: Publish Windows payloads
-        if: github.event_name != 'workflow_dispatch' || !inputs.push_only
+        if: github.event_name != 'workflow_dispatch' || !inputs.submit_winget_only
         shell: pwsh
         run: |
           foreach ($rid in @("win-x64", "win-arm64")) {
@@ -150,12 +150,12 @@ jobs:
           }
 
       - name: Install AzureSignTool
-        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || !inputs.push_only) && steps.signing.outputs.enabled == 'true'
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || !inputs.submit_winget_only) && steps.signing.outputs.enabled == 'true'
         shell: pwsh
         run: dotnet tool install --global AzureSignTool
 
       - name: Sign publish payload binaries (Azure Key Vault)
-        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || !inputs.push_only) && steps.signing.outputs.enabled == 'true'
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || !inputs.submit_winget_only) && steps.signing.outputs.enabled == 'true'
         shell: pwsh
         env:
           AZURESIGNTOOL_KEYVAULT_URL: ${{ secrets.AZURESIGNTOOL_KEYVAULT_URL }}
@@ -205,17 +205,17 @@ jobs:
           }
 
       - name: Build online installers
-        if: github.event_name != 'workflow_dispatch' || !inputs.push_only
+        if: github.event_name != 'workflow_dispatch' || !inputs.submit_winget_only
         shell: pwsh
         run: >
-          .\scripts\Build-Installers.ps1 -Installer Online -RuntimeIdentifier all -SkipPublish -SkipChocolatey
+          .\scripts\Build-Installers.ps1 -Installer Online -RuntimeIdentifier all -SkipPublish
           -PackageVersion "${{ steps.version.outputs.package_version }}"
           -AssemblyVersion "${{ steps.version.outputs.assembly_version }}"
           -FileVersion "${{ steps.version.outputs.file_version }}"
           -InformationalVersion "${{ steps.version.outputs.informational_version }}"
 
       - name: Sign installer MSI (Azure Key Vault)
-        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || !inputs.push_only) && steps.signing.outputs.enabled == 'true'
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || !inputs.submit_winget_only) && steps.signing.outputs.enabled == 'true'
         shell: pwsh
         env:
           AZURESIGNTOOL_KEYVAULT_URL: ${{ secrets.AZURESIGNTOOL_KEYVAULT_URL }}
@@ -254,18 +254,8 @@ jobs:
               "$($msi.FullName)"
           }
 
-      - name: Build Chocolatey package
-        if: github.event_name != 'workflow_dispatch' || !inputs.push_only
-        shell: pwsh
-        run: >
-          .\scripts\Build-Installers.ps1 -Installer Online -RuntimeIdentifier all -ChocolateyOnly
-          -PackageVersion "${{ steps.version.outputs.package_version }}"
-          -AssemblyVersion "${{ steps.version.outputs.assembly_version }}"
-          -FileVersion "${{ steps.version.outputs.file_version }}"
-          -InformationalVersion "${{ steps.version.outputs.informational_version }}"
-
       - name: Upload build artifacts
-        if: always() && (github.event_name != 'workflow_dispatch' || !inputs.push_only)
+        if: always() && (github.event_name != 'workflow_dispatch' || !inputs.submit_winget_only)
         uses: actions/upload-artifact@v4
         with:
           name: prime-dictate-windows-${{ steps.version.outputs.package_version }}
@@ -273,10 +263,9 @@ jobs:
             artifacts/win-x64/publish/**
             artifacts/win-arm64/publish/**
             artifacts/installer/*.msi
-            artifacts/installer/*.nupkg
 
       - name: Prepare GitHub release assets
-        if: github.event_name == 'push' && steps.version.outputs.is_semver_tag == 'true' && (github.event_name != 'workflow_dispatch' || !inputs.push_only)
+        if: github.event_name == 'push' && steps.version.outputs.is_semver_tag == 'true' && (github.event_name != 'workflow_dispatch' || !inputs.submit_winget_only)
         id: release_assets
         shell: pwsh
         run: |
@@ -284,7 +273,6 @@ jobs:
           $assetDir = $env:RELEASE_ASSET_DIR
           $expectedX64Msi = Join-Path $env:INSTALLER_DIR "PrimeDictate-${{ steps.version.outputs.package_version }}-Windows-x64-Online.msi"
           $expectedArm64Msi = Join-Path $env:INSTALLER_DIR "PrimeDictate-${{ steps.version.outputs.package_version }}-Windows-arm64-Online.msi"
-          $expectedChocolateyNupkg = Join-Path $env:INSTALLER_DIR "primedictate.${{ steps.version.outputs.package_version }}.nupkg"
 
           Remove-Item -Path $assetDir -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path $assetDir | Out-Null
@@ -295,29 +283,22 @@ jobs:
           if (-not (Test-Path $expectedArm64Msi)) {
             throw "Expected ARM64 online MSI not found for release upload: $expectedArm64Msi"
           }
-          if (-not (Test-Path $expectedChocolateyNupkg)) {
-            throw "Expected Chocolatey package not found for release upload: $expectedChocolateyNupkg"
-          }
 
           $releaseX64MsiPath = Join-Path $assetDir "PrimeDictate-Setup-$tag-x64.msi"
           $releaseArm64MsiPath = Join-Path $assetDir "PrimeDictate-Setup-$tag-arm64.msi"
-          $releaseNupkgPath = Join-Path $assetDir "primedictate.${{ steps.version.outputs.package_version }}.nupkg"
 
           Copy-Item -Path $expectedX64Msi -Destination $releaseX64MsiPath -Force
           Copy-Item -Path $expectedArm64Msi -Destination $releaseArm64MsiPath -Force
-          Copy-Item -Path $expectedChocolateyNupkg -Destination $releaseNupkgPath -Force
 
           $x64MsiHash = (Get-FileHash -Path $releaseX64MsiPath -Algorithm SHA256).Hash.ToLowerInvariant()
           $arm64MsiHash = (Get-FileHash -Path $releaseArm64MsiPath -Algorithm SHA256).Hash.ToLowerInvariant()
-          $nupkgHash = (Get-FileHash -Path $releaseNupkgPath -Algorithm SHA256).Hash.ToLowerInvariant()
           Set-Content -Path (Join-Path $assetDir "PrimeDictate-Setup-$tag-x64.msi.sha256") -Value "$x64MsiHash  PrimeDictate-Setup-$tag-x64.msi" -NoNewline
           Set-Content -Path (Join-Path $assetDir "PrimeDictate-Setup-$tag-arm64.msi.sha256") -Value "$arm64MsiHash  PrimeDictate-Setup-$tag-arm64.msi" -NoNewline
-          Set-Content -Path (Join-Path $assetDir "primedictate.${{ steps.version.outputs.package_version }}.nupkg.sha256") -Value "$nupkgHash  primedictate.${{ steps.version.outputs.package_version }}.nupkg" -NoNewline
 
           "asset_dir=$assetDir" >> $env:GITHUB_OUTPUT
 
       - name: Publish installers to GitHub Release
-        if: github.event_name == 'push' && steps.version.outputs.is_semver_tag == 'true' && (github.event_name != 'workflow_dispatch' || !inputs.push_only)
+        if: github.event_name == 'push' && steps.version.outputs.is_semver_tag == 'true' && (github.event_name != 'workflow_dispatch' || !inputs.submit_winget_only)
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -344,48 +325,97 @@ jobs:
             throw "Failed to upload release assets for tag $tag"
           }
 
-      - name: Resolve Chocolatey nupkg for push-only mode
-        if: github.event_name == 'workflow_dispatch' && inputs.push_only
+      - name: Resolve release MSI assets for submit-winget-only mode
+        if: github.event_name == 'workflow_dispatch' && inputs.submit_winget_only
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $version = "${{ steps.version.outputs.package_version }}"
           $tag = "${{ steps.version.outputs.release_tag }}"
-          $assetName = "primedictate.$version.nupkg"
           $outDir = $env:INSTALLER_DIR
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
-          & gh release download $tag --repo "${{ github.repository }}" --pattern $assetName --dir $outDir --clobber
-          if ($LASTEXITCODE -ne 0) {
-            throw "Failed to download $assetName from release $tag."
+          $assetToInstallerMap = @{
+            "PrimeDictate-Setup-$tag-x64.msi" = "PrimeDictate-$version-Windows-x64-Online.msi"
+            "PrimeDictate-Setup-$tag-arm64.msi" = "PrimeDictate-$version-Windows-arm64-Online.msi"
           }
 
-          $nupkgPath = Join-Path $outDir $assetName
-          if (-not (Test-Path $nupkgPath)) {
-            throw "Downloaded nupkg not found at $nupkgPath"
+          foreach ($asset in $assetToInstallerMap.Keys) {
+            & gh release download $tag --repo "${{ github.repository }}" --pattern $asset --dir $outDir --clobber
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to download $asset from release $tag."
+            }
+
+            $downloadedAssetPath = Join-Path $outDir $asset
+            if (-not (Test-Path $downloadedAssetPath)) {
+              throw "Downloaded release asset not found at $downloadedAssetPath"
+            }
+
+            $normalizedInstallerName = $assetToInstallerMap[$asset]
+            $normalizedInstallerPath = Join-Path $outDir $normalizedInstallerName
+            Copy-Item -Path $downloadedAssetPath -Destination $normalizedInstallerPath -Force
           }
 
-      - name: Push Chocolatey package (optional)
-        if: (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.push_only)) && steps.version.outputs.is_semver_tag == 'true'
+      - name: Generate winget manifests
+        if: (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.submit_winget_only)) && steps.version.outputs.is_semver_tag == 'true'
+        id: winget_manifest
+        shell: pwsh
+        run: |
+          $manifestDir = .\scripts\Build-WingetManifest.ps1 `
+            -PackageIdentifier "FlowDevs.PrimeDictate" `
+            -PackageVersion "${{ steps.version.outputs.package_version }}" `
+            -Repository "${{ github.repository }}" `
+            -InstallerDirectory "$env:INSTALLER_DIR" `
+            -OutputRoot (Join-Path $env:GITHUB_WORKSPACE "artifacts\winget")
+
+          if ([string]::IsNullOrWhiteSpace($manifestDir)) {
+            throw "Build-WingetManifest.ps1 did not return a manifest directory."
+          }
+
+          if (-not (Test-Path $manifestDir)) {
+            throw "Generated manifest directory does not exist: $manifestDir"
+          }
+
+          "manifest_dir=$manifestDir" >> $env:GITHUB_OUTPUT
+
+      - name: Validate winget manifests
+        if: (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.submit_winget_only)) && steps.version.outputs.is_semver_tag == 'true'
+        shell: pwsh
+        run: |
+          $manifestDir = "${{ steps.winget_manifest.outputs.manifest_dir }}"
+          if ([string]::IsNullOrWhiteSpace($manifestDir)) {
+            throw "Winget manifest directory output is empty."
+          }
+          if (-not (Test-Path $manifestDir)) {
+            throw "Winget manifest directory does not exist: $manifestDir"
+          }
+          winget validate --manifest $manifestDir
+
+      - name: Submit winget manifest PR (optional)
+        if: (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.submit_winget_only)) && steps.version.outputs.is_semver_tag == 'true'
         shell: pwsh
         env:
-          CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
-          CHOCO_SOURCE_URL: ${{ vars.CHOCO_SOURCE_URL }}
+          WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:CHOCO_API_KEY)) {
-            Write-Host "CHOCO_API_KEY is not configured; skipping Chocolatey push."
+          if ([string]::IsNullOrWhiteSpace($env:WINGET_CREATE_GITHUB_TOKEN)) {
+            Write-Host "WINGET_CREATE_GITHUB_TOKEN is not configured; skipping winget submission."
             exit 0
           }
 
-          $nupkgPath = Join-Path $env:INSTALLER_DIR "primedictate.${{ steps.version.outputs.package_version }}.nupkg"
-          if (-not (Test-Path $nupkgPath)) {
-            throw "Chocolatey package not found for push: $nupkgPath"
+          $manifestDir = "${{ steps.winget_manifest.outputs.manifest_dir }}"
+          if ([string]::IsNullOrWhiteSpace($manifestDir) -or -not (Test-Path $manifestDir)) {
+            throw "Winget manifest directory is missing: $manifestDir"
           }
 
-          $sourceUrl = if ([string]::IsNullOrWhiteSpace($env:CHOCO_SOURCE_URL)) { "https://push.chocolatey.org/" } else { $env:CHOCO_SOURCE_URL.Trim() }
-          choco push $nupkgPath --source $sourceUrl --api-key $env:CHOCO_API_KEY --timeout 2700
+          $wingetCreateDir = Join-Path $env:RUNNER_TEMP "wingetcreate"
+          New-Item -ItemType Directory -Force -Path $wingetCreateDir | Out-Null
+          $wingetCreateExe = Join-Path $wingetCreateDir "wingetcreate.exe"
+          Invoke-WebRequest -Uri "https://aka.ms/wingetcreate/latest" -OutFile $wingetCreateExe
+
+          $prTitle = "Add FlowDevs.PrimeDictate version ${{ steps.version.outputs.package_version }}"
+          & $wingetCreateExe submit --prtitle $prTitle --no-open $manifestDir
           if ($LASTEXITCODE -ne 0) {
-            Write-Warning "Chocolatey push failed with exit code $LASTEXITCODE. GitHub release assets were already published, so the optional Chocolatey publishing step will not fail the release build."
+            Write-Warning "winget submission failed with exit code $LASTEXITCODE. GitHub release assets were already published, so this optional winget step will not fail the release build."
             exit 0
           }

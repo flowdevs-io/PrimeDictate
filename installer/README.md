@@ -34,16 +34,12 @@ From the repository root:
 
 Outputs are copied to `artifacts\installer\`. Intermediate build outputs live under `installer\wix\online\bin\`.
 
-Release builds also generate a Chocolatey package at `artifacts\installer\primedictate.<version>.nupkg` when `choco.exe` is available.
+## winget publishing
 
-The Chocolatey package does **not** bundle MSI binaries. It downloads the versioned GitHub Release MSI for the machine architecture (`PrimeDictate-Setup-v<version>-arm64.msi` on ARM64 Windows, otherwise `PrimeDictate-Setup-v<version>-x64.msi`) and verifies the downloaded MSI with a SHA256 checksum embedded at package build time.
+PrimeDictate publishes to winget from the same tagged release pipeline as the MSI (`vX.Y.Z` tags only).
 
-## Chocolatey publishing
-
-PrimeDictate publishes a Chocolatey package from the same tagged release pipeline as the MSI (`vX.Y.Z` tags only).
-
-- Package id: `primedictate`
-- Community page: `https://community.chocolatey.org/packages/primedictate`
+- Package id: `FlowDevs.PrimeDictate`
+- Community manifests: `https://github.com/microsoft/winget-pkgs`
 - Source/release assets: `https://github.com/CakeRepository/PrimeDictate/releases`
 - Product overview/docs: `https://www.flowdevs.io/portfolio/project/primedictate-local-ai-dictation-app`
 
@@ -54,36 +50,20 @@ PrimeDictate publishes a Chocolatey package from the same tagged release pipelin
 3. Create and push tag `v<version>` (for example `v3.2.0`).
 4. The `build.yml` tag run will:
    - build x64 and ARM64 publish payloads + online MSIs,
-   - build `primedictate.<version>.nupkg`,
-   - attach both MSIs, checksum files, and the Chocolatey package to the matching GitHub Release,
-   - push to Chocolatey when `CHOCO_API_KEY` is configured.
+   - attach both MSIs and checksum files to the matching GitHub Release,
+   - generate and validate winget manifests from those MSI artifacts,
+   - submit a winget PR when `WINGET_CREATE_GITHUB_TOKEN` is configured.
 
-If `CHOCO_API_KEY` is missing, the workflow still builds assets and publishes to GitHub Releases, but skips Chocolatey push.
+If `WINGET_CREATE_GITHUB_TOKEN` is missing, the workflow still builds assets and publishes to GitHub Releases, but skips winget submission.
 
-### Local maintainer repack/push (no GitHub Actions)
+### winget resubmission (no rebuild)
 
-Use this when Chocolatey moderation asks for fixes on the same package version.
+Use this when winget reviewers request metadata changes for an existing version.
 
-1. Download the target release MSIs and record their SHA256 hashes.
-2. Stamp `installer\chocolatey\tools\chocolateyInstall.ps1` with the exact x64 and ARM64 SHA256 values.
-3. Ensure `installer\chocolatey\tools\LICENSE.txt` and `installer\chocolatey\tools\VERIFICATION.txt` are present and match the exact version/hash being submitted.
-4. Run:
-
-```powershell
-choco pack .\installer\chocolatey\primedictate.nuspec --version <version>
-choco push .\installer\chocolatey\primedictate.<version>.nupkg --source https://push.chocolatey.org/ --api-key <your-api-key>
-```
-
-Security note: never commit API keys, never place them in repository files, and rotate any key that was ever shared outside your secure secret storage.
-
-### Chocolatey moderation checklist
-
-Before pushing a moderated rebuild, verify:
-
-- `iconUrl` resolves publicly (HTTP 200) and points to an existing image file.
-- `licenseUrl`, `packageSourceUrl`, and `releaseNotes` are valid URLs.
-- Required remote-binary docs exist in `tools\` (`LICENSE.txt`, `VERIFICATION.txt`).
-- `VERIFICATION.txt` release URLs and SHA256 values exactly match the GitHub Release MSIs referenced by `tools\chocolateyInstall.ps1`.
+1. Run `build.yml` with `workflow_dispatch`.
+2. Set `submit_winget_only=true`.
+3. Set `target_version=<version>` (for example `3.2.0`).
+4. The workflow downloads the two release MSIs for `v<version>`, regenerates manifests, validates them with `winget validate`, and submits a fresh winget PR.
 
 ## Silent install and upgrade
 
@@ -92,10 +72,10 @@ Before pushing a moderated rebuild, verify:
 - Install without launch at login: `msiexec /i PrimeDictate-<version>-Windows-<arch>-Online.msi LAUNCHATLOGIN=0 /qn /norestart`
 - Upgrade: `msiexec /i PrimeDictate-<version>-Windows-<arch>-Online.msi REINSTALL=ALL REINSTALLMODE=vomus /qn /norestart`
 - Uninstall: `msiexec /x PrimeDictate-<version>-Windows-<arch>-Online.msi /qn /norestart`
-- Chocolatey install: `choco install primedictate -y`
-- Chocolatey install without launch at login: `choco install primedictate -y --params "'/NoLaunchAtLogin'"`
-- Chocolatey upgrade: `choco upgrade primedictate -y`
-- Chocolatey uninstall: `choco uninstall primedictate -y`
+- winget install: `winget install --id FlowDevs.PrimeDictate --exact --silent --accept-package-agreements --accept-source-agreements`
+- winget install without launch at login: `winget install --id FlowDevs.PrimeDictate --exact --silent --accept-package-agreements --accept-source-agreements --override "LAUNCHATLOGIN=0"`
+- winget upgrade: `winget upgrade --id FlowDevs.PrimeDictate --exact --silent --accept-package-agreements --accept-source-agreements`
+- winget uninstall: `winget uninstall --id FlowDevs.PrimeDictate --exact --silent`
 
 ## Layout
 

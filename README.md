@@ -36,7 +36,7 @@
 - **Return to original target (optional)**: A dictation setting can deliver the final transcript back to the window that had focus when recording started, first trying a safe direct write to the captured edit control on Windows and otherwise reactivating that window before typing.
 - **Built-in pointer cue**: If Windows Mouse Sonar is enabled, PrimeDictate pulses it on recording/processing transitions by tapping Ctrl. It does not draw a custom pointer overlay or change the user's Windows setting.
 - **Custom audio earcons**: PrimeDictate can play its own short start/stop tones so you hear when recording begins and when capture hands off to transcription.
-- **Launch at login**: Installers enable automatic startup by default with a Windows Startup-folder shortcut so PrimeDictate is ready after a reboot. Silent MSI and Chocolatey installs can opt out, and Settings can switch between off, current-user startup, and all-users startup.
+- **Launch at login**: Installers enable automatic startup by default with a Windows Startup-folder shortcut so PrimeDictate is ready after a reboot. Silent MSI and winget installs can opt out, and Settings can switch between off, current-user startup, and all-users startup.
 - **Built-in updates**: The tray app can check GitHub Releases directly, prompt when a newer release is available, download the matching x64/ARM64 MSI, verify its `.sha256` sidecar, and hand off to Windows Installer.
 - **Audio**: Windows default capture device via NAudio **WASAPI** (`WasapiCapture`), resampled to **16 kHz, 16-bit, mono PCM** for local transcription engines.
 - **Mic isolation mode (best effort)**: Optional exclusive-capture setting can block other apps from the mic on supported devices; if exclusive capture fails, PrimeDictate automatically falls back to shared mode and continues dictation.
@@ -174,7 +174,7 @@ Larger models take longer to download and load. The first transcription after la
 
 ## Public Windows release (installers)
 
-Public installers target **64-bit x64 Windows** only. Maintainers build **MSI packages** with the [WiX Toolset](https://wixtoolset.org/) **via NuGet** (`WixToolset.Sdk`). Only the **[.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)** is required—no separate Inno Setup or WiX install.
+Public installers target **64-bit x64 and ARM64 Windows**. Maintainers build **MSI packages** with the [WiX Toolset](https://wixtoolset.org/) **via NuGet** (`WixToolset.Sdk`). Only the **[.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)** is required—no separate Inno Setup or WiX install.
 
 | MSI | When to use |
 |-----|-------------|
@@ -223,22 +223,22 @@ Tagged pushes that match `vX.Y.Z` keep the workflow artifact upload for CI debug
 - Direct x64 MSI asset: `https://github.com/CakeRepository/PrimeDictate/releases/download/vX.Y.Z/PrimeDictate-Setup-vX.Y.Z-x64.msi`
 - Direct ARM64 MSI asset: `https://github.com/CakeRepository/PrimeDictate/releases/download/vX.Y.Z/PrimeDictate-Setup-vX.Y.Z-arm64.msi`
 - Latest release page: `https://github.com/CakeRepository/PrimeDictate/releases/latest`
-- Chocolatey package asset: `https://github.com/CakeRepository/PrimeDictate/releases/download/vX.Y.Z/primedictate.X.Y.Z.nupkg`
+- winget package identifier: `FlowDevs.PrimeDictate`
 
 Because the MSI filenames include the tag and architecture, Webflow should either link to the release page/latest page or update both direct MSI URLs each time a new release tag is published.
 
-### Chocolatey release alignment
+### winget release alignment
 
-Chocolatey packaging is part of the same `vX.Y.Z` tag release flow so MSI, docs, and Chocolatey stay aligned. The package downloads the versioned GitHub Release MSI for the machine architecture and verifies it with a SHA256 checksum embedded during package build.
+winget manifest generation is part of the same `vX.Y.Z` tag release flow so MSI, docs, and package metadata stay aligned. The workflow generates versioned installer/defaultLocale/version manifests from the release MSIs and validates them before optional submission.
 
-- Chocolatey package id: `primedictate`
-- Chocolatey package source/repo: `https://github.com/CakeRepository/PrimeDictate`
+- winget package id: `FlowDevs.PrimeDictate`
+- winget source repository: `https://github.com/microsoft/winget-pkgs`
 - Product overview page: `https://www.flowdevs.io/portfolio/project/primedictate-local-ai-dictation-app`
 - Official release downloads: `https://github.com/CakeRepository/PrimeDictate/releases`
 
-The tag-triggered workflow pushes to Chocolatey only when `CHOCO_API_KEY` is present. Without that secret, the workflow still publishes release assets to GitHub and logs that Chocolatey push was skipped.
+The tag-triggered workflow submits to winget only when `WINGET_CREATE_GITHUB_TOKEN` is present. Without that secret, the workflow still publishes release assets to GitHub and logs that winget submission was skipped.
 
-For moderation retries, maintainers can repack and push locally with the same version after fixing package metadata/files. See `installer/README.md` for the local repack checklist and required moderation files.
+For moderation retries, use `workflow_dispatch` with `submit_winget_only=true` and `target_version=X.Y.Z` to regenerate/revalidate manifests from the existing GitHub Release MSI assets and resubmit.
 
 ### Silent install and update commands (Windows)
 
@@ -247,10 +247,10 @@ For moderation retries, maintainers can repack and push locally with the same ve
 - MSI install without launch at login: `msiexec /i PrimeDictate-Setup-vX.Y.Z-<arch>.msi LAUNCHATLOGIN=0 /qn /norestart`
 - MSI upgrade (silent): `msiexec /i PrimeDictate-Setup-vX.Y.Z-<arch>.msi /qn /norestart`
 - MSI uninstall (silent): `msiexec /x PrimeDictate-Setup-vX.Y.Z-<arch>.msi /qn /norestart`
-- Chocolatey install (silent by default): `choco install primedictate -y`
-- Chocolatey install without launch at login: `choco install primedictate -y --params "'/NoLaunchAtLogin'"`
-- Chocolatey upgrade (silent): `choco upgrade primedictate -y`
-- Chocolatey uninstall (silent): `choco uninstall primedictate -y`
+- winget install (silent): `winget install --id FlowDevs.PrimeDictate --exact --silent --accept-package-agreements --accept-source-agreements`
+- winget install without launch at login: `winget install --id FlowDevs.PrimeDictate --exact --silent --accept-package-agreements --accept-source-agreements --override "LAUNCHATLOGIN=0"`
+- winget upgrade (silent): `winget upgrade --id FlowDevs.PrimeDictate --exact --silent --accept-package-agreements --accept-source-agreements`
+- winget uninstall (silent): `winget uninstall --id FlowDevs.PrimeDictate --exact --silent`
 
 ### Tray shell and first-run setup
 
@@ -268,7 +268,7 @@ PrimeDictate now runs as a **WPF tray app** (no console window in normal use):
 - **Built-in update checks**: After first-run setup, PrimeDictate checks GitHub Releases at most once per day when automatic checks are enabled. Failed install attempts clear the check timestamp so the next launch can retry. The tray menu also has **Check for updates** for a manual check.
 - **Installer continuity**: The online MSI keeps one product identity for clean upgrades.
 - **Installer finish launch**: The online MSI exposes **“Launch PrimeDictate when setup completes”** (checked by default), which starts the app after install.
-- **Launch at login**: MSI installs add an all-users Windows Startup shortcut by default. Use `LAUNCHATLOGIN=0` for silent MSI installs or Chocolatey `/NoLaunchAtLogin` when you do not want PrimeDictate to start when users sign in. The Settings window can move startup to the current user’s Startup folder or disable it later.
+- **Launch at login**: MSI installs add an all-users Windows Startup shortcut by default. Use `LAUNCHATLOGIN=0` for silent MSI installs or a winget `--override "LAUNCHATLOGIN=0"` install when you do not want PrimeDictate to start when users sign in. The Settings window can move startup to the current user’s Startup folder or disable it later.
 
 **Publish folder only** (no installer):
 
