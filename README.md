@@ -5,8 +5,8 @@
   <a href="https://github.com/flowdevs-io/PrimeDictate/actions/workflows/build.yml">
     <img src="https://github.com/flowdevs-io/PrimeDictate/actions/workflows/build.yml/badge.svg" alt="Build Status">
   </a>
-  <p><b>Local AI dictation for Windows with a global hotkey, live overlay preview, and final-only text injection.</b></p>
-  <p>PrimeDictate records the default microphone, runs transcription locally, shows live hypotheses in a non-activating overlay, and types only the final result into the active application.</p>
+  <p><b>Talking is faster than typing. PrimeDictate is local AI dictation for Windows that stays out of your way.</b></p>
+  <p>Use one hotkey to speak, preview live transcript locally, and commit final text once. No cloud dependency in the core path. No clipboard paste hacks.</p>
   <br/>
   <img src="assets/overlay_full.png" alt="Live Dictation Overlay" width="600" />
   <br/><br/>
@@ -15,18 +15,18 @@
 
 ## What It Does
 
-PrimeDictate is a tray-first Windows dictation app built for fast desktop workflows, coding, and local-only speech-to-text.
+PrimeDictate is a tray-first dictation workflow for people who move faster by voice.
 
-- Starts and stops from configurable global hotkeys
-- Captures the default Windows microphone with WASAPI
-- Runs local transcription engines and local model files only
-- Shows live preview text in an overlay instead of mutating the target app while you speak
-- Injects only the final committed transcript using SharpHook Unicode text entry
-- Supports first-run setup, settings, history, updates, launch-at-login, and optional prompt rewriting with Ollama
+- Trigger dictation from configurable global hotkeys
+- Capture the default Windows microphone with WASAPI
+- Run transcription locally with local model files
+- Keep live edits in the overlay instead of mutating the target app while you speak
+- Inject final text once with SharpHook Unicode text entry
+- Manage everything from a tray-first app with first-run setup, settings, history, updates, launch-at-login, and optional Ollama prompt modes
 
 The current typing path does not rely on clipboard paste. That avoids clipboard races and paste timing issues in editors and browsers.
 
-What makes it different from basic desktop dictation tools:
+Why it feels different from basic desktop dictation tools:
 
 - Live corrections stay in the overlay instead of fighting your editor while you speak.
 - Final injection happens once, on commit, instead of backspacing and retyping into the target app.
@@ -42,7 +42,13 @@ PrimeDictate is a good fit when you want:
 - a tray app you can leave running all day and toggle instantly from anywhere in Windows
 - Windows-native packaging through direct MSI downloads, winget, or Chocolatey
 
-## Highlights
+It is usually faster to talk than type, so we open-sourced the workflow on Windows.
+
+PrimeDictate supports polite send phrases like "thank you" and strips them before final injection, so your flow stays natural without polluting final text.
+
+![Impact dashboard and WPM tracking](assets/settings_impact.jpg)
+
+## Why It Wins
 
 - **Global control**: Configurable hotkeys for start/stop toggle, emergency stop/discard, and history.
 - **Live preview overlay**: Non-activating overlay shows local transcript hypotheses while dictation is in progress.
@@ -50,7 +56,7 @@ PrimeDictate is a good fit when you want:
 - **Voice commands**: Built-in phrases can commit, discard, open history, or trigger command prompt actions.
 - **Tray workspace UI**: Open Workspace from the tray to review sessions, logs, and history in a clearer dashboard layout.
 - **History and recovery**: Every committed transcript is saved locally with metadata and delivery status.
-- **Impact stats**: Tracks local productivity metrics, milestones, average speaking rate, and recent usage history.
+- **Impact stats**: Tracks local productivity metrics, milestones, average speaking pace in WPM, and recent usage history.
 - **Model picker and downloads**: First-run setup and Settings can download supported models or browse to existing local folders.
 - **Optional coding mode**: Sends Enter after a successful final injection.
 - **Launch at login**: Installers enable launch at login by default; MSI and winget installs can opt out.
@@ -59,13 +65,13 @@ PrimeDictate is a good fit when you want:
 
 ![Compact Mic Overlay](assets/overlay_compact.png)
 
-## Install
+## Get PrimeDictate
 
 PrimeDictate currently targets Windows x64 and ARM64.
 
-### End-user install options
+### Install options
 
-| Option | Best for | Command / link |
+| Option | Best for | Install |
 |------|------|------|
 | GitHub Releases | Direct MSI download | `https://github.com/flowdevs-io/PrimeDictate/releases/latest` |
 | winget | Standard Windows package install | `winget install --id FlowDevs.PrimeDictate --exact` |
@@ -97,7 +103,7 @@ Important:
 - Chocolatey upgrade: `choco upgrade primedictate -y`
 - Chocolatey uninstall: `choco uninstall primedictate -y`
 
-## Quick Start
+## Get Dictating in 60 Seconds
 
 1. Install PrimeDictate.
 2. Launch it from Start Menu or let the Startup shortcut run it after sign-in.
@@ -105,14 +111,19 @@ Important:
 4. Pick a backend and download or browse to a local model.
 5. Focus the target app and use the dictation hotkey.
 
-First-run setup covers:
+First-run setup handles:
 
 - backend and model selection
 - command phrases and transcript replacements
 - overlay style and silence auto-commit timing
 - coding mode, impact stats, and other core behavior
 
-The runtime flow is straightforward:
+Impact tracking includes:
+
+- average speech pace in words per minute (WPM)
+- configurable typing comparison baseline in WPM
+
+Dictation runtime flow:
 
 ```mermaid
 flowchart LR
@@ -123,14 +134,14 @@ flowchart LR
   E --> F[Inject final text once]
 ```
 
-Default behavior:
+Default controls:
 
 - Start/stop toggle hotkey: `Ctrl+Shift+Space`
 - Emergency stop/discard hotkey: `Ctrl+Shift+Enter`
 - History hotkey: `Ctrl+Shift+H`
 - Silence auto-commit delay: 3 seconds
 
-Practical usage notes:
+Pro tips:
 
 - Keep the caret in the field where you want text before starting.
 - Do not switch apps while PrimeDictate is processing the final transcript if you want focus safety checks to pass.
