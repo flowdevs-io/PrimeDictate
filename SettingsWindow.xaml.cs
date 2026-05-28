@@ -2428,25 +2428,28 @@ internal partial class SettingsWindow : Window
             return;
         }
 
-        var recommendedOption = this.currentBackend switch
+        var (name, size) = this.currentBackend switch
         {
             TranscriptionBackendKind.Moonshine =>
-                MoonshineModelCatalog.Options.FirstOrDefault(opt => opt.Recommended) ?? MoonshineModelCatalog.Options.First(),
+                MoonshineModelCatalog.Options
+                    .Where(opt => opt.Recommended)
+                    .Select(opt => (opt.DisplayName, opt.ApproximateSizeLabel))
+                    .FirstOrDefault(("the recommended model", string.Empty)),
             TranscriptionBackendKind.Parakeet =>
-                (object)(ParakeetModelCatalog.Options.FirstOrDefault(opt => opt.Recommended) ?? ParakeetModelCatalog.Options.First()),
+                ParakeetModelCatalog.Options
+                    .Where(opt => opt.Recommended)
+                    .Select(opt => (opt.DisplayName, opt.ApproximateSizeLabel))
+                    .FirstOrDefault(("the recommended model", string.Empty)),
             TranscriptionBackendKind.WhisperNet =>
-                WhisperNetModelCatalog.Options.FirstOrDefault(opt => opt.Recommended) ?? WhisperNetModelCatalog.Options.First(),
+                WhisperNetModelCatalog.Options
+                    .Where(opt => opt.Recommended)
+                    .Select(opt => (opt.DisplayName, opt.ApproximateSizeLabel))
+                    .FirstOrDefault(("the recommended model", string.Empty)),
             _ =>
-                WhisperModelCatalog.Options.FirstOrDefault(opt => opt.Recommended) ?? WhisperModelCatalog.Options.First()
-        };
-
-        var (name, size) = recommendedOption switch
-        {
-            WhisperModelOption w => (w.DisplayName, w.ApproximateSizeLabel),
-            MoonshineModelOption m => (m.DisplayName, m.ApproximateSizeLabel),
-            ParakeetModelOption p => (p.DisplayName, p.ApproximateSizeLabel),
-            WhisperNetModelOption n => (n.DisplayName, n.ApproximateSizeLabel),
-            _ => ("the recommended model", string.Empty)
+                WhisperModelCatalog.Options
+                    .Where(opt => opt.Recommended)
+                    .Select(opt => (opt.DisplayName, opt.ApproximateSizeLabel))
+                    .FirstOrDefault(("the recommended model", string.Empty))
         };
 
         var sizeNote = string.IsNullOrEmpty(size) ? string.Empty : $" (~{size} download)";
