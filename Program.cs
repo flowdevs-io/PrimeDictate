@@ -574,6 +574,20 @@ internal sealed class DictationController : IAsyncDisposable
                 return;
             }
 
+            if (this.recorder.TryGetPcm16KhzMonoSnapshot(
+                    out var recentSnapshot,
+                    out _,
+                    speechResumeWindow) &&
+                recentSnapshot is not null &&
+                !recentSnapshot.IsEmpty &&
+                ContainsLikelySpeech(recentSnapshot))
+            {
+                // If the buffered audio still contains speech, treat the silence as a false alarm.
+                Interlocked.Exchange(ref this.autoCommitRequested, 0);
+                AppLog.Info("Auto-commit canceled because buffered speech was still present.", this.activeThreadId);
+                return;
+            }
+
             AppLog.Info("Auto-commit triggered by silence.", this.activeThreadId);
             await this.StopAndCommitRecordingCoreAsync("silence auto-commit").ConfigureAwait(false);
         }

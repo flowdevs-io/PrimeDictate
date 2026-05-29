@@ -1,3 +1,10 @@
+# PrimeDictate 5.0.0
+
+## Highlights
+
+- Added the new onboarding flow for first-run setup.
+- Hardened silence auto-commit so brief probe misses do not stop an active dictation session as easily.
+
 # PrimeDictate 4.4.4
 
 ## Highlights
