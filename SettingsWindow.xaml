@@ -145,6 +145,25 @@
                                        Text="Emergency stop shortcuts and stop phrases discard the active capture without typing text. Use silence auto-commit or the start / stop shortcut when you want to commit." />
                         </StackPanel>
 
+                        <Border Name="FirstRunDownloadHintBorder"
+                                Margin="0,14,0,0"
+                                Padding="14"
+                                Background="{StaticResource HeroCardBackgroundBrush}"
+                                BorderBrush="{StaticResource HeroCardBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="10"
+                                Visibility="Collapsed">
+                            <StackPanel>
+                                <TextBlock FontSize="14"
+                                           FontWeight="SemiBold"
+                                           Text="Ready to download your first model" />
+                                <TextBlock Name="FirstRunDownloadHintText"
+                                           Margin="0,6,0,0"
+                                           Foreground="{StaticResource TextSecondaryBrush}"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Border>
+
                         <TextBlock Name="WelcomeFooterText"
                                    Margin="0,18,0,0"
                                    Foreground="{StaticResource TextSecondaryBrush}"

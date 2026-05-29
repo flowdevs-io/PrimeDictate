@@ -159,6 +159,11 @@ internal partial class SettingsWindow : Window
 
         this.InitializeModelSelection(settings);
         this.UpdateWindowChrome();
+
+        if (isFirstRun)
+        {
+            this.UpdateFirstRunDownloadHint();
+        }
     }
 
     internal event Action<AppSettings>? SettingsSaved;
@@ -1040,6 +1045,10 @@ internal partial class SettingsWindow : Window
             if (ReferenceEquals(this.SetupTabControl.SelectedItem, this.WelcomeTab))
             {
                 this.SetupTabControl.SelectedItem = this.ModelTab;
+                if (!this.IsCurrentBackendModelInstalled())
+                {
+                    this.OnDownloadSelectedModelClick(this, new RoutedEventArgs());
+                }
                 return;
             }
 
@@ -2404,6 +2413,67 @@ internal partial class SettingsWindow : Window
         this.suppressModelPathTextChanged = true;
         this.ModelPathTextBox.Text = value ?? string.Empty;
         this.suppressModelPathTextChanged = false;
+    }
+
+    private void UpdateFirstRunDownloadHint()
+    {
+        if (this.FirstRunDownloadHintBorder is null || this.FirstRunDownloadHintText is null)
+        {
+            return;
+        }
+
+        if (this.IsCurrentBackendModelInstalled())
+        {
+            this.FirstRunDownloadHintBorder.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var (name, size) = this.currentBackend switch
+        {
+            TranscriptionBackendKind.Moonshine =>
+                MoonshineModelCatalog.Options
+                    .Where(opt => opt.Recommended)
+                    .Select(opt => (opt.DisplayName, opt.ApproximateSizeLabel))
+                    .FirstOrDefault(("the recommended model", string.Empty)),
+            TranscriptionBackendKind.Parakeet =>
+                ParakeetModelCatalog.Options
+                    .Where(opt => opt.Recommended)
+                    .Select(opt => (opt.DisplayName, opt.ApproximateSizeLabel))
+                    .FirstOrDefault(("the recommended model", string.Empty)),
+            TranscriptionBackendKind.WhisperNet =>
+                WhisperNetModelCatalog.Options
+                    .Where(opt => opt.Recommended)
+                    .Select(opt => (opt.DisplayName, opt.ApproximateSizeLabel))
+                    .FirstOrDefault(("the recommended model", string.Empty)),
+            _ =>
+                WhisperModelCatalog.Options
+                    .Where(opt => opt.Recommended)
+                    .Select(opt => (opt.DisplayName, opt.ApproximateSizeLabel))
+                    .FirstOrDefault(("the recommended model", string.Empty))
+        };
+
+        var sizeNote = string.IsNullOrEmpty(size) ? string.Empty : $" (~{size} download)";
+        this.FirstRunDownloadHintText.Text =
+            $"Clicking Next will begin downloading {name}{sizeNote}. " +
+            "You can change the model choice on the next step before the download finishes.";
+        this.FirstRunDownloadHintBorder.Visibility = Visibility.Visible;
+    }
+
+    private bool IsCurrentBackendModelInstalled()
+    {
+        return this.currentBackend switch
+        {
+            TranscriptionBackendKind.Moonshine =>
+                MoonshineModelCatalog.Options.Any(opt => MoonshineModelCatalog.TryResolveInstalledPath(opt, out _)),
+            TranscriptionBackendKind.Parakeet =>
+                ParakeetModelCatalog.Options.Any(opt => ParakeetModelCatalog.TryResolveInstalledPath(opt, out _)),
+            TranscriptionBackendKind.QualcommQnn =>
+                QualcommAihubWhisperModelCatalog.Options.Any(opt => QualcommAihubWhisperModelCatalog.TryResolveInstalledPath(opt, out _)),
+            TranscriptionBackendKind.WhisperNet =>
+                WhisperNetModelCatalog.Options.Any(opt => WhisperNetModelCatalog.TryResolveInstalledArtifacts(opt, out _)),
+            _ =>
+                WhisperModelCatalog.Options.Any(opt => WhisperModelCatalog.TryResolveInstalledPath(opt, out _))
+        };
     }
 
     private void ShowModelDownloadMessage(string message)
