@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.Windows;
@@ -62,6 +63,7 @@ internal partial class SettingsWindow : Window
     private readonly bool isFirstRun;
     private readonly bool isOverlaySticky;
     private readonly DateTime? lastUpdateCheckUtc;
+    private bool allowClose;
     private readonly IReadOnlyList<BackendChoice> availableBackendChoices;
     private CancellationTokenSource? modelDownloadCts;
     private TranscriptionBackendKind currentBackend;
@@ -88,7 +90,7 @@ internal partial class SettingsWindow : Window
         this.VoiceShellCommandBehaviorColumn.ItemsSource = Enum.GetValues<VoiceShellCommandCompletionBehavior>();
 
         this.UpdateHotkeyLabels();
-        this.TrayBehaviorComboBox.SelectedIndex = settings.TrayClickBehavior == TrayClickBehavior.SingleClickOpensSettings ? 0 : 1;
+        this.TrayBehaviorComboBox.SelectedIndex = settings.TrayClickBehavior == TrayClickBehavior.SingleClickOpensWorkspace ? 0 : 1;
         this.LaunchAtLoginComboBox.SelectedIndex = GetLaunchAtLoginComboBoxIndex(ResolveLaunchAtLoginScope(settings.LaunchAtLoginScope));
         this.ExclusiveMicAccessCheckBox.IsChecked = settings.ExclusiveMicAccessWhileDictating;
         this.InitializeInputDeviceOptions(settings.SelectedInputDeviceId);
@@ -100,6 +102,10 @@ internal partial class SettingsWindow : Window
         this.CheckForUpdatesAutomaticallyCheckBox.IsChecked = settings.CheckForUpdatesAutomatically;
         this.OverlayModeComboBox.SelectedIndex = settings.OverlayMode == OverlayMode.FullPanel ? 1 : 0;
         this.EnableVoiceCommandsCheckBox.IsChecked = settings.EnableVoiceCommands;
+        this.EnableWakeWordCheckBox.IsChecked = settings.EnableWakeWord;
+        this.WakeWordPhraseTextBox.Text = string.IsNullOrWhiteSpace(settings.WakeWordPhrase)
+            ? AppSettings.DefaultWakeWordPhrase
+            : settings.WakeWordPhrase;
         this.VoiceDictationPhraseTextBox.Text = settings.VoiceDictationPhrase;
         this.VoiceStopPhraseTextBox.Text = settings.VoiceStopPhrase;
         this.VoiceHistoryPhraseTextBox.Text = settings.VoiceHistoryPhrase;
@@ -146,7 +152,9 @@ internal partial class SettingsWindow : Window
         this.InitializeStatsTab(settings, statsState);
 
         this.WelcomeTab.Header = isFirstRun ? "Welcome" : "Overview";
-        this.HeaderText.Text = isFirstRun ? "PrimeDictate first-run setup" : "PrimeDictate settings";
+        this.HeaderEyebrowText.Text = isFirstRun ? "SETUP" : "SETTINGS";
+        this.HeaderText.Text = isFirstRun ? "First-run setup" : "Settings";
+        this.Title = isFirstRun ? "PrimeDictate First-run setup" : "PrimeDictate Settings";
         this.WelcomeFooterText.Text = isFirstRun
             ? "Choose a model, configure your commands, and PrimeDictate is ready to dictate into Windows apps."
             : "You can switch models or tweak dictation behavior here whenever your workflow changes.";
@@ -193,6 +201,27 @@ internal partial class SettingsWindow : Window
     private void OnCloseClick(object sender, RoutedEventArgs e)
     {
         this.Close();
+    }
+
+    protected override void OnClosing(CancelEventArgs e)
+    {
+        if (this.isFirstRun && !this.allowClose)
+        {
+            var result = System.Windows.MessageBox.Show(
+                this,
+                "Setup is not finished yet. PrimeDictate will keep running in the tray, and this setup window will open again the next time you start the app.\n\nClose setup for now?",
+                "Finish setup later?",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question,
+                MessageBoxResult.No);
+            if (result != MessageBoxResult.Yes)
+            {
+                e.Cancel = true;
+                return;
+            }
+        }
+
+        base.OnClosing(e);
     }
 
     private void InitializeModelSelection(AppSettings settings)
@@ -1082,6 +1111,7 @@ internal partial class SettingsWindow : Window
         }
 
         this.SettingsSaved?.Invoke(settings);
+        this.allowClose = true;
         this.Close();
     }
 
@@ -1105,6 +1135,7 @@ internal partial class SettingsWindow : Window
             return;
         }
 
+        this.allowClose = true;
         this.Close();
     }
 
@@ -1160,7 +1191,7 @@ internal partial class SettingsWindow : Window
 
         if (!this.isFirstRun)
         {
-            this.HeaderSubtextText.Text = "Manage your local model, commands, and dictation behavior.";
+            this.HeaderSubtextText.Text = "Manage your local model, audio, commands, and dictation behavior.";
             this.BackButton.Visibility = Visibility.Collapsed;
             this.CancelButton.Visibility = Visibility.Visible;
             this.HistoryButton.Visibility = Visibility.Visible;
@@ -1640,6 +1671,11 @@ internal partial class SettingsWindow : Window
         var selectedLaunchAtLoginScope = GetSelectedLaunchAtLoginScope();
         var selectedOverlayMode = ((ComboBoxItem)this.OverlayModeComboBox.SelectedItem).Tag?.ToString();
         var enableVoiceCommands = this.EnableVoiceCommandsCheckBox.IsChecked == true;
+        var enableWakeWord = this.EnableWakeWordCheckBox.IsChecked == true;
+        var wakeWordPhrase = this.WakeWordPhraseTextBox.Text.Trim();
+        var effectiveWakeWordPhrase = string.IsNullOrWhiteSpace(wakeWordPhrase)
+            ? AppSettings.DefaultWakeWordPhrase
+            : wakeWordPhrase;
         var voiceDictationPhrase = this.VoiceDictationPhraseTextBox.Text.Trim();
         var voiceStopPhrase = this.VoiceStopPhraseTextBox.Text.Trim();
         var voiceHistoryPhrase = this.VoiceHistoryPhraseTextBox.Text.Trim();
@@ -1703,13 +1739,15 @@ internal partial class SettingsWindow : Window
             StopHotkey = this.currentStopHotkey,
             HistoryHotkey = this.currentHistoryHotkey,
             EnableVoiceCommands = enableVoiceCommands,
+            EnableWakeWord = enableWakeWord,
+            WakeWordPhrase = effectiveWakeWordPhrase,
             VoiceDictationPhrase = effectiveVoiceDictationPhrase,
             VoiceStopPhrase = effectiveVoiceStopPhrase,
             VoiceHistoryPhrase = effectiveVoiceHistoryPhrase,
             VoiceShellCommands = voiceShellCommandsForSave,
             TrayClickBehavior = selectedBehavior == "Single"
-                ? TrayClickBehavior.SingleClickOpensSettings
-                : TrayClickBehavior.DoubleClickOpensSettings,
+                ? TrayClickBehavior.SingleClickOpensWorkspace
+                : TrayClickBehavior.DoubleClickOpensWorkspace,
             LaunchAtLoginScope = selectedLaunchAtLoginScope,
             TranscriptionBackend = this.currentBackend,
             TranscriptionComputeInterface = this.GetSelectedComputeInterface(),

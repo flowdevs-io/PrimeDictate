@@ -28,22 +28,28 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                
-                <StackPanel Orientation="Horizontal" Margin="16,12,0,12" VerticalAlignment="Center">
-                    <TextBlock FontSize="16"
+
+                <StackPanel Margin="16,10,0,10" VerticalAlignment="Center">
+                    <TextBlock FontSize="11"
                                FontWeight="SemiBold"
-                               Text="PrimeDictate Workspace" />
-                    <TextBlock Margin="12,2,0,0"
-                               Foreground="{StaticResource TextSecondaryBrush}"
-                               VerticalAlignment="Center"
-                               Text="{Binding RuntimeStatusText}" />
+                               Foreground="{StaticResource TextMutedBrush}"
+                               Text="WORKSPACE" />
+                    <DockPanel Margin="0,2,0,0">
+                        <TextBlock FontSize="16"
+                                   FontWeight="SemiBold"
+                                   Text="Dictation activity" />
+                        <TextBlock Margin="12,2,0,0"
+                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                   VerticalAlignment="Center"
+                                   Text="{Binding RuntimeStatusText}" />
+                    </DockPanel>
                 </StackPanel>
-                
+
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top" Margin="0,8,8,0">
-                    <Button Width="88" Margin="0,0,8,0" Content="Settings" Click="OnSettingsClick" />
-                    <Button Width="88" Margin="0,0,16,0" Content="History" Click="OnHistoryClick" />
-                    <Button Width="32" Height="32" Content="—" Background="Transparent" BorderThickness="0" Click="OnMinimizeClick" ToolTip="Minimize" />
-                    <Button Width="32" Height="32" Content="✕" Background="Transparent" BorderThickness="0" Click="OnCloseClick" ToolTip="Close" />
+                    <Button Width="88" Margin="0,0,8,0" Content="Settings" Click="OnSettingsClick" ToolTip="Open settings" />
+                    <Button Width="88" Margin="0,0,16,0" Content="History" Click="OnHistoryClick" ToolTip="Open transcript history" />
+                    <Button Width="32" Height="32" Content="—" Background="Transparent" BorderThickness="0" Click="OnMinimizeClick" ToolTip="Minimize" AutomationProperties.Name="Minimize" />
+                    <Button Width="32" Height="32" Content="✕" Background="Transparent" BorderThickness="0" Click="OnCloseClick" ToolTip="Close" AutomationProperties.Name="Close" />
                 </StackPanel>
             </Grid>
 
@@ -64,43 +70,57 @@
                            Margin="0,0,0,10"
                            FontSize="16"
                            FontWeight="SemiBold"
-                           Text="Dictation Threads" />
-                <ListBox ItemsSource="{Binding Threads}"
-                         SelectedItem="{Binding SelectedThread, Mode=TwoWay}"
-                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                         VirtualizingPanel.IsVirtualizing="True"
-                         VirtualizingPanel.VirtualizationMode="Recycling">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <Border Margin="0,0,0,6"
-                                    Padding="6"
-                                    BorderBrush="{StaticResource BorderSubtleBrush}"
-                                    BorderThickness="1"
-                                    CornerRadius="4">
-                                <Grid>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                    </Grid.RowDefinitions>
-                                    <TextBlock FontWeight="SemiBold" Text="{Binding Title}" />
-                                    <TextBlock Grid.Row="1"
-                                               Margin="0,2,0,0"
-                                               FontSize="12"
-                                               Foreground="{StaticResource TextSecondaryBrush}"
-                                               Text="{Binding Summary}" />
-                                    <TextBlock Grid.Row="2"
-                                               Margin="0,4,0,0"
-                                               FontSize="12"
-                                               Foreground="{StaticResource TextSecondaryBrush}"
-                                               Text="{Binding LatestTranscript}"
-                                               TextTrimming="CharacterEllipsis"
-                                               ToolTip="{Binding LatestTranscript}" />
-                                </Grid>
-                            </Border>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
+                           Text="Dictation sessions" />
+                <Grid>
+                    <ListBox ItemsSource="{Binding Threads}"
+                             SelectedItem="{Binding SelectedThread, Mode=TwoWay}"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             VirtualizingPanel.IsVirtualizing="True"
+                             VirtualizingPanel.VirtualizationMode="Recycling">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border Margin="0,0,0,6"
+                                        Padding="6"
+                                        BorderBrush="{StaticResource BorderSubtleBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="4">
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <TextBlock FontWeight="SemiBold" Text="{Binding Title}" />
+                                        <TextBlock Grid.Row="1"
+                                                   Margin="0,2,0,0"
+                                                   FontSize="12"
+                                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                                   Text="{Binding Summary}" />
+                                        <TextBlock Grid.Row="2"
+                                                   Margin="0,4,0,0"
+                                                   FontSize="12"
+                                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                                   Text="{Binding LatestTranscript}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding LatestTranscript}" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <TextBlock Text="No dictation sessions yet.&#10;Use your hotkey to start speaking; sessions appear here as they run.">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource EmptyStateTextStyle}">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasThreads}" Value="False">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </Grid>
             </DockPanel>
         </Border>
 
@@ -120,89 +140,115 @@
 
                 <TextBlock FontSize="16"
                            FontWeight="SemiBold"
-                           Text="{Binding SelectedThread.Title, TargetNullValue=No thread selected}" />
+                           Text="{Binding SelectedThread.Title, TargetNullValue=Select a session to inspect its log}" />
 
-                <ListView Grid.Row="1"
-                          Margin="0,8,0,0"
-                          ItemsSource="{Binding SelectedThread.Entries}"
-                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                          VirtualizingPanel.IsVirtualizing="True"
-                          VirtualizingPanel.VirtualizationMode="Recycling">
-                    <ListView.View>
-                        <GridView>
-                            <GridViewColumn Width="78" Header="Time">
-                                <GridViewColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBlock FontFamily="Consolas"
-                                                   Foreground="{StaticResource TextSecondaryBrush}"
-                                                   Text="{Binding TimestampUtc, StringFormat={}{0:HH:mm:ss}}" />
-                                    </DataTemplate>
-                                </GridViewColumn.CellTemplate>
-                            </GridViewColumn>
-                            <GridViewColumn Width="50" Header="Lvl" DisplayMemberBinding="{Binding Level}" />
-                            <GridViewColumn Width="640" Header="Message">
-                                <GridViewColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding DisplayMessage}"
-                                                   TextTrimming="CharacterEllipsis"
-                                                   ToolTip="{Binding Message}" />
-                                    </DataTemplate>
-                                </GridViewColumn.CellTemplate>
-                            </GridViewColumn>
-                        </GridView>
-                    </ListView.View>
-                </ListView>
+                <Grid Grid.Row="1" Margin="0,8,0,0">
+                    <ListView ItemsSource="{Binding SelectedThread.Entries}"
+                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                              VirtualizingPanel.IsVirtualizing="True"
+                              VirtualizingPanel.VirtualizationMode="Recycling">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Width="78" Header="Time">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBlock FontFamily="Consolas"
+                                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                                       Text="{Binding TimestampUtc, StringFormat={}{0:HH:mm:ss}}" />
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                                <GridViewColumn Width="50" Header="Lvl" DisplayMemberBinding="{Binding Level}" />
+                                <GridViewColumn Width="640" Header="Message">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding DisplayMessage}"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       ToolTip="{Binding Message}" />
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+                    <TextBlock Text="Select a session on the left to review its activity.">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource EmptyStateTextStyle}">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding SelectedThread}" Value="{x:Null}">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </Grid>
 
-                <TextBlock Grid.Row="3"
-                           Margin="0,2,0,0"
-                           FontSize="16"
-                           FontWeight="SemiBold"
-                           Text="Global Activity" />
+                <DockPanel Grid.Row="3" Margin="0,2,0,0" LastChildFill="False">
+                    <TextBlock DockPanel.Dock="Left"
+                               FontSize="16"
+                               FontWeight="SemiBold"
+                               VerticalAlignment="Center"
+                               Text="Global activity" />
+                    <StackPanel DockPanel.Dock="Right"
+                                Orientation="Horizontal"
+                                VerticalAlignment="Center">
+                        <Button Width="126"
+                                Margin="0,0,8,0"
+                                Content="Copy errors"
+                                Click="OnCopyErrorsClick"
+                                ToolTip="Copy error-level lines from global activity" />
+                        <Button Width="142"
+                                Content="Copy all activity"
+                                Click="OnCopyAllActivityClick"
+                                ToolTip="Copy every global activity line" />
+                    </StackPanel>
+                </DockPanel>
 
-                <StackPanel Grid.Row="3"
-                        Margin="0,2,0,0"
-                        Orientation="Horizontal"
-                        HorizontalAlignment="Right">
-                    <Button Width="126"
-                        Margin="0,0,8,0"
-                        Content="Copy errors"
-                        Click="OnCopyErrorsClick" />
-                    <Button Width="142"
-                        Content="Copy all activity"
-                        Click="OnCopyAllActivityClick" />
-                </StackPanel>
-
-                <ListView x:Name="GlobalActivityListView"
-                      Grid.Row="4"
-                          Margin="0,8,0,0"
-                          ItemsSource="{Binding GlobalEntries}"
-                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                          VirtualizingPanel.IsVirtualizing="True"
-                          VirtualizingPanel.VirtualizationMode="Recycling">
-                    <ListView.View>
-                        <GridView>
-                            <GridViewColumn Width="78" Header="Time">
-                                <GridViewColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBlock FontFamily="Consolas"
-                                                   Foreground="{StaticResource TextSecondaryBrush}"
-                                                   Text="{Binding TimestampUtc, StringFormat={}{0:HH:mm:ss}}" />
-                                    </DataTemplate>
-                                </GridViewColumn.CellTemplate>
-                            </GridViewColumn>
-                            <GridViewColumn Width="50" Header="Lvl" DisplayMemberBinding="{Binding Level}" />
-                            <GridViewColumn Width="640" Header="Message">
-                                <GridViewColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding DisplayMessage}"
-                                                   TextTrimming="CharacterEllipsis"
-                                                   ToolTip="{Binding Message}" />
-                                    </DataTemplate>
-                                </GridViewColumn.CellTemplate>
-                            </GridViewColumn>
-                        </GridView>
-                    </ListView.View>
-                </ListView>
+                <Grid Grid.Row="4" Margin="0,8,0,0">
+                    <ListView x:Name="GlobalActivityListView"
+                              ItemsSource="{Binding GlobalEntries}"
+                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                              VirtualizingPanel.IsVirtualizing="True"
+                              VirtualizingPanel.VirtualizationMode="Recycling">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Width="78" Header="Time">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBlock FontFamily="Consolas"
+                                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                                       Text="{Binding TimestampUtc, StringFormat={}{0:HH:mm:ss}}" />
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                                <GridViewColumn Width="50" Header="Lvl" DisplayMemberBinding="{Binding Level}" />
+                                <GridViewColumn Width="640" Header="Message">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding DisplayMessage}"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       ToolTip="{Binding Message}" />
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+                    <TextBlock Text="No global activity yet. Runtime messages will appear here once dictation starts.">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource EmptyStateTextStyle}">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasGlobalEntries}" Value="False">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </Grid>
             </Grid>
         </Border>
     </Grid>

@@ -24,6 +24,7 @@ internal partial class TranscriptionOverlayWindow : Window
     private const int ParticleCount = 150;
     private static readonly SolidColorBrush AccentBrush = CreateFrozenBrush(0, 122, 204);
     private static readonly SolidColorBrush ReadyBrush = CreateFrozenBrush(32, 164, 112);
+    private static readonly SolidColorBrush WakeListeningBrush = CreateFrozenBrush(255, 214, 10);
     private static readonly SolidColorBrush RecordingBrush = CreateFrozenBrush(220, 53, 69);
     
     private readonly Random random = new Random();
@@ -269,13 +270,17 @@ internal partial class TranscriptionOverlayWindow : Window
         }, DispatcherPriority.Loaded);
     }
 
-    public void SetReadyState(string backendLabel)
+    public void SetReadyState(string backendLabel, bool isWakeListening)
     {
-        var statusText = $"Ready [{backendLabel}]";
+        var statusText = isWakeListening
+            ? $"Wake listening [{backendLabel}]"
+            : $"Ready [{backendLabel}]";
         this.HeaderText.Text = statusText;
-        this.currentStateBrush = ReadyBrush;
+        this.currentStateBrush = isWakeListening ? WakeListeningBrush : ReadyBrush;
         this.ApplyStateBrush();
-        this.TranscriptText.Text = "Waiting for hotkey...";
+        this.TranscriptText.Text = isWakeListening
+            ? "Waiting for wake phrase..."
+            : "Waiting for hotkey...";
         this.ToolTip = statusText;
         this.TimerText.Text = "00:00";
         this.timer.Stop();
@@ -286,6 +291,7 @@ internal partial class TranscriptionOverlayWindow : Window
         this.UpdateAudioLevel(0);
         this.UpdateVisualizerLoopState();
         this.OnVisualizerTick(null, EventArgs.Empty);
+        this.UpdateCopyButtonState(hasCopyableTranscript: false);
     }
 
     public void UpdateAudioLevel(double rms)
@@ -465,11 +471,13 @@ internal partial class TranscriptionOverlayWindow : Window
             displayTranscript = "..." + displayTranscript[^MaxDisplayedTranscriptChars..];
         }
 
-        this.TranscriptText.Text = string.IsNullOrWhiteSpace(displayTranscript)
-            ? $"Listening with {backendLabel}..."
-            : displayTranscript;
+        var hasCopyableTranscript = !string.IsNullOrWhiteSpace(displayTranscript);
+        this.TranscriptText.Text = hasCopyableTranscript
+            ? displayTranscript
+            : $"Listening with {backendLabel}...";
         this.ToolTip = statusText;
-             
+        this.UpdateCopyButtonState(hasCopyableTranscript);
+
         if (!isProcessing && !this.timer.IsEnabled)
         {
             this.startTime = DateTime.Now;
@@ -598,14 +606,55 @@ internal partial class TranscriptionOverlayWindow : Window
 
     private void OnCopyClick(object sender, RoutedEventArgs e)
     {
+        if (this.CopyTranscriptButton?.IsEnabled != true)
+        {
+            return;
+        }
+
+        var text = this.TranscriptText.Text;
+        if (!IsCopyableTranscript(text))
+        {
+            return;
+        }
+
         try
         {
-            System.Windows.Clipboard.SetText(this.TranscriptText.Text);
+            System.Windows.Clipboard.SetText(text);
         }
         catch
         {
             // Ignore clipboard errors
         }
+    }
+
+    private void UpdateCopyButtonState(bool hasCopyableTranscript)
+    {
+        if (this.CopyTranscriptButton is null)
+        {
+            return;
+        }
+
+        this.CopyTranscriptButton.IsEnabled = hasCopyableTranscript;
+        this.CopyTranscriptButton.ToolTip = hasCopyableTranscript
+            ? "Copy the current transcript preview"
+            : "Nothing to copy yet — wait for a transcript hypothesis";
+    }
+
+    private static bool IsCopyableTranscript(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        if (text.Equals("Waiting for hotkey...", StringComparison.Ordinal) ||
+            text.Equals("Listening...", StringComparison.Ordinal) ||
+            text.StartsWith("Listening with ", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private void ConfigureMicVisuals(bool isCompact)
@@ -656,7 +705,8 @@ internal partial class TranscriptionOverlayWindow : Window
         this.MicFace.Height = micSize;
         this.MicOutline.Width = micSize;
         this.MicOutline.Height = micSize;
-        this.MicGlyph.FontSize = glyphFontSize;
+        this.MicGlyph.Width = glyphFontSize;
+        this.MicGlyph.Height = glyphFontSize;
         this.MicGlyph.Margin = isCompact ? new Thickness(0, 0, 0, 2) : new Thickness(0, 0, 0, 4);
     }
 
@@ -669,7 +719,9 @@ internal partial class TranscriptionOverlayWindow : Window
             ? this.currentStateBrush
             : AccentBrush;
         this.MicOutline.Stroke = micBrush;
-        this.MicGlyph.Foreground = micBrush;
+        this.MicGlyphBody.Fill = micBrush;
+        this.MicGlyphSupport.Stroke = micBrush;
+        this.MicGlyphStem.Stroke = micBrush;
         this.Ring1.Stroke = micBrush;
         this.Ring2.Stroke = micBrush;
 

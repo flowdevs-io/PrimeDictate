@@ -114,6 +114,10 @@ internal sealed class DictationWorkspaceViewModel : INotifyPropertyChanged
 
     public ObservableCollection<AppLogEntry> GlobalEntries { get; }
 
+    public bool HasThreads => this.Threads.Count > 0;
+
+    public bool HasGlobalEntries => this.GlobalEntries.Count > 0;
+
     public string RuntimeStatusText
     {
         get => this.runtimeStatusText;
@@ -154,6 +158,7 @@ internal sealed class DictationWorkspaceViewModel : INotifyPropertyChanged
         }
 
         this.SelectedThread = thread;
+        this.OnPropertyChanged(nameof(this.HasThreads));
         return thread;
     }
 
@@ -163,6 +168,7 @@ internal sealed class DictationWorkspaceViewModel : INotifyPropertyChanged
     public void AppendEntry(AppLogEntry entry)
     {
         InsertWithAggregation(this.GlobalEntries, entry, MaxGlobalEntries);
+        this.OnPropertyChanged(nameof(this.HasGlobalEntries));
         if (entry.ThreadId is Guid threadId && this.GetThread(threadId) is { } thread)
         {
             InsertWithAggregation(thread.Entries, entry, MaxThreadEntries);

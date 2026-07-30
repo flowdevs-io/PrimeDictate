@@ -14,6 +14,7 @@ public partial class App : System.Windows.Application
 {
     private readonly Icon appIcon = AppIconProvider.LoadWindowIcon();
     private readonly Icon trayReadyIcon = AppIconProvider.CreateTrayIcon(TrayVisualState.Ready);
+    private readonly Icon trayAlwaysListeningIcon = AppIconProvider.CreateTrayIcon(TrayVisualState.AlwaysListening);
     private readonly Icon trayRecordingIcon = AppIconProvider.CreateTrayIcon(TrayVisualState.Recording);
     private readonly Icon trayProcessingIcon = AppIconProvider.CreateTrayIcon(TrayVisualState.Processing);
     private readonly Icon trayErrorIcon = AppIconProvider.CreateTrayIcon(TrayVisualState.Error);
@@ -21,6 +22,8 @@ public partial class App : System.Windows.Application
     private readonly DispatcherTimer errorStateTimer;
     private Forms.NotifyIcon? notifyIcon;
     private DictationController? dictationController;
+    private WakeWordListener? wakeWordListener;
+    private readonly SemaphoreSlim wakeWordSyncGate = new(initialCount: 1, maxCount: 1);
     private GlobalHotkeyListener? hotkeyListener;
     private SettingsStore? settingsStore;
     private TranscriptionHistoryStore? historyStore;
@@ -42,7 +45,14 @@ public partial class App : System.Windows.Application
     private bool isCheckingForUpdates;
     private bool isInstallingUpdate;
     private bool overlayExpandedFromCompact;
+    private bool wakeWordRestartFailed;
+    private int wakeWordFailureStreak;
+    private int wakeWordRetryGate;
     private DateTime errorStateUntilUtc = DateTime.MinValue;
+    private static readonly TimeSpan WakeRestartSettleDelay = TimeSpan.FromMilliseconds(400);
+    private static readonly TimeSpan WakeRestartSettleDelayExclusive = TimeSpan.FromMilliseconds(1_000);
+    private static readonly TimeSpan WakeRestartRetryDelay = TimeSpan.FromSeconds(2);
+    private const int WakeRestartMaxRetries = 3;
 
     public App()
     {
@@ -116,6 +126,13 @@ public partial class App : System.Windows.Application
         this.dictationController.TranscriptCommitted += this.OnTranscriptCommitted;
         this.dictationController.AudioLevelUpdated += this.OnAudioLevelUpdated;
         this.dictationController.HistoryRequested += this.OnHistoryRequested;
+        this.wakeWordListener = new WakeWordListener(this.dictationController.TranscribeWakeSampleAsync);
+        this.wakeWordListener.WakeDetected += this.OnWakeWordDetected;
+        this.wakeWordListener.ApplyConfiguration(
+            this.settings.EnableWakeWord,
+            this.settings.WakeWordPhrase,
+            this.settings.SelectedInputDeviceId,
+            this.settings.InputGainMultiplier);
         this.hotkeyListener = new GlobalHotkeyListener(
             this.dictationController.ToggleRecordingAsync,
             this.dictationController.StopRecordingAsync,
@@ -136,6 +153,7 @@ public partial class App : System.Windows.Application
         else
         {
             this.QueueAutomaticUpdateCheck();
+            this.SyncWakeWordListener();
         }
     }
 
@@ -284,6 +302,12 @@ public partial class App : System.Windows.Application
             changed = true;
         }
 
+        if (string.IsNullOrWhiteSpace(settings.WakeWordPhrase))
+        {
+            settings.WakeWordPhrase = AppSettings.DefaultWakeWordPhrase;
+            changed = true;
+        }
+
         if (string.IsNullOrWhiteSpace(settings.VoiceStopPhrase) ||
             VoicePhrasesMatch(settings.VoiceStopPhrase, settings.VoiceDictationPhrase))
         {
@@ -335,6 +359,23 @@ public partial class App : System.Windows.Application
             await StopHookAsync(this.hookTask).ConfigureAwait(false);
         }
 
+        if (this.wakeWordListener is not null)
+        {
+            this.wakeWordListener.WakeDetected -= this.OnWakeWordDetected;
+            await this.wakeWordSyncGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                await this.wakeWordListener.DisposeAsync().ConfigureAwait(false);
+                this.wakeWordListener = null;
+            }
+            finally
+            {
+                this.wakeWordSyncGate.Release();
+            }
+        }
+
+        this.wakeWordSyncGate.Dispose();
+
         if (this.dictationController is not null)
         {
             this.dictationController.RecordingStateChanged -= this.OnRecordingStateChanged;
@@ -374,6 +415,7 @@ public partial class App : System.Windows.Application
         this.errorStateTimer.Stop();
         this.errorStateTimer.Tick -= this.OnErrorStateTimerTick;
         this.trayReadyIcon.Dispose();
+        this.trayAlwaysListeningIcon.Dispose();
         this.trayRecordingIcon.Dispose();
         this.trayProcessingIcon.Dispose();
         this.trayErrorIcon.Dispose();
@@ -396,21 +438,21 @@ public partial class App : System.Windows.Application
         var icon = new Forms.NotifyIcon
         {
             Icon = this.trayReadyIcon,
-            Text = "PrimeDictate - Idle",
+            Text = "PrimeDictate - Ready",
             Visible = true,
             ContextMenuStrip = menu
         };
 
         icon.Click += (_, _) =>
         {
-            if (this.settings?.TrayClickBehavior == TrayClickBehavior.SingleClickOpensSettings)
+            if (this.settings?.TrayClickBehavior == TrayClickBehavior.SingleClickOpensWorkspace)
             {
                 this.ShowWorkspaceWindow();
             }
         };
         icon.DoubleClick += (_, _) =>
         {
-            if (this.settings?.TrayClickBehavior == TrayClickBehavior.DoubleClickOpensSettings)
+            if (this.settings?.TrayClickBehavior == TrayClickBehavior.DoubleClickOpensWorkspace)
             {
                 this.ShowWorkspaceWindow();
             }
@@ -726,6 +768,12 @@ public partial class App : System.Windows.Application
             newSettings.VoiceHistoryPhrase,
             newSettings.VoiceShellCommands ?? new List<VoiceShellCommand>(),
             newSettings.TranscriptReplacements ?? new List<TranscriptReplacementRule>());
+        this.wakeWordListener?.ApplyConfiguration(
+            newSettings.EnableWakeWord,
+            newSettings.WakeWordPhrase,
+            newSettings.SelectedInputDeviceId,
+            newSettings.InputGainMultiplier);
+        this.SyncWakeWordListener();
         this.UpdateTranscriptionOverlay();
 
         if (shouldQueueFirstSavedUpdateCheck)
@@ -733,6 +781,197 @@ public partial class App : System.Windows.Application
             this.QueueAutomaticUpdateCheck();
         }
     }
+
+    private void OnWakeWordDetected()
+    {
+        _ = Task.Run(this.StartDictationFromWakeWordAsync);
+    }
+
+    private async Task StartDictationFromWakeWordAsync()
+    {
+        var controller = this.dictationController;
+        if (controller is null || controller.IsRecording)
+        {
+            return;
+        }
+
+        try
+        {
+            await controller.ToggleRecordingAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"Wake word failed to start dictation: {ex.Message}");
+            this.SyncWakeWordListener();
+        }
+    }
+
+    private void SyncWakeWordListener()
+    {
+        _ = this.SyncWakeWordListenerAsync();
+    }
+
+    private async Task SyncWakeWordListenerAsync()
+    {
+        await this.wakeWordSyncGate.WaitAsync().ConfigureAwait(false);
+        var scheduleRetry = false;
+        try
+        {
+            var listener = this.wakeWordListener;
+            var currentSettings = this.settings;
+            if (listener is null || currentSettings is null)
+            {
+                return;
+            }
+
+            var shouldRun = this.ShouldWakeWordRun(currentSettings);
+
+            await listener.StopAsync().ConfigureAwait(false);
+            listener.ApplyConfiguration(
+                currentSettings.EnableWakeWord,
+                currentSettings.WakeWordPhrase,
+                currentSettings.SelectedInputDeviceId,
+                currentSettings.InputGainMultiplier);
+
+            if (!shouldRun)
+            {
+                // Expected pause while dictating/processing, or wake disabled.
+                this.wakeWordRestartFailed = false;
+                this.wakeWordFailureStreak = 0;
+                return;
+            }
+
+            var controller = this.dictationController;
+            if (controller is null)
+            {
+                this.wakeWordRestartFailed = true;
+                this.wakeWordFailureStreak = WakeRestartMaxRetries + 1;
+                AppLog.Error("Wake listening could not prepare a small transcription model.");
+                return;
+            }
+
+            if (!controller.TryPrepareWakeTranscription(out var wakeModelError))
+            {
+                // Missing small wake model is permanent until settings/models change — do not retry-loop.
+                this.wakeWordRestartFailed = true;
+                this.wakeWordFailureStreak = WakeRestartMaxRetries + 1;
+                AppLog.Error(wakeModelError ?? "Wake listening could not prepare a small transcription model.");
+                return;
+            }
+
+            // RecordingStateChanged(false) fires immediately before ProcessingStateChanged(true).
+            // Exclusive capture also needs longer before shared wake capture can reopen.
+            var settle = currentSettings.ExclusiveMicAccessWhileDictating
+                ? WakeRestartSettleDelayExclusive
+                : WakeRestartSettleDelay;
+            await Task.Delay(settle).ConfigureAwait(false);
+            if (!this.ShouldWakeWordRun(currentSettings))
+            {
+                this.wakeWordRestartFailed = false;
+                return;
+            }
+
+            try
+            {
+                var started = await listener
+                    .StartAsync(() => this.ShouldWakeWordRun(currentSettings))
+                    .ConfigureAwait(false);
+                if (!this.ShouldWakeWordRun(currentSettings))
+                {
+                    this.wakeWordRestartFailed = false;
+                    this.wakeWordFailureStreak = 0;
+                    if (listener.IsRunning)
+                    {
+                        await listener.StopAsync().ConfigureAwait(false);
+                    }
+
+                    return;
+                }
+
+                if (started && listener.IsRunning)
+                {
+                    this.wakeWordRestartFailed = false;
+                    this.wakeWordFailureStreak = 0;
+                    return;
+                }
+
+                this.wakeWordRestartFailed = true;
+                this.wakeWordFailureStreak++;
+                AppLog.Error("Wake word listener did not stay running after start.");
+                scheduleRetry = this.wakeWordFailureStreak <= WakeRestartMaxRetries;
+            }
+            catch (Exception ex)
+            {
+                this.wakeWordRestartFailed = this.ShouldWakeWordRun(currentSettings);
+                if (this.wakeWordRestartFailed)
+                {
+                    this.wakeWordFailureStreak++;
+                    scheduleRetry = this.wakeWordFailureStreak <= WakeRestartMaxRetries;
+                }
+
+                AppLog.Error($"Wake word listener failed to restart: {ex.Message}");
+            }
+        }
+        catch (Exception ex)
+        {
+            var currentSettings = this.settings;
+            this.wakeWordRestartFailed = currentSettings is not null && this.ShouldWakeWordRun(currentSettings);
+            if (this.wakeWordRestartFailed)
+            {
+                this.wakeWordFailureStreak++;
+                scheduleRetry = this.wakeWordFailureStreak <= WakeRestartMaxRetries;
+            }
+
+            AppLog.Error($"Wake word listener sync failed: {ex.Message}");
+        }
+        finally
+        {
+            this.wakeWordSyncGate.Release();
+            _ = this.Dispatcher.BeginInvoke(() =>
+            {
+                this.UpdateTrayState();
+                this.UpdateTranscriptionOverlay();
+            });
+            if (scheduleRetry)
+            {
+                this.QueueWakeWordRestartRetry();
+            }
+        }
+    }
+
+    private void QueueWakeWordRestartRetry()
+    {
+        if (Interlocked.CompareExchange(ref this.wakeWordRetryGate, 1, 0) != 0)
+        {
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(WakeRestartRetryDelay).ConfigureAwait(false);
+                if (this.settings is { } currentSettings &&
+                    this.wakeWordRestartFailed &&
+                    this.ShouldWakeWordRun(currentSettings))
+                {
+                    AppLog.Info(
+                        $"Retrying wake word listener start (attempt {this.wakeWordFailureStreak + 1}/{WakeRestartMaxRetries + 1}).");
+                    this.SyncWakeWordListener();
+                }
+            }
+            finally
+            {
+                Interlocked.Exchange(ref this.wakeWordRetryGate, 0);
+            }
+        });
+    }
+
+    private bool ShouldWakeWordRun(AppSettings currentSettings) =>
+        currentSettings.EnableWakeWord &&
+        currentSettings.FirstRunCompleted &&
+        !this.isRecording &&
+        !this.isProcessing;
 
     private void OnRecordingStateChanged(bool isRecording)
     {
@@ -742,6 +981,8 @@ public partial class App : System.Windows.Application
             this.UpdateTrayState();
             this.UpdateTranscriptionOverlay();
         });
+
+        this.SyncWakeWordListener();
 
         if (isRecording)
         {
@@ -763,6 +1004,8 @@ public partial class App : System.Windows.Application
             this.UpdateTranscriptionOverlay();
         });
 
+        this.SyncWakeWordListener();
+
         if (isProcessing)
         {
             if (this.settings?.PlayAudioCues == true)
@@ -779,22 +1022,44 @@ public partial class App : System.Windows.Application
         if (this.notifyIcon is not null)
         {
             var trayState = this.GetTrayState();
-            this.notifyIcon.Icon = trayState switch
+            var nextIcon = trayState switch
             {
                 TrayVisualState.Recording => this.trayRecordingIcon,
                 TrayVisualState.Processing => this.trayProcessingIcon,
                 TrayVisualState.Error => this.trayErrorIcon,
+                TrayVisualState.AlwaysListening => this.trayAlwaysListeningIcon,
                 _ => this.trayReadyIcon
             };
+
+            // Re-assign even when the logical state is unchanged so WinForms picks up a refreshed handle.
+            if (!ReferenceEquals(this.notifyIcon.Icon, nextIcon))
+            {
+                this.notifyIcon.Icon = nextIcon;
+            }
 
             this.notifyIcon.Text = trayState switch
             {
                 TrayVisualState.Recording => this.GetRecordingTooltipText(),
                 TrayVisualState.Processing => $"PrimeDictate - Processing [{this.GetActiveBackendLabel()}]",
-                TrayVisualState.Error => "PrimeDictate - Error",
+                TrayVisualState.Error => this.wakeWordRestartFailed
+                    ? "PrimeDictate - Wake listening failed"
+                    : "PrimeDictate - Needs attention",
+                TrayVisualState.AlwaysListening => this.GetWakeListeningTooltipText(),
                 _ => $"PrimeDictate - Ready [{this.GetActiveBackendLabel()}]"
             };
         }
+    }
+
+    private string GetWakeListeningTooltipText()
+    {
+        var phrase = this.settings?.WakeWordPhrase?.Trim();
+        if (string.IsNullOrWhiteSpace(phrase))
+        {
+            phrase = AppSettings.DefaultWakeWordPhrase;
+        }
+
+        var text = $"PrimeDictate - Wake listening ({phrase})";
+        return text.Length <= 63 ? text : "PrimeDictate - Wake listening";
     }
 
     private string GetRecordingTooltipText()
@@ -939,7 +1204,9 @@ public partial class App : System.Windows.Application
 
         if (!this.isRecording && !this.isProcessing)
         {
-            this.transcriptionOverlayWindow.SetReadyState(this.GetActiveBackendLabel());
+            this.transcriptionOverlayWindow.SetReadyState(
+                this.GetActiveBackendLabel(),
+                this.GetTrayState() == TrayVisualState.AlwaysListening);
             return;
         }
 
@@ -948,7 +1215,7 @@ public partial class App : System.Windows.Application
 
     private void OnAppLogEntryWritten(AppLogEntry entry)
     {
-        this.Dispatcher.Invoke(() =>
+        _ = this.Dispatcher.BeginInvoke(() =>
         {
             this.workspaceViewModel.AppendEntry(entry);
             if (entry.Level == AppLogLevel.Error)
@@ -1225,9 +1492,19 @@ public partial class App : System.Windows.Application
             return TrayVisualState.Processing;
         }
 
-        if (DateTime.UtcNow <= this.errorStateUntilUtc)
+        if (DateTime.UtcNow <= this.errorStateUntilUtc || this.wakeWordRestartFailed)
         {
             return TrayVisualState.Error;
+        }
+
+        // Yellow while wake-start is enabled and we're idle — including settle/restart gaps
+        // where IsRunning is briefly false. Failed starts use Error above.
+        if (this.settings?.EnableWakeWord == true &&
+            this.settings.FirstRunCompleted &&
+            !this.isRecording &&
+            !this.isProcessing)
+        {
+            return TrayVisualState.AlwaysListening;
         }
 
         return TrayVisualState.Ready;

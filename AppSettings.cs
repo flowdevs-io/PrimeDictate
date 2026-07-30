@@ -11,6 +11,7 @@ internal sealed class AppSettings
     internal const string DefaultVoiceDictationPhrase = "thank you";
     internal const string DefaultVoiceStopPhrase = "potato farmer";
     internal const string DefaultVoiceHistoryPhrase = "show me the money";
+    internal const string DefaultWakeWordPhrase = "okay computer";
 
     public bool FirstRunCompleted { get; set; }
 
@@ -22,6 +23,14 @@ internal sealed class AppSettings
 
     public bool EnableVoiceCommands { get; set; } = true;
 
+    /// <summary>
+    /// When true, idle shared-mic windows are transcribed with the selected ONNX model
+    /// to detect <see cref="WakeWordPhrase"/> and start dictation. Opt-in; audio stays in memory only.
+    /// </summary>
+    public bool EnableWakeWord { get; set; }
+
+    public string WakeWordPhrase { get; set; } = DefaultWakeWordPhrase;
+
     public string VoiceDictationPhrase { get; set; } = DefaultVoiceDictationPhrase;
 
     public string VoiceStopPhrase { get; set; } = DefaultVoiceStopPhrase;
@@ -30,7 +39,7 @@ internal sealed class AppSettings
 
     public List<VoiceShellCommand> VoiceShellCommands { get; set; } = new();
 
-    public TrayClickBehavior TrayClickBehavior { get; set; } = TrayClickBehavior.DoubleClickOpensSettings;
+    public TrayClickBehavior TrayClickBehavior { get; set; } = TrayClickBehavior.DoubleClickOpensWorkspace;
 
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public LaunchAtLoginScope LaunchAtLoginScope { get; set; } = LaunchAtLoginScope.NotConfigured;
@@ -91,11 +100,13 @@ internal sealed class AppSettings
         StopHotkey = HotkeyGesture.DefaultStop,
         HistoryHotkey = HotkeyGesture.DefaultHistory,
         EnableVoiceCommands = true,
+        EnableWakeWord = false,
+        WakeWordPhrase = DefaultWakeWordPhrase,
         VoiceDictationPhrase = DefaultVoiceDictationPhrase,
         VoiceStopPhrase = DefaultVoiceStopPhrase,
         VoiceHistoryPhrase = DefaultVoiceHistoryPhrase,
         VoiceShellCommands = new List<VoiceShellCommand>(),
-        TrayClickBehavior = TrayClickBehavior.DoubleClickOpensSettings,
+        TrayClickBehavior = TrayClickBehavior.DoubleClickOpensWorkspace,
         LaunchAtLoginScope = LaunchAtLoginScope.NotConfigured,
         TranscriptionBackend = TranscriptionBackendKind.Whisper,
         TranscriptionComputeInterface = TranscriptionComputeInterface.Cpu,
@@ -148,8 +159,8 @@ internal enum VoiceShellCommandCompletionBehavior
 
 internal enum TrayClickBehavior
 {
-    SingleClickOpensSettings = 0,
-    DoubleClickOpensSettings = 1
+    SingleClickOpensWorkspace = 0,
+    DoubleClickOpensWorkspace = 1
 }
 
 internal enum LaunchAtLoginScope
@@ -311,6 +322,10 @@ internal sealed class SettingsStore
         }
 
         var json = File.ReadAllText(this.settingsPath);
+        // Migrate pre-5.x tray-click enum names that described Settings but always opened Workspace.
+        json = json
+            .Replace("\"SingleClickOpensSettings\"", "\"SingleClickOpensWorkspace\"", StringComparison.Ordinal)
+            .Replace("\"DoubleClickOpensSettings\"", "\"DoubleClickOpensWorkspace\"", StringComparison.Ordinal);
         var parsed = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions);
         return parsed ?? AppSettings.CreateDefaultForFirstRun();
     }

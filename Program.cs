@@ -282,6 +282,17 @@ internal sealed class DictationController : IAsyncDisposable
         this.recorder.UpdateInputGain(this.inputGainMultiplier);
     }
 
+    /// <summary>
+    /// Ensures the wake-only small-model host is configured. Fails when no Tiny/Base wake model is installed.
+    /// </summary>
+    public bool TryPrepareWakeTranscription(out string? errorMessage) =>
+        this.textInjectionPipeline.TryPrepareWakeTranscription(out errorMessage);
+
+    public ValueTask<string> TranscribeWakeSampleAsync(
+        PcmAudioBuffer audio,
+        CancellationToken cancellationToken = default) =>
+        this.textInjectionPipeline.TranscribeWakeAsync(audio, cancellationToken);
+
     public async Task ToggleRecordingAsync()
     {
         await this.toggleGate.WaitAsync().ConfigureAwait(false);
@@ -1459,6 +1470,45 @@ internal sealed class DefaultMicrophoneRecorder : IDisposable
             }
 
             this.inputGainMultiplier = Math.Clamp(gainMultiplier, 0.5, 4.0);
+        }
+    }
+
+    /// <summary>
+    /// Keeps only the newest <paramref name="keep"/> of captured audio so always-on listeners
+    /// do not grow an unbounded buffer. No-op when not recording.
+    /// </summary>
+    public void TrimCapturedBuffer(TimeSpan keep)
+    {
+        lock (this.syncRoot)
+        {
+            if (this.captureBuffer is null || this.captureFormat is null || keep <= TimeSpan.Zero)
+            {
+                return;
+            }
+
+            var length = this.captureBuffer.Length;
+            if (length <= 0 || this.captureFormat.AverageBytesPerSecond <= 0)
+            {
+                return;
+            }
+
+            var maxBytes = Math.Max(
+                this.captureFormat.BlockAlign,
+                (long)(this.captureFormat.AverageBytesPerSecond * keep.TotalSeconds));
+            var blockAlign = Math.Max(1, this.captureFormat.BlockAlign);
+            maxBytes -= maxBytes % blockAlign;
+            if (maxBytes <= 0 || length <= maxBytes)
+            {
+                return;
+            }
+
+            var keepLength = checked((int)maxBytes);
+            var start = checked((int)(length - maxBytes));
+            var kept = new byte[keepLength];
+            Buffer.BlockCopy(this.captureBuffer.GetBuffer(), start, kept, 0, keepLength);
+            this.captureBuffer.SetLength(0);
+            this.captureBuffer.Position = 0;
+            this.captureBuffer.Write(kept, 0, keepLength);
         }
     }
 

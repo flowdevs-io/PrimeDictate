@@ -16,6 +16,12 @@ internal partial class HistoryWindow : Window
     {
         if (this.DataContext is not TranscriptionHistoryViewModel { SelectedEntry: { } entry })
         {
+            System.Windows.MessageBox.Show(
+                this,
+                "Select a transcript first, then copy.",
+                "Nothing selected",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
             return;
         }
 
@@ -26,13 +32,19 @@ internal partial class HistoryWindow : Window
     {
         if (this.DataContext is not TranscriptionHistoryViewModel { SelectedEntry: { } entry })
         {
+            System.Windows.MessageBox.Show(
+                this,
+                "Select a transcript first, then copy.",
+                "Nothing selected",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
             return;
         }
 
         var sb = new StringBuilder();
         sb.AppendLine($"Timestamp (UTC): {entry.TimestampUtc:O}");
         sb.AppendLine($"Thread: {entry.ThreadId}");
-        sb.AppendLine($"Delivery: {entry.DeliveryStatus}");
+        sb.AppendLine($"Delivery: {entry.DeliveryStatusDisplay}");
         sb.AppendLine($"Target app: {entry.TargetAppDisplayName}");
         sb.AppendLine($"Target window: {entry.TargetWindowDisplayName}");
         sb.AppendLine($"Audio seconds: {entry.AudioDurationSeconds:N1}");

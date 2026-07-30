@@ -35,25 +35,25 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock FontFamily="Segoe UI Emoji" Text="🎙" Foreground="#007ACC" FontSize="18" VerticalAlignment="Center" Margin="0,0,8,0" />
-                    <TextBlock Text="PrimeDictate" Foreground="White" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <TextBlock FontFamily="Segoe UI Emoji" Text="🎙" Foreground="{DynamicResource AccentBrush}" FontSize="18" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <TextBlock Text="Live transcript" Foreground="{DynamicResource TextPrimaryBrush}" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
                 </StackPanel>
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Focusable="False">
                     <!-- Pin -->
-                    <ToggleButton Name="PinButton" Click="OnPinClick" ToolTip="Keep open on screen" Background="Transparent" Foreground="#888" BorderThickness="0" Padding="4" Margin="0,0,4,0" Focusable="False">
+                    <ToggleButton Name="PinButton" Click="OnPinClick" ToolTip="Keep open on screen" AutomationProperties.Name="Keep overlay open" Background="Transparent" Foreground="{DynamicResource TextMutedBrush}" BorderThickness="0" Padding="4" Margin="0,0,4,0" Focusable="False">
                         <TextBlock Text="📌" FontFamily="Segoe UI Emoji" FontSize="14" />
                     </ToggleButton>
                     <!-- Settings -->
-                    <Button Click="OnSettingsClick" ToolTip="Settings" Background="Transparent" Foreground="#888" BorderThickness="0" Padding="4" Margin="0,0,4,0" Focusable="False">
+                    <Button Click="OnSettingsClick" ToolTip="Settings" AutomationProperties.Name="Settings" Background="Transparent" Foreground="{DynamicResource TextMutedBrush}" BorderThickness="0" Padding="4" Margin="0,0,4,0" Focusable="False">
                         <TextBlock Text="⚙" FontFamily="Segoe UI Emoji" FontSize="14" />
                     </Button>
                     <!-- Minimize -->
-                    <Button Click="OnMinimizeClick" ToolTip="Minimize" Background="Transparent" Foreground="#888" BorderThickness="0" Padding="8,4" Margin="0,0,4,0" Focusable="False">
+                    <Button Click="OnMinimizeClick" ToolTip="Minimize" AutomationProperties.Name="Minimize" Background="Transparent" Foreground="{DynamicResource TextMutedBrush}" BorderThickness="0" Padding="8,4" Margin="0,0,4,0" Focusable="False">
                         <TextBlock Text="—" FontFamily="Segoe UI" FontWeight="Bold" FontSize="14" />
                     </Button>
                     <!-- Close -->
-                    <Button Click="OnCloseClick" ToolTip="Close" Background="Transparent" Foreground="#888" BorderThickness="0" Padding="8,4" Focusable="False">
+                    <Button Click="OnCloseClick" ToolTip="Close" AutomationProperties.Name="Close" Background="Transparent" Foreground="{DynamicResource TextMutedBrush}" BorderThickness="0" Padding="8,4" Focusable="False">
                         <TextBlock Text="✕" FontFamily="Segoe UI" FontSize="12" />
                     </Button>
                 </StackPanel>
@@ -199,7 +199,33 @@
                                     <ScaleTransform x:Name="PulseSurfaceScale" CenterX="40" CenterY="40" ScaleX="0.1" ScaleY="0.1" />
                                 </Ellipse.RenderTransform>
                             </Ellipse>
-                            <TextBlock Name="MicGlyph" Text="🎙" FontFamily="Segoe UI Emoji" FontSize="34" Foreground="#007ACC" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,0,0,4" />
+                            <Viewbox Name="MicGlyph"
+                                     Width="34"
+                                     Height="34"
+                                     Stretch="Uniform"
+                                     HorizontalAlignment="Center"
+                                     VerticalAlignment="Center"
+                                     Margin="0,0,0,4">
+                                <Canvas Width="24" Height="24" SnapsToDevicePixels="True">
+                                    <Path Name="MicGlyphBody"
+                                          Fill="#007ACC"
+                                          Data="M12,3 C9.8,3 8,4.8 8,7 L8,12 C8,14.2 9.8,16 12,16 C14.2,16 16,14.2 16,12 L16,7 C16,4.8 14.2,3 12,3 Z" />
+                                    <Path Name="MicGlyphSupport"
+                                          Stroke="#007ACC"
+                                          StrokeThickness="1.8"
+                                          StrokeStartLineCap="Round"
+                                          StrokeEndLineCap="Round"
+                                          StrokeLineJoin="Round"
+                                          Data="M6,11 L6,12 C6,15.31 8.69,18 12,18 C15.31,18 18,15.31 18,12 L18,11" />
+                                    <Path Name="MicGlyphStem"
+                                          Stroke="#007ACC"
+                                          StrokeThickness="1.8"
+                                          StrokeStartLineCap="Round"
+                                          StrokeEndLineCap="Round"
+                                          StrokeLineJoin="Round"
+                                          Data="M12,18 L12,21 M9,21 L15,21" />
+                                </Canvas>
+                            </Viewbox>
                             <Border Name="CompactStatusBadge"
                                     Width="18"
                                     Height="18"
@@ -231,7 +257,7 @@
                         </Grid.RowDefinitions>
 
                         <DockPanel Margin="0,0,0,10">
-                            <Ellipse Name="StateDot" Width="9" Height="9" Margin="0,0,8,0" VerticalAlignment="Center" Fill="#DC3545" />
+                            <Ellipse Name="StateDot" Width="9" Height="9" Margin="0,0,8,0" VerticalAlignment="Center" Fill="{DynamicResource DangerBrush}" />
                             <TextBlock Name="HeaderText" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" Text="Listening" />
                         </DockPanel>
 
@@ -250,16 +276,36 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
-                <Border BorderBrush="#444" BorderThickness="1" CornerRadius="4" Padding="8,4" Background="#1A1F26">
-                    <TextBlock Text="English (US)" Foreground="White" FontSize="12" />
+                <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="4" Padding="8,4" Background="{DynamicResource SurfaceElevatedBrush}">
+                    <TextBlock Name="LocalOnlyBadgeText"
+                               Text="Local only"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               FontSize="12"
+                               ToolTip="Transcript preview stays on this device. Audio is not uploaded." />
                 </Border>
 
-                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-                    <TextBlock Text="⏸" FontFamily="Segoe UI Emoji" Foreground="#888" FontSize="14" Margin="0,0,8,0" />
-                    <TextBlock Name="TimerText" Text="00:00" Foreground="White" FontSize="14" FontFamily="Consolas" />
-                </StackPanel>
+                <TextBlock Name="TimerText"
+                           Grid.Column="1"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           Text="00:00"
+                           Foreground="{DynamicResource TextPrimaryBrush}"
+                           FontSize="14"
+                           FontFamily="Consolas"
+                           ToolTip="Elapsed dictation time" />
 
-                <Button Grid.Column="2" Click="OnCopyClick" Background="Transparent" Foreground="#888" BorderBrush="#444" BorderThickness="1" Padding="8,4" Focusable="False">
+                <Button Name="CopyTranscriptButton"
+                        Grid.Column="2"
+                        Click="OnCopyClick"
+                        Background="Transparent"
+                        Foreground="{DynamicResource TextSecondaryBrush}"
+                        BorderBrush="{DynamicResource BorderBrush}"
+                        BorderThickness="1"
+                        Padding="8,4"
+                        Focusable="False"
+                        IsEnabled="False"
+                        ToolTip="Copy the current transcript preview"
+                        AutomationProperties.Name="Copy transcript">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="📋" FontFamily="Segoe UI Emoji" Margin="0,0,6,0" FontSize="12" />
                         <TextBlock Text="Copy" FontSize="12" />

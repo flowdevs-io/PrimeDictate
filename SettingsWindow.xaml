@@ -5,8 +5,10 @@
         Title="PrimeDictate Settings"
         Width="660"
         Height="760"
+        MinWidth="560"
+        MinHeight="520"
         WindowStartupLocation="CenterScreen"
-        ResizeMode="CanMinimize"
+        ResizeMode="CanResize"
         PreviewKeyDown="OnWindowPreviewKeyDown"
         WindowStyle="None"
         AllowsTransparency="True"
@@ -28,15 +30,21 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <TextBlock Name="HeaderText"
-                           Margin="20,16,0,16"
-                           FontSize="16"
-                           FontWeight="SemiBold"
-                           VerticalAlignment="Center"
-                           Text="PrimeDictate settings" />
+                <StackPanel Margin="20,12,0,12" VerticalAlignment="Center">
+                    <TextBlock Name="HeaderEyebrowText"
+                               FontSize="11"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource TextMutedBrush}"
+                               Text="SETTINGS" />
+                    <TextBlock Name="HeaderText"
+                               Margin="0,2,0,0"
+                               FontSize="16"
+                               FontWeight="SemiBold"
+                               Text="Settings" />
+                </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top" Margin="0,8,8,0">
-                    <Button Width="32" Height="32" Content="—" Background="Transparent" BorderThickness="0" Click="OnMinimizeClick" ToolTip="Minimize" />
-                    <Button Width="32" Height="32" Content="✕" Background="Transparent" BorderThickness="0" Click="OnCloseClick" ToolTip="Close" />
+                    <Button Width="32" Height="32" Content="—" Background="Transparent" BorderThickness="0" Click="OnMinimizeClick" ToolTip="Minimize" AutomationProperties.Name="Minimize" />
+                    <Button Width="32" Height="32" Content="✕" Background="Transparent" BorderThickness="0" Click="OnCloseClick" ToolTip="Close" AutomationProperties.Name="Close" />
                 </StackPanel>
             </Grid>
 
@@ -51,7 +59,7 @@
                            Margin="0,0,0,0"
                            Foreground="{StaticResource TextSecondaryBrush}"
                            TextWrapping="Wrap"
-                           Text="Manage your local model, commands, and dictation behavior." />
+                           Text="Manage your local model, audio, commands, and dictation behavior." />
 
                 <TabControl Name="SetupTabControl"
                             Grid.Row="1"
@@ -90,7 +98,7 @@
                             <TextBlock TextWrapping="Wrap">
                                 <Run FontWeight="SemiBold" Text="1. Pick a local transcription model" />
                                 <LineBreak />
-                                <Run Text="Use the Model tab to choose Whisper or Parakeet, download a model locally, or browse to one you already have." />
+                                <Run Text="Use the Model tab to choose Whisper, Parakeet, Moonshine, Whisper.net, or Qualcomm QNN; download a model locally, or browse to one you already have." />
                             </TextBlock>
                         </Border>
 
@@ -311,7 +319,7 @@
                         <TextBlock Margin="0,8,0,0"
                                    Foreground="{StaticResource TextSecondaryBrush}"
                                    TextWrapping="Wrap"
-                                   Text="Configure the phrases and keyboard shortcuts that control dictation, open history, or run local command prompt actions." />
+                                   Text="Configure the phrases and keyboard shortcuts that control dictation, open history, or run local command prompt actions. Microphone and wake-phrase listening live on the System tab." />
 
                         <CheckBox Name="EnableVoiceCommandsCheckBox"
                                   Margin="0,14,0,0"
@@ -385,7 +393,8 @@
                                      Grid.Row="2"
                                      Grid.Column="2"
                                      Margin="0,10,8,0"
-                                     VerticalContentAlignment="Center" />
+                                     VerticalContentAlignment="Center"
+                                     ToolTip="While recording, saying this phrase discards the capture without typing. Default: potato farmer." />
                             <Button Name="CaptureStopHotkeyButton"
                                     Grid.Row="2"
                                     Grid.Column="3"
@@ -462,88 +471,119 @@
                                 <Button Name="RemoveVoiceShellCommandButton"
                                         Width="120"
                                         Margin="10,0,0,0"
+                                        Style="{StaticResource DangerButtonStyle}"
                                         Content="Remove selected"
                                         Click="OnRemoveVoiceShellCommandClick" />
                             </StackPanel>
                         </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
 
-                        <Expander Margin="0,22,0,0"
-                                  Header="Advanced settings"
-                                  Foreground="{StaticResource TextPrimaryBrush}">
-                            <StackPanel Margin="0,12,0,0">
-                                <TextBlock Text="Tray icon click behavior" FontWeight="SemiBold" />
-                                <ComboBox Name="TrayBehaviorComboBox"
-                                          Margin="0,6,0,0"
-                                          SelectedIndex="1">
-                                    <ComboBoxItem Content="Single click opens Workspace" Tag="Single" />
-                                    <ComboBoxItem Content="Double click opens Workspace" Tag="Double" />
-                                </ComboBox>
+            <TabItem Name="SystemTab" Header="System">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="14">
+                        <TextBlock FontSize="15"
+                                   FontWeight="SemiBold"
+                                   Text="Audio and app behavior" />
+                        <TextBlock Margin="0,8,0,0"
+                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                   TextWrapping="Wrap"
+                                   Text="Choose where audio comes from, optional always-listening wake phrase, and how the tray, overlay, and startup behave." />
 
-                                <TextBlock Margin="0,16,0,0" Text="Start with Windows" FontWeight="SemiBold" />
-                                <ComboBox Name="LaunchAtLoginComboBox"
-                                          Margin="0,6,0,0"
-                                          SelectedIndex="1">
-                                    <ComboBoxItem Content="Off" Tag="Disabled" />
-                                    <ComboBoxItem Content="Current user" Tag="CurrentUser" />
-                                    <ComboBoxItem Content="All users" Tag="AllUsers" />
-                                </ComboBox>
-                                <TextBlock Margin="0,6,0,0"
-                                           Foreground="{StaticResource TextMutedBrush}"
-                                           TextWrapping="Wrap"
-                                           Text="Current user writes shell:startup. All users writes shell:common startup and may ask for administrator approval." />
+                        <TextBlock Margin="0,18,0,0" Text="Microphone" FontWeight="SemiBold" />
+                        <ComboBox Name="InputDeviceComboBox"
+                                  Margin="0,6,0,0"
+                                  MinHeight="32" />
+                        <StackPanel Margin="0,8,0,0" Orientation="Horizontal">
+                            <TextBlock VerticalAlignment="Center" Text="Input gain" />
+                            <TextBox Name="InputGainTextBox"
+                                     Width="58"
+                                     Margin="8,0,8,0"
+                                     VerticalContentAlignment="Center" />
+                            <TextBlock VerticalAlignment="Center" Text="x" />
+                        </StackPanel>
+                        <CheckBox Name="ExclusiveMicAccessCheckBox"
+                                  Margin="0,8,0,0"
+                                  Content="Request exclusive mic access while dictating" />
 
-                                <TextBlock Margin="0,16,0,0" Text="Microphone" FontWeight="SemiBold" />
-                                <ComboBox Name="InputDeviceComboBox"
-                                          Margin="0,6,0,0"
-                                          MinHeight="32" />
-                                <StackPanel Margin="0,8,0,0" Orientation="Horizontal">
-                                    <TextBlock VerticalAlignment="Center" Text="Input gain" />
-                                    <TextBox Name="InputGainTextBox"
-                                             Width="58"
-                                             Margin="8,0,8,0"
-                                             VerticalContentAlignment="Center" />
-                                    <TextBlock VerticalAlignment="Center" Text="x" />
-                                </StackPanel>
-                                <CheckBox Name="ExclusiveMicAccessCheckBox"
-                                          Margin="0,8,0,0"
-                                          Content="Request exclusive mic access while dictating" />
+                        <TextBlock Margin="0,22,0,0" Text="Always listening" FontWeight="SemiBold" />
+                        <CheckBox Name="EnableWakeWordCheckBox"
+                                  Margin="0,8,0,0"
+                                  Content="Start dictation with a wake phrase while idle" />
+                        <TextBlock Margin="0,6,0,0"
+                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                   TextWrapping="Wrap"
+                                   Text="Listens on a ~2 second in-memory mic loop for your wake phrase. Prefers an installed Tiny/Base model when available; otherwise uses your selected dictation model. Audio is not saved. Tray turns yellow while wake listening is on." />
+                        <Grid Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock VerticalAlignment="Center"
+                                       FontWeight="SemiBold"
+                                       Text="Wake phrase" />
+                            <TextBox Name="WakeWordPhraseTextBox"
+                                     Grid.Column="1"
+                                     VerticalContentAlignment="Center"
+                                     ToolTip="Spoken while idle to start dictation. Default: okay computer." />
+                        </Grid>
 
-                                <TextBlock Margin="0,16,0,0" Text="Overlay and target" FontWeight="SemiBold" />
-                                <ComboBox Name="OverlayModeComboBox"
-                                          Margin="0,6,0,0">
-                                    <ComboBoxItem Content="Compact microphone" Tag="Compact" />
-                                    <ComboBoxItem Content="Full transcript panel" Tag="Full" />
-                                </ComboBox>
-                                <CheckBox Name="ReturnToStartTargetCheckBox"
-                                          Margin="0,10,0,0"
-                                          Content="Return final transcript to the starting window" />
+                        <TextBlock Margin="0,22,0,0" Text="Tray icon click behavior" FontWeight="SemiBold" />
+                        <ComboBox Name="TrayBehaviorComboBox"
+                                  Margin="0,6,0,0"
+                                  SelectedIndex="1">
+                            <ComboBoxItem Content="Single click opens Workspace" Tag="Single" />
+                            <ComboBoxItem Content="Double click opens Workspace" Tag="Double" />
+                        </ComboBox>
 
-                                <TextBlock Margin="0,16,0,0" Text="Ollama post-processing" FontWeight="SemiBold" />
-                                <CheckBox Name="EnableOllamaCheckBox"
-                                          Margin="0,6,0,0"
-                                          Content="Enable local Ollama formatting" />
-                                <StackPanel Margin="0,6,0,0" Orientation="Horizontal">
-                                    <TextBlock VerticalAlignment="Center" Text="Endpoint" Width="70" />
-                                    <TextBox Name="OllamaEndpointTextBox" Width="220" VerticalContentAlignment="Center" />
-                                </StackPanel>
-                                <StackPanel Margin="0,6,0,0" Orientation="Horizontal">
-                                    <TextBlock VerticalAlignment="Center" Text="Model" Width="70" />
-                                    <TextBox Name="OllamaModelTextBox" Width="140" VerticalContentAlignment="Center" />
-                                </StackPanel>
-                                <StackPanel Margin="0,6,0,0" Orientation="Horizontal">
-                                    <TextBlock VerticalAlignment="Center" Text="Mode" Width="70" />
-                                    <ComboBox Name="OllamaModeComboBox" Width="220" VerticalContentAlignment="Center">
-                                        <ComboBoxItem Content="Default (Grammar &amp; Spelling)" Tag="Default" />
-                                        <ComboBoxItem Content="Prompt (AI Prompt Engineer)" Tag="Prompt" />
-                                        <ComboBoxItem Content="Bug Report (QA Engineer)" Tag="Bug" />
-                                        <ComboBoxItem Content="Update (Changelog/Status)" Tag="Update" />
-                                        <ComboBoxItem Content="Communication (Email/Message)" Tag="Communication" />
-                                        <ComboBoxItem Content="Blog (Draft/Post)" Tag="Blog" />
-                                        <ComboBoxItem Content="Vibe Coding (Agent Instructions)" Tag="VibeCoding" />
-                                    </ComboBox>
-                                </StackPanel>
-                            </StackPanel>
-                        </Expander>
+                        <TextBlock Margin="0,16,0,0" Text="Start with Windows" FontWeight="SemiBold" />
+                        <ComboBox Name="LaunchAtLoginComboBox"
+                                  Margin="0,6,0,0"
+                                  SelectedIndex="1">
+                            <ComboBoxItem Content="Off" Tag="Disabled" />
+                            <ComboBoxItem Content="Current user" Tag="CurrentUser" />
+                            <ComboBoxItem Content="All users" Tag="AllUsers" />
+                        </ComboBox>
+                        <TextBlock Margin="0,6,0,0"
+                                   Foreground="{StaticResource TextMutedBrush}"
+                                   TextWrapping="Wrap"
+                                   Text="Current user writes shell:startup. All users writes shell:common startup and may ask for administrator approval." />
+
+                        <TextBlock Margin="0,22,0,0" Text="Overlay and target" FontWeight="SemiBold" />
+                        <ComboBox Name="OverlayModeComboBox"
+                                  Margin="0,6,0,0">
+                            <ComboBoxItem Content="Compact microphone" Tag="Compact" />
+                            <ComboBoxItem Content="Full transcript panel" Tag="Full" />
+                        </ComboBox>
+                        <CheckBox Name="ReturnToStartTargetCheckBox"
+                                  Margin="0,10,0,0"
+                                  Content="Return final transcript to the starting window" />
+
+                        <TextBlock Margin="0,22,0,0" Text="Ollama post-processing" FontWeight="SemiBold" />
+                        <CheckBox Name="EnableOllamaCheckBox"
+                                  Margin="0,6,0,0"
+                                  Content="Enable local Ollama formatting" />
+                        <StackPanel Margin="0,6,0,0" Orientation="Horizontal">
+                            <TextBlock VerticalAlignment="Center" Text="Endpoint" Width="70" />
+                            <TextBox Name="OllamaEndpointTextBox" Width="220" VerticalContentAlignment="Center" />
+                        </StackPanel>
+                        <StackPanel Margin="0,6,0,0" Orientation="Horizontal">
+                            <TextBlock VerticalAlignment="Center" Text="Model" Width="70" />
+                            <TextBox Name="OllamaModelTextBox" Width="140" VerticalContentAlignment="Center" />
+                        </StackPanel>
+                        <StackPanel Margin="0,6,0,0" Orientation="Horizontal">
+                            <TextBlock VerticalAlignment="Center" Text="Mode" Width="70" />
+                            <ComboBox Name="OllamaModeComboBox" Width="220" VerticalContentAlignment="Center">
+                                <ComboBoxItem Content="Default (Grammar &amp; Spelling)" Tag="Default" />
+                                <ComboBoxItem Content="Prompt (AI Prompt Engineer)" Tag="Prompt" />
+                                <ComboBoxItem Content="Bug Report (QA Engineer)" Tag="Bug" />
+                                <ComboBoxItem Content="Update (Changelog/Status)" Tag="Update" />
+                                <ComboBoxItem Content="Communication (Email/Message)" Tag="Communication" />
+                                <ComboBoxItem Content="Blog (Draft/Post)" Tag="Blog" />
+                                <ComboBoxItem Content="Vibe Coding (Agent Instructions)" Tag="VibeCoding" />
+                            </ComboBox>
+                        </StackPanel>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
@@ -581,6 +621,7 @@
                             <Button Name="RemoveReplacementRuleButton"
                                     Width="120"
                                     Margin="10,0,0,0"
+                                    Style="{StaticResource DangerButtonStyle}"
                                     Content="Remove selected"
                                     Click="OnRemoveReplacementRuleClick" />
                         </StackPanel>
@@ -754,8 +795,9 @@
 
                     <Button Name="HistoryButton"
                             Width="120"
-                            Content="View history"
-                            Click="OnHistoryClick" />
+                            Content="History"
+                            Click="OnHistoryClick"
+                            ToolTip="Open transcript history" />
 
                     <StackPanel Grid.Column="2" Orientation="Horizontal">
                         <Button Name="BackButton"
@@ -772,6 +814,7 @@
                         <Button Name="SaveButton"
                                 Width="92"
                                 IsDefault="True"
+                                Style="{StaticResource PrimaryButtonStyle}"
                                 Content="Save"
                                 Click="OnSaveClick" />
                     </StackPanel>

@@ -28,14 +28,19 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <TextBlock Margin="16,12,0,12"
-                           FontSize="16"
-                           FontWeight="SemiBold"
-                           VerticalAlignment="Center"
-                           Text="Transcript History" />
+                <StackPanel Margin="16,10,0,10" VerticalAlignment="Center">
+                    <TextBlock FontSize="11"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource TextMutedBrush}"
+                               Text="HISTORY" />
+                    <TextBlock Margin="0,2,0,0"
+                               FontSize="16"
+                               FontWeight="SemiBold"
+                               Text="Transcripts" />
+                </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top" Margin="0,8,8,0">
-                    <Button Width="32" Height="32" Content="—" Background="Transparent" BorderThickness="0" Click="OnMinimizeClick" ToolTip="Minimize" />
-                    <Button Width="32" Height="32" Content="✕" Background="Transparent" BorderThickness="0" Click="OnCloseClick" ToolTip="Close" />
+                    <Button Width="32" Height="32" Content="—" Background="Transparent" BorderThickness="0" Click="OnMinimizeClick" ToolTip="Minimize" AutomationProperties.Name="Minimize" />
+                    <Button Width="32" Height="32" Content="✕" Background="Transparent" BorderThickness="0" Click="OnCloseClick" ToolTip="Close" AutomationProperties.Name="Close" />
                 </StackPanel>
             </Grid>
 
@@ -95,7 +100,9 @@
                         <ComboBox Grid.Column="1"
                                   Margin="8,0,0,0"
                                   ItemsSource="{Binding Filters}"
-                                  SelectedItem="{Binding SelectedFilter, Mode=TwoWay}" />
+                                  DisplayMemberPath="DisplayName"
+                                  SelectedValuePath="Value"
+                                  SelectedValue="{Binding SelectedFilter, Mode=TwoWay}" />
 
                         <TextBlock Grid.Column="3"
                                    VerticalAlignment="Center"
@@ -130,39 +137,53 @@
                     BorderThickness="1"
                     CornerRadius="6"
                     Padding="8">
-                <ListBox ItemsSource="{Binding Entries}"
-                         SelectedItem="{Binding SelectedEntry, Mode=TwoWay}"
-                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                         VirtualizingPanel.IsVirtualizing="True"
-                         VirtualizingPanel.VirtualizationMode="Recycling">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <Border Margin="0,0,0,6"
-                                    Padding="6"
-                                    BorderBrush="{StaticResource BorderSubtleBrush}"
-                                    BorderThickness="1"
-                                    CornerRadius="4">
-                                <StackPanel>
-                                    <TextBlock FontWeight="SemiBold"
-                                               Text="{Binding TimestampUtc, StringFormat={}{0:yyyy-MM-dd HH:mm:ss}}" />
-                                    <TextBlock Margin="0,3,0,0"
-                                               FontSize="12"
-                                               Foreground="{StaticResource TextSecondaryBrush}"
-                                               Text="{Binding DeliveryStatus}" />
-                                    <TextBlock Margin="0,3,0,0"
-                                               FontSize="12"
-                                               Foreground="{StaticResource TextSecondaryBrush}"
-                                               Text="{Binding TargetSummary}" />
-                                    <TextBlock Margin="0,4,0,0"
-                                               FontSize="12"
-                                               TextTrimming="CharacterEllipsis"
-                                               Text="{Binding Transcript}"
-                                               ToolTip="{Binding Transcript}" />
-                                </StackPanel>
-                            </Border>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
+                <Grid>
+                    <ListBox ItemsSource="{Binding Entries}"
+                             SelectedItem="{Binding SelectedEntry, Mode=TwoWay}"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             VirtualizingPanel.IsVirtualizing="True"
+                             VirtualizingPanel.VirtualizationMode="Recycling">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border Margin="0,0,0,6"
+                                        Padding="6"
+                                        BorderBrush="{StaticResource BorderSubtleBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="4">
+                                    <StackPanel>
+                                        <TextBlock FontWeight="SemiBold"
+                                                   Text="{Binding TimestampUtc, StringFormat={}{0:yyyy-MM-dd HH:mm:ss}}" />
+                                        <TextBlock Margin="0,3,0,0"
+                                                   FontSize="12"
+                                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                                   Text="{Binding DeliveryStatusDisplay}" />
+                                        <TextBlock Margin="0,3,0,0"
+                                                   FontSize="12"
+                                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                                   Text="{Binding TargetSummary}" />
+                                        <TextBlock Margin="0,4,0,0"
+                                                   FontSize="12"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   Text="{Binding Transcript}"
+                                                   ToolTip="{Binding Transcript}" />
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <TextBlock Text="{Binding EmptyStateMessage}">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource EmptyStateTextStyle}">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasEntries}" Value="False">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </Grid>
             </Border>
 
             <Border Grid.Column="2"
@@ -185,7 +206,7 @@
                     <StackPanel Grid.Row="1" Margin="0,8,0,10">
                         <TextBlock Text="{Binding SelectedEntry.ThreadId, StringFormat=Thread: {0}}" />
                         <TextBlock Margin="0,2,0,0"
-                                   Text="{Binding SelectedEntry.DeliveryStatus, StringFormat=Delivery: {0}}" />
+                                   Text="{Binding SelectedEntry.DeliveryStatusDisplay, StringFormat=Delivery: {0}}" />
                         <TextBlock Margin="0,2,0,0"
                                    Text="{Binding SelectedEntry.TargetAppDisplayName, StringFormat=Target app: {0}}" />
                         <TextBlock Margin="0,2,0,0"

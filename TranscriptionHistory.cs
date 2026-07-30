@@ -16,6 +16,30 @@ internal enum TranscriptDeliveryStatus
     CommandFailed
 }
 
+internal static class TranscriptDeliveryStatusDisplay
+{
+    public static string ToDisplayName(TranscriptDeliveryStatus status) => status switch
+    {
+        TranscriptDeliveryStatus.Injected => "Typed into app",
+        TranscriptDeliveryStatus.SkippedFocusChanged => "Skipped — focus changed",
+        TranscriptDeliveryStatus.FailedToInject => "Failed to type",
+        TranscriptDeliveryStatus.CommandExecuted => "Command ran",
+        TranscriptDeliveryStatus.CommandFailed => "Command failed",
+        _ => status.ToString()
+    };
+}
+
+internal static class TranscriptHistoryFilterDisplay
+{
+    public static string ToDisplayName(TranscriptHistoryFilter filter) => filter switch
+    {
+        TranscriptHistoryFilter.All => "All",
+        TranscriptHistoryFilter.Injected => "Typed into app",
+        TranscriptHistoryFilter.NotInjected => "Not typed",
+        _ => filter.ToString()
+    };
+}
+
 internal sealed record TranscriptCommittedEvent(
     Guid ThreadId,
     DateTime TimestampUtc,
@@ -50,6 +74,8 @@ internal sealed record TranscriptHistoryEntry(
     public string TargetWindowDisplayName => TranscriptHistoryTargets.GetWindowTitle(this) ?? "Unknown window";
 
     public string TargetSummary => TranscriptHistoryTargets.GetTargetSummary(this);
+
+    public string DeliveryStatusDisplay => TranscriptDeliveryStatusDisplay.ToDisplayName(this.DeliveryStatus);
 }
 
 internal enum TranscriptHistoryFilter
@@ -57,6 +83,11 @@ internal enum TranscriptHistoryFilter
     All,
     Injected,
     NotInjected
+}
+
+internal sealed record TranscriptHistoryFilterOption(TranscriptHistoryFilter Value, string DisplayName)
+{
+    public override string ToString() => this.DisplayName;
 }
 
 internal enum TranscriptHistoryTargetOptionKind
@@ -209,7 +240,12 @@ internal sealed class TranscriptionHistoryViewModel : INotifyPropertyChanged
         this.Entries = new ObservableCollection<TranscriptHistoryEntry>();
         this.TargetAppOptions = new ObservableCollection<TranscriptHistoryTargetOption> { AllAppsOption };
         this.TargetWindowOptions = new ObservableCollection<TranscriptHistoryTargetOption> { AllWindowsOption };
-        this.Filters = Enum.GetValues<TranscriptHistoryFilter>();
+        this.Filters =
+        [
+            new(TranscriptHistoryFilter.All, TranscriptHistoryFilterDisplay.ToDisplayName(TranscriptHistoryFilter.All)),
+            new(TranscriptHistoryFilter.Injected, TranscriptHistoryFilterDisplay.ToDisplayName(TranscriptHistoryFilter.Injected)),
+            new(TranscriptHistoryFilter.NotInjected, TranscriptHistoryFilterDisplay.ToDisplayName(TranscriptHistoryFilter.NotInjected))
+        ];
         this.selectedFilter = TranscriptHistoryFilter.All;
     }
 
@@ -221,7 +257,7 @@ internal sealed class TranscriptionHistoryViewModel : INotifyPropertyChanged
 
     public ObservableCollection<TranscriptHistoryTargetOption> TargetWindowOptions { get; }
 
-    public IReadOnlyList<TranscriptHistoryFilter> Filters { get; }
+    public IReadOnlyList<TranscriptHistoryFilterOption> Filters { get; }
 
     public string SearchText
     {
@@ -312,6 +348,13 @@ internal sealed class TranscriptionHistoryViewModel : INotifyPropertyChanged
 
     public string ResultSummary => $"{this.Entries.Count:N0} of {this.allEntries.Count:N0} entries";
 
+    public bool HasEntries => this.Entries.Count > 0;
+
+    public string EmptyStateMessage =>
+        this.allEntries.Count == 0
+            ? "No transcripts yet. Commit a dictation to see it here."
+            : "No results match these filters.";
+
     public bool HasActiveRetrievalFilters =>
         !string.IsNullOrWhiteSpace(this.searchText) ||
         this.selectedFilter != TranscriptHistoryFilter.All ||
@@ -382,6 +425,8 @@ internal sealed class TranscriptionHistoryViewModel : INotifyPropertyChanged
             ? previousSelection
             : this.Entries.FirstOrDefault();
         this.OnPropertyChanged(nameof(this.ResultSummary));
+        this.OnPropertyChanged(nameof(this.HasEntries));
+        this.OnPropertyChanged(nameof(this.EmptyStateMessage));
     }
 
     private bool MatchesRetrieval(TranscriptHistoryEntry entry) =>
