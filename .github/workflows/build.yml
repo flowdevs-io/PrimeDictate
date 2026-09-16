@@ -259,10 +259,8 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: prime-dictate-windows-${{ steps.version.outputs.package_version }}
-          path: |
-            artifacts/win-x64/publish/**
-            artifacts/win-arm64/publish/**
-            artifacts/installer/*.msi
+          path: artifacts/installer/*.msi
+          retention-days: 7
 
       - name: Prepare GitHub release assets
         if: github.event_name == 'push' && steps.version.outputs.is_semver_tag == 'true' && (github.event_name != 'workflow_dispatch' || !inputs.submit_winget_only)
