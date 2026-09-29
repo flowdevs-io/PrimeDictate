@@ -134,7 +134,9 @@ public sealed class FileTranscriptionRunner(ModelLeaseScheduler scheduler, ITran
                             recognized = await provider.RecognizeWindowAsync(chunk.Samples, request.Options.Language, cancellationToken).ConfigureAwait(false);
                         }
 
-                        foreach (var segment in SegmentMapper.Map(recognized, $"f{index}", chunk.StartSample, chunk.Duration, resultVersion, 1, SegmentState.Final))
+                        var mapped = SegmentMapper.Map(recognized, $"f{index}", chunk.StartSample, chunk.Duration, resultVersion, 1, SegmentState.Final).ToList();
+                        host.EnsureSpeakers(mapped);
+                        foreach (var segment in mapped)
                         {
                             host.Apply(new SegmentFinalized(sessionId, segment));
                         }

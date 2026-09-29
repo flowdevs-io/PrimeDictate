@@ -27,7 +27,7 @@ public sealed partial class MainWindow : Window
     private readonly TranscriptionWorkspaceService workspace;
     private readonly ObservableCollection<SegmentRow> rows = [];
     private readonly Dictionary<string, SegmentRow> rowsById = new(StringComparer.Ordinal);
-    private IReadOnlyList<InstalledWhisperModel> models = [];
+    private IReadOnlyList<SpeechModelChoice> models = [];
     private SessionDocumentHost? host;
     private CancellationTokenSource? jobCancel;
     private LiveTranscriptionSession? live;
@@ -80,7 +80,7 @@ public sealed partial class MainWindow : Window
         try
         {
             await this.workspace.InitializeAsync(CancellationToken.None);
-            this.models = this.workspace.InstalledModels();
+            this.models = this.workspace.AvailableModels();
             this.ModelBox.ItemsSource = this.models.Select(m => m.DisplayName).ToList();
             this.ModelBox.SelectedIndex = this.models.Count > 0 ? 0 : -1;
             await this.ReloadSessionsAsync();
@@ -112,7 +112,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private InstalledWhisperModel? SelectedModel => this.ModelBox.SelectedIndex is >= 0 and var i && i < this.models.Count ? this.models[i] : null;
+    private SpeechModelChoice? SelectedModel => this.ModelBox.SelectedIndex is >= 0 and var i && i < this.models.Count ? this.models[i] : null;
 
     private async Task ReloadSessionsAsync(Guid? select = null)
     {

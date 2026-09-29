@@ -43,6 +43,21 @@ public sealed class SessionDocumentHost
     public void RenameSpeaker(string speakerId, string? name) =>
         this.Update(d => TranscriptDocumentReducer.RenameSpeaker(d, speakerId, name, this.clock()));
 
+    /// <summary>
+    /// Registers any speaker ids used by <paramref name="segments"/> that the document does not know
+    /// yet, named "Speaker 1", "Speaker 2" in order of first appearance. Existing names are kept.
+    /// </summary>
+    public void EnsureSpeakers(IEnumerable<TranscriptSegment> segments)
+    {
+        foreach (var id in segments.SelectMany(s => s.Speakers).Select(a => a.SpeakerId).Distinct())
+        {
+            if (!this.Document.Speakers.Any(s => s.Id == id))
+            {
+                this.Apply(new SpeakerUpdated(this.Document.SessionId, new TranscriptSpeaker(id, $"Speaker {this.Document.Speakers.Count + 1}", null)));
+            }
+        }
+    }
+
     public void SetStatus(TranscriptSessionStatus status) =>
         this.Update(d => d with
         {
