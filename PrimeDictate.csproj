@@ -18,6 +18,8 @@
     <Copyright>Copyright © FlowDevs.io</Copyright>
     <RepositoryType>git</RepositoryType>
     <ApplicationIcon>installer\wix\assets\PrimeDictate.ico</ApplicationIcon>
+    <!-- The app project sits at the repo root; keep other projects' sources out of its globs. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);src\**;tests\**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
@@ -31,6 +33,10 @@
     <PackageReference Include="Whisper.net.Runtime.Cuda.Windows" Version="1.9.0" />
     <PackageReference Include="Whisper.net.Runtime.OpenVino" Version="1.9.0" />
     <PackageReference Include="Whisper.net.Runtime.Vulkan" Version="1.9.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="src\PrimeDictate.Core\PrimeDictate.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup Condition="Exists('$(NuGetPackageRoot)microsoft.ml.onnxruntime.qnn\$(OnnxRuntimeVersion)\runtimes\win-arm64\native')">

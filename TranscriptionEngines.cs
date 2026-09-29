@@ -1,6 +1,8 @@
 using System.IO;
 using System.Runtime.InteropServices;
 using SherpaOnnx;
+using PrimeDictate.Core.Providers;
+using PrimeDictate.Core.Transcripts;
 using Whisper.net.LibraryLoader;
 
 namespace PrimeDictate;
@@ -21,6 +23,27 @@ internal interface ITranscriptionEngine : IAsyncDisposable
         PcmAudioBuffer audio,
         TranscriptionEngineConfiguration configuration,
         CancellationToken cancellationToken);
+}
+
+/// <summary>
+/// Engines that can return timed segments. Dictation keeps using the string path in
+/// <see cref="ITranscriptionEngine"/>; transcription mode uses this one.
+/// </summary>
+internal interface IStructuredTranscriptionEngine : ITranscriptionEngine
+{
+    ValueTask<IReadOnlyList<RecognizedSegment>> TranscribeSegmentsAsync(
+        PcmAudioBuffer audio,
+        TranscriptionEngineConfiguration configuration,
+        CancellationToken cancellationToken);
+}
+
+internal static class StructuredTranscription
+{
+    /// <summary>Wraps text from an engine without timing. No word timings or confidence are invented.</summary>
+    public static IReadOnlyList<RecognizedSegment> FromPlainText(string? text, TimeSpan windowDuration) =>
+        string.IsNullOrWhiteSpace(text)
+            ? []
+            : [new RecognizedSegment(TimeSpan.Zero, windowDuration, text.Trim(), Words: null, Confidence: null, SpeakerLabel: null, TimingProvenance.ApproximateChunk)];
 }
 
 internal sealed class TranscriptionEngineHost : IAsyncDisposable
@@ -74,6 +97,39 @@ internal sealed class TranscriptionEngineHost : IAsyncDisposable
         {
             var engine = await this.EnsureEngineAsync(configurationSnapshot).ConfigureAwait(false);
             return await engine.TranscribeAsync(audio, configurationSnapshot, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            this.engineGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Structured recognition for transcription mode. Engines without native timing return
+    /// one segment spanning the buffer, marked as approximate chunk timing.
+    /// </summary>
+    public async ValueTask<IReadOnlyList<RecognizedSegment>> TranscribeSegmentsAsync(
+        PcmAudioBuffer audio,
+        CancellationToken cancellationToken = default)
+    {
+        if (audio.IsEmpty)
+        {
+            return [];
+        }
+
+        var configurationSnapshot = this.GetConfigurationSnapshot();
+        await this.engineGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            var engine = await this.EnsureEngineAsync(configurationSnapshot).ConfigureAwait(false);
+            if (engine is IStructuredTranscriptionEngine structured)
+            {
+                return await structured.TranscribeSegmentsAsync(audio, configurationSnapshot, cancellationToken).ConfigureAwait(false);
+            }
+
+            var text = await engine.TranscribeAsync(audio, configurationSnapshot, cancellationToken).ConfigureAwait(false);
+            return StructuredTranscription.FromPlainText(text, audio.Duration);
         }
         finally
         {
@@ -421,7 +477,7 @@ internal sealed class ParakeetOnnxTranscriptionEngine : SherpaOnnxTranscriptionE
     }
 }
 
-internal sealed class WhisperNetTranscriptionEngine : ITranscriptionEngine
+internal sealed class WhisperNetTranscriptionEngine : IStructuredTranscriptionEngine
 {
     private readonly SemaphoreSlim syncRoot = new SemaphoreSlim(1, 1);
     private Whisper.net.WhisperFactory? factory;
@@ -439,10 +495,48 @@ internal sealed class WhisperNetTranscriptionEngine : ITranscriptionEngine
         TranscriptionEngineConfiguration configuration,
         CancellationToken cancellationToken)
     {
+        var segments = await this.ProcessSegmentsAsync(audio, configuration, cancellationToken).ConfigureAwait(false);
+        var sb = new System.Text.StringBuilder();
+        foreach (var segment in segments)
+        {
+            if (!string.IsNullOrWhiteSpace(segment.Text))
+            {
+                sb.Append(segment.Text);
+            }
+        }
+
+        return sb.ToString().Trim();
+    }
+
+    public async ValueTask<IReadOnlyList<RecognizedSegment>> TranscribeSegmentsAsync(
+        PcmAudioBuffer audio,
+        TranscriptionEngineConfiguration configuration,
+        CancellationToken cancellationToken)
+    {
+        var segments = await this.ProcessSegmentsAsync(audio, configuration, cancellationToken).ConfigureAwait(false);
+        return segments
+            .Where(segment => !string.IsNullOrWhiteSpace(segment.Text))
+            .Select(segment => new RecognizedSegment(
+                segment.Start,
+                segment.End,
+                segment.Text.Trim(),
+                Words: null,
+                // Whisper.net reports token probabilities, not a calibrated confidence score.
+                Confidence: null,
+                SpeakerLabel: null,
+                TimingProvenance.Model))
+            .ToList();
+    }
+
+    private async ValueTask<List<Whisper.net.SegmentData>> ProcessSegmentsAsync(
+        PcmAudioBuffer audio,
+        TranscriptionEngineConfiguration configuration,
+        CancellationToken cancellationToken)
+    {
         var sampleCount = TranscriptionAudio.GetPcm16MonoSampleCount(audio, this.Name);
         if (sampleCount == 0)
         {
-            return string.Empty;
+            return [];
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -456,15 +550,13 @@ internal sealed class WhisperNetTranscriptionEngine : ITranscriptionEngine
             return await Task.Run(async () =>
             {
                 var processorInstance = this.EnsureProcessor(configuration);
-                var sb = new System.Text.StringBuilder();
+                var segments = new List<Whisper.net.SegmentData>();
                 await foreach (var segment in processorInstance.ProcessAsync(samples, cancellationToken).ConfigureAwait(false))
                 {
-                    if (!string.IsNullOrWhiteSpace(segment.Text))
-                    {
-                        sb.Append(segment.Text);
-                    }
+                    segments.Add(segment);
                 }
-                return sb.ToString().Trim();
+
+                return segments;
             }, cancellationToken).ConfigureAwait(false);
         }
         finally
