@@ -16,6 +16,10 @@ public interface INemotronEndpoint
     HttpClient Client { get; }
 
     bool HasDiarizer { get; }
+
+    Uri BaseAddress { get; }
+
+    string ApiKey { get; }
 }
 
 public sealed class NemotronWorker : IAsyncDisposable, INemotronEndpoint

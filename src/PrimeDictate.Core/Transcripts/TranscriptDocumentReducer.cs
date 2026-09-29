@@ -20,6 +20,7 @@ public static class TranscriptDocumentReducer
             SessionStarted started => StartRun(document, started.Run, now),
             SegmentUpserted upserted => UpsertSegment(document, upserted.Segment, now),
             SegmentFinalized finalized => UpsertSegment(document, finalized.Segment with { State = SegmentState.Final }, now),
+            SegmentRemoved removed => RemoveProvisional(document, removed, now),
             SpeakerUpdated speaker => UpsertSpeaker(document, speaker.Speaker, now),
             SessionCompleted completed => document with
             {
@@ -102,6 +103,19 @@ public static class TranscriptDocumentReducer
         }
 
         segments[index] = incoming with { EditedText = existing.EditedText };
+        return document with { Segments = segments, UpdatedAt = now };
+    }
+
+    private static TranscriptDocument RemoveProvisional(TranscriptDocument document, SegmentRemoved removed, DateTimeOffset now)
+    {
+        var index = FindSegment(document, removed.SegmentId, removed.ResultVersion);
+        if (index < 0 || document.Segments[index].State == SegmentState.Final)
+        {
+            return document;
+        }
+
+        var segments = document.Segments.ToList();
+        segments.RemoveAt(index);
         return document with { Segments = segments, UpdatedAt = now };
     }
 

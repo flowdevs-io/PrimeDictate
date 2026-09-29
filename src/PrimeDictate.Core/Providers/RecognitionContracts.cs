@@ -47,13 +47,22 @@ public sealed record RecognizedSegment(
     string? SpeakerLabel,
     TimingProvenance Provenance);
 
-/// <summary>Update from a streaming recognizer. <paramref name="UtteranceId"/> is stable across partials.</summary>
+/// <summary>
+/// Update from a streaming recognizer. <paramref name="UtteranceId"/> names the segment and is stable across
+/// partials and its final ("3.0", "3.1" for the second speaker turn of utterance 3). Times are on the session timeline.
+/// </summary>
 public sealed record StreamingUpdate(string UtteranceId, RecognizedSegment Segment, bool IsFinal);
 
 public interface IStreamingRecognitionSession : IAsyncDisposable
 {
     /// <summary>Feeds audio on the session timeline. Frames must be in the provider's required format.</summary>
     ValueTask WriteAsync(AudioFrame frame, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Finalizes what has been sent so far as one utterance. Audio written afterwards starts a new one.
+    /// Speaker identity across utterances depends on the provider.
+    /// </summary>
+    ValueTask CommitAsync(CancellationToken cancellationToken);
 
     /// <summary>Signals end of input; the update stream completes after the last final result.</summary>
     ValueTask CompleteAsync(CancellationToken cancellationToken);

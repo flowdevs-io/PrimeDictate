@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using PrimeDictate.Core.Audio;
 using PrimeDictate.Core.Pipeline;
 using PrimeDictate.Core.Providers;
 using PrimeDictate.Core.Transcripts;
@@ -109,6 +110,10 @@ public sealed class NemotronTests : IDisposable
         public HttpClient Client { get; } = client;
 
         public bool HasDiarizer { get; } = hasDiarizer;
+
+        public Uri BaseAddress { get; } = client.BaseAddress ?? new Uri("http://127.0.0.1:1/");
+
+        public string ApiKey => "test-key";
     }
 
     private static async Task<(string Body, string Response)> ServeOnceAsync(HttpListener listener, string responseJson, int status = 200)
@@ -220,5 +225,169 @@ public sealed class NemotronTests : IDisposable
         public ValueTask<PrimeDictate.Core.Sessions.SessionDeletionResult> DeleteAsync(Guid id, CancellationToken c) => ValueTask.FromResult(new PrimeDictate.Core.Sessions.SessionDeletionResult(false, [], []));
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed record FakeRealtime(HttpListener Listener, Uri Base, Task Server, List<string> Received);
+
+    /// <summary>A stand-in for the worker's realtime socket using the message shapes captured from the real one.</summary>
+    private static FakeRealtime StartRealtime(bool requireDiarizerSetting)
+    {
+        var port = new Random().Next(20000, 60000);
+        var listener = new HttpListener();
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        listener.Start();
+        var received = new List<string>();
+        var server = Task.Run(async () =>
+        {
+            var context = await listener.GetContextAsync();
+            var ws = (await context.AcceptWebSocketAsync(null)).WebSocket;
+            lock (received)
+            {
+                received.Add("auth=" + context.Request.Headers["Authorization"]);
+            }
+
+            async Task Send(string json) => await ws.SendAsync(Encoding.UTF8.GetBytes(json), System.Net.WebSockets.WebSocketMessageType.Text, true, default);
+            await Send("""{"event_id":"e1","type":"session.created","session":{"sample_rate":16000}}""");
+            var buffer = new byte[64 * 1024];
+            var commits = 0;
+            long audioBytes = 0;
+            while (ws.State == System.Net.WebSockets.WebSocketState.Open)
+            {
+                var result = await ws.ReceiveAsync(buffer, default);
+                if (result.MessageType == System.Net.WebSockets.WebSocketMessageType.Close)
+                {
+                    break;
+                }
+
+                if (result.MessageType == System.Net.WebSockets.WebSocketMessageType.Binary)
+                {
+                    // Like the real worker, partial text streams out while audio is still arriving.
+                    if (audioBytes == 0)
+                    {
+                        await Send("""{"event_id":"e3","type":"conversation.item.input_audio_transcription.delta","delta":"hello","audio_processed":1}""");
+                    }
+
+                    audioBytes += result.Count;
+                    continue;
+                }
+
+                var text = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                lock (received)
+                {
+                    received.Add(text);
+                }
+
+                if (text.Contains("session.update"))
+                {
+                    await Send("""{"event_id":"e2","type":"session.updated","session":{"speaker_diarization":true,"word_timestamps":true}}""");
+                }
+                else if (text.Contains("input_audio_buffer.commit"))
+                {
+                    commits++;
+                    if (commits == 1)
+                    {
+                        await Send("""
+                            {"event_id":"e4","type":"conversation.item.input_audio_transcription.completed","audio_processed":4,"transcript":"hello there general kenobi",
+                             "words":[{"word":"hello","start":0.5,"end":0.8,"speaker":1,"confidence":1},{"word":"there","start":0.9,"end":1.2,"speaker":1,"confidence":1},
+                                      {"word":"general","start":1.5,"end":1.9,"speaker":2,"confidence":1},{"word":"kenobi","start":1.9,"end":2.4,"speaker":2,"confidence":1}]}
+                            """);
+                    }
+                    else
+                    {
+                        await Send("""{"event_id":"e5","type":"conversation.item.input_audio_transcription.completed","audio_processed":1,"transcript":"","words":[]}""");
+                    }
+
+                    await Send("""{"event_id":"e6","type":"input_audio_buffer.committed"}""");
+                }
+            }
+        });
+        return new FakeRealtime(listener, new Uri($"http://127.0.0.1:{port}/"), server, received);
+    }
+
+    [Fact]
+    public async Task Realtime_session_offsets_word_times_and_reports_speakers_only_on_final_text()
+    {
+        var fake = StartRealtime(true);
+        using var _ = fake.Listener;
+        await using var session = await NemotronRealtimeSession.ConnectAsync(fake.Base, "test-key", diarize: true, default);
+
+        // 3 s of audio starting at session sample 48000 (3 s into the recording).
+        for (var i = 0; i < 30; i++)
+        {
+            await session.WriteAsync(AudioFrame.CopyFrom(new float[1600], AudioFormat.SpeechTimeline, i, 48_000 + (i * 1600L)), default);
+        }
+
+        await session.CommitAsync(default);
+        await session.CompleteAsync(default);
+        var updates = new List<StreamingUpdate>();
+        await foreach (var u in session.ReadUpdatesAsync(default))
+        {
+            updates.Add(u);
+        }
+
+        var finals = updates.Where(u => u.IsFinal && u.Segment.Text.Length > 0).ToList();
+        Assert.Equal(2, finals.Count);
+        Assert.Equal("0.0", finals[0].UtteranceId);
+        Assert.Equal("0.1", finals[1].UtteranceId);
+        Assert.Equal("speaker-1", finals[0].Segment.SpeakerLabel);
+        Assert.Equal("speaker-2", finals[1].Segment.SpeakerLabel);
+        // Word time 0.5 s after the commit start (3 s) is 3.5 s on the session timeline.
+        Assert.Equal(3.5, finals[0].Segment.Start.TotalSeconds, 2);
+        Assert.Equal(4.5, finals[1].Segment.Start.TotalSeconds, 2);
+        Assert.Equal(3.5, finals[0].Segment.Words![0].Start.TotalSeconds, 2);
+
+        lock (fake.Received)
+        {
+            Assert.Contains("auth=Bearer test-key", fake.Received);
+            Assert.Contains(fake.Received, m => m.Contains("speaker_diarization"));
+        }
+    }
+
+    [Fact]
+    public async Task Realtime_session_does_not_request_speakers_when_diarize_is_off()
+    {
+        var fake = StartRealtime(false);
+        using var _ = fake.Listener;
+        await using var session = await NemotronRealtimeSession.ConnectAsync(fake.Base, "k", diarize: false, default);
+        await session.CompleteAsync(default);
+        lock (fake.Received)
+        {
+            Assert.DoesNotContain(fake.Received, m => m.Contains("speaker_diarization"));
+        }
+    }
+
+    [Fact]
+    public async Task Live_session_streams_to_the_worker_and_fills_speaker_lanes_from_final_text()
+    {
+        var fake = StartRealtime(true);
+        using var _ = fake.Listener;
+        await using var store = PrimeDictate.Core.Storage.SqliteTranscriptionSessionStore.Create(new PrimeDictate.Core.Storage.AppDataPaths(this.root));
+        await store.InitializeAsync(default);
+        var endpoint = new FakeEndpoint(new HttpClient { BaseAddress = fake.Base }, hasDiarizer: true);
+        var provider = new NemotronProvider(endpoint, "nemotron:test", identifySpeakers: true);
+        // 2 s of tone then 2.5 s of silence: the pause ends the utterance and triggers a commit.
+        var audio = Enumerable.Range(0, 32_000).Select(i => 0.3f * MathF.Sin(i * 0.05f)).Concat(new float[40_000]).ToArray();
+        var options = new LiveSessionOptions(
+            new PrimeDictate.Core.Sessions.TranscriptionSessionOptions("nemotron:test", null, "cpu", null, null, PrimeDictate.Core.Sessions.AudioRetention.KeepAudio, PrimeDictate.Core.Sessions.DownmixMode.Average, null, null, null),
+            "t", store.GetSessionMediaDirectory, TimeSpan.FromSeconds(60));
+        await using var session = new LiveTranscriptionSession(new LiveSourceTests.FakeSource(1, audio), provider, new PrimeDictate.Core.Coordination.MicrophoneCoordinator(), new PrimeDictate.Core.Coordination.ModelLeaseScheduler(), store, options);
+        await session.StartAsync(default);
+
+        var seen = new List<string>();
+        session.Host!.Changed += d => seen.AddRange(d.ActiveSegments.Select(s => $"{s.State}:{s.DisplayText}"));
+        await Task.Delay(1500);
+        await session.StopAsync(default);
+
+        var doc = session.Host.Document;
+        Assert.Equal(TranscriptSessionStatus.Completed, doc.Status);
+        Assert.Equal(2, doc.Speakers.Count);
+        var finals = doc.ActiveSegments.ToList();
+        Assert.Equal(2, finals.Count);
+        Assert.All(finals, s => Assert.Equal(SegmentState.Final, s.State));
+        Assert.Equal(["hello there", "general kenobi"], finals.Select(s => s.RawText));
+        Assert.Equal(["speaker-1", "speaker-2"], finals.Select(s => s.Speakers[0].SpeakerId));
+        // The provisional "hello" preview was replaced in place by the first final segment.
+        Assert.Contains(seen, x => x == "Provisional:hello");
+        Assert.DoesNotContain(doc.Segments, s => s.State != SegmentState.Final);
     }
 }

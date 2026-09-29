@@ -24,7 +24,7 @@ public sealed class LiveSourceTests : IDisposable
         }
     }
 
-    private sealed class FakeSource(int channels, float[] interleaved) : IAudioSource
+    internal sealed class FakeSource(int channels, float[] interleaved) : IAudioSource
     {
         public ValueTask<IReadOnlyList<AudioInputDevice>> ListDevicesAsync(CancellationToken cancellationToken) =>
             ValueTask.FromResult<IReadOnlyList<AudioInputDevice>>([]);
