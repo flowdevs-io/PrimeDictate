@@ -52,7 +52,9 @@ public sealed record WordTiming(
     TimeSpan Start,
     TimeSpan End,
     double? Confidence,
-    TimingProvenance Provenance);
+    TimingProvenance Provenance,
+    /// <summary>Speaker the recognizer gave this word, when it tags words. Sessions saved before this field have none.</summary>
+    string? SpeakerId = null);
 
 /// <summary>A speaker's share of a segment; several entries represent overlap or uncertainty.</summary>
 public sealed record SpeakerAttribution(string SpeakerId, TimeSpan Start, TimeSpan End, double? Confidence);

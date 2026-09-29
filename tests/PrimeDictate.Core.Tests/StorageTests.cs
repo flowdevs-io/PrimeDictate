@@ -40,7 +40,7 @@ public sealed class StorageTests : IDisposable
         var final = Segment("s1", "Größe — 日本語 \"quoted\"\nline", 0, 2.5) with
         {
             Confidence = 0.8,
-            Words = [new WordTiming("Größe", TimeSpan.Zero, TimeSpan.FromSeconds(0.4), 0.9, TimingProvenance.Model)],
+            Words = [new WordTiming("Größe", TimeSpan.Zero, TimeSpan.FromSeconds(0.4), 0.9, TimingProvenance.Model, "spk0")],
             Speakers = [new SpeakerAttribution("spk0", TimeSpan.Zero, TimeSpan.FromSeconds(2.5), null)],
             TimingProvenance = TimingProvenance.Model
         };
@@ -59,7 +59,9 @@ public sealed class StorageTests : IDisposable
         Assert.Equal(final.End, segment.End);
         Assert.Equal(0.8, segment.Confidence);
         Assert.Equal(TimingProvenance.Model, segment.TimingProvenance);
-        Assert.Equal("Größe", Assert.Single(segment.Words!).Text);
+        var storedWord = Assert.Single(segment.Words!);
+        Assert.Equal("Größe", storedWord.Text);
+        Assert.Equal("spk0", storedWord.SpeakerId);
         Assert.Equal("spk0", Assert.Single(segment.Speakers).SpeakerId);
         Assert.Equal("Justin", Assert.Single(loaded.Speakers).Name);
         Assert.Equal("whisper-onnx/base.en", Assert.Single(loaded.Runs).AsrModelId);

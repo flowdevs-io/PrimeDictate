@@ -45,6 +45,7 @@ public sealed class NemotronTests : IDisposable
         Assert.Contains(segments, s => s.SpeakerLabel == "speaker-2");
         Assert.All(segments, s => Assert.Equal(TimingProvenance.Model, s.Provenance));
         Assert.All(segments, s => Assert.True(s.Words!.Count > 0 && s.Start <= s.End));
+        Assert.All(segments, s => Assert.All(s.Words!, w => Assert.Equal(s.SpeakerLabel, w.SpeakerId)));
         // No word is lost or reordered by grouping.
         var joined = string.Join(' ', segments.Select(s => s.Text));
         Assert.StartsWith("From a plain text file", joined);
@@ -335,6 +336,9 @@ public sealed class NemotronTests : IDisposable
         Assert.Equal(3.5, finals[0].Segment.Start.TotalSeconds, 2);
         Assert.Equal(4.5, finals[1].Segment.Start.TotalSeconds, 2);
         Assert.Equal(3.5, finals[0].Segment.Words![0].Start.TotalSeconds, 2);
+        // Each word keeps the speaker the worker gave it, so splits can be checked after the fact.
+        Assert.All(finals[0].Segment.Words!, w => Assert.Equal("speaker-1", w.SpeakerId));
+        Assert.All(finals[1].Segment.Words!, w => Assert.Equal("speaker-2", w.SpeakerId));
 
         lock (fake.Received)
         {

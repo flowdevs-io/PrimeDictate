@@ -629,7 +629,13 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
                 {
                     var shifted = n + this.speakerBase;
                     this.maxSpeaker = Math.Max(this.maxSpeaker, shifted);
-                    result.Add(this.speakerBase == 0 ? seg : seg with { SpeakerLabel = $"speaker-{shifted}" });
+                    result.Add(this.speakerBase == 0
+                        ? seg
+                        : seg with
+                        {
+                            SpeakerLabel = $"speaker-{shifted}",
+                            Words = seg.Words?.Select(w => w.SpeakerId is { } wid && wid.StartsWith("speaker-", StringComparison.Ordinal) && int.TryParse(wid.AsSpan(8), out var wn) ? w with { SpeakerId = $"speaker-{wn + this.speakerBase}" } : w).ToList()
+                        });
                 }
                 else
                 {
