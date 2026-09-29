@@ -130,7 +130,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     private Task RunAsync(SessionDocumentHost host, FileJobRequest request, InstalledWhisperModel model, IProgress<ProgressChanged>? progress, CancellationToken cancellationToken) =>
         Task.Run(() => this.runner.RunAsync(host, request, this.decoder, this.Provider(model), progress, cancellationToken), CancellationToken.None);
 
-    public async Task<LiveTranscriptionSession> StartLiveAsync(InstalledWhisperModel model, string? deviceId, AudioRetention retention, string title, CancellationToken cancellationToken)
+    public async Task<LiveTranscriptionSession> StartLiveAsync(InstalledWhisperModel model, string? deviceId, AudioRetention retention, string title, CancellationToken cancellationToken, TranscriptSourceType source = TranscriptSourceType.Microphone)
     {
         if (this.audioSource is null)
         {
@@ -148,7 +148,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
             this.microphone,
             this.scheduler,
             this.store,
-            new LiveSessionOptions(Options(model, deviceId, retention), title, this.store.GetSessionMediaDirectory, LiveSessionOptions.DefaultPreviewInterval));
+            new LiveSessionOptions(Options(model, deviceId, retention), title, this.store.GetSessionMediaDirectory, LiveSessionOptions.DefaultPreviewInterval, null, source));
         await session.StartAsync(cancellationToken).ConfigureAwait(false);
         this.live = session;
         return session;

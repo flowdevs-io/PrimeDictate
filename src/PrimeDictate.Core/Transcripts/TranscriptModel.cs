@@ -25,7 +25,13 @@ public enum SegmentState
 public enum TranscriptSourceType
 {
     ImportedFile = 0,
-    Microphone = 1
+    Microphone = 1,
+
+    /// <summary>Audio the computer is playing (loopback), for example the remote side of a call.</summary>
+    SystemAudio = 2,
+
+    /// <summary>Microphone and system audio together. Stereo working audio: left is local, right is remote.</summary>
+    Meeting = 3
 }
 
 public enum TranscriptSessionStatus

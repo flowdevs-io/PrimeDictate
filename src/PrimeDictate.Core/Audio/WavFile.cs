@@ -13,12 +13,15 @@ public sealed class WavFileWriter : IDisposable
     private const int HeaderSize = 44;
     private readonly FileStream stream;
     private readonly int sampleRate;
+    private readonly int channels;
     private long dataBytes;
     private bool disposed;
 
-    public WavFileWriter(string path, int sampleRate = 16_000)
+    public WavFileWriter(string path, int sampleRate = 16_000, int channels = 1)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(channels, 1);
         this.sampleRate = sampleRate;
+        this.channels = channels;
         this.Path = path;
         var directory = System.IO.Path.GetDirectoryName(path);
         if (!string.IsNullOrEmpty(directory))
@@ -33,8 +36,10 @@ public sealed class WavFileWriter : IDisposable
 
     public string Path { get; }
 
-    public long SamplesWritten => this.dataBytes / 2;
+    /// <summary>Samples per channel written so far.</summary>
+    public long SamplesWritten => this.dataBytes / 2 / this.channels;
 
+    /// <summary>Writes interleaved samples (a whole number of frames for multi-channel files).</summary>
     public void Write(ReadOnlySpan<float> samples)
     {
         var bytes = new byte[samples.Length * 2];
@@ -70,10 +75,10 @@ public sealed class WavFileWriter : IDisposable
         "WAVEfmt "u8.CopyTo(h[8..]);
         BinaryPrimitives.WriteUInt32LittleEndian(h[16..], 16);
         BinaryPrimitives.WriteUInt16LittleEndian(h[20..], 1);
-        BinaryPrimitives.WriteUInt16LittleEndian(h[22..], 1);
+        BinaryPrimitives.WriteUInt16LittleEndian(h[22..], (ushort)this.channels);
         BinaryPrimitives.WriteUInt32LittleEndian(h[24..], (uint)this.sampleRate);
-        BinaryPrimitives.WriteUInt32LittleEndian(h[28..], (uint)(this.sampleRate * 2));
-        BinaryPrimitives.WriteUInt16LittleEndian(h[32..], 2);
+        BinaryPrimitives.WriteUInt32LittleEndian(h[28..], (uint)(this.sampleRate * 2 * this.channels));
+        BinaryPrimitives.WriteUInt16LittleEndian(h[32..], (ushort)(2 * this.channels));
         BinaryPrimitives.WriteUInt16LittleEndian(h[34..], 16);
         "data"u8.CopyTo(h[36..]);
         BinaryPrimitives.WriteUInt32LittleEndian(h[40..], (uint)Math.Min(uint.MaxValue, this.dataBytes));
