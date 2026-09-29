@@ -27,6 +27,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     private readonly Dictionary<string, SherpaWhisperProvider> providers = new(StringComparer.Ordinal);
     private readonly FileTranscriptionRunner runner;
     private readonly IAudioSource? audioSource;
+    private readonly ISystemAudioSource? systemAudioSource;
     private LiveTranscriptionSession? live;
 
     public TranscriptionWorkspaceService(AppDataPaths? paths = null, IAudioSource? audioSource = null, bool probeMicrophone = true)
@@ -39,6 +40,12 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         this.decoder = new CompositeAudioDecoder(new WavAudioDecoder(), ffmpeg);
         this.runner = new FileTranscriptionRunner(this.scheduler, this.store);
         this.audioSource = audioSource;
+        if (probeMicrophone)
+        {
+            this.systemAudioSource = SystemAudioSources.TryCreate(out var reason);
+            this.SystemAudioUnavailableReason = reason;
+        }
+
         if (this.audioSource is null && probeMicrophone)
         {
             try
@@ -56,7 +63,13 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
 
     public string? MicrophoneUnavailableReason { get; private set; }
 
-    public bool CanRecord => this.audioSource is not null;
+    public bool CanRecord => this.audioSource is not null || this.systemAudioSource is not null;
+
+    public bool CanRecordMicrophone => this.audioSource is not null;
+
+    public bool CanRecordSystemAudio => this.systemAudioSource is not null;
+
+    public string? SystemAudioUnavailableReason { get; private set; }
 
     public LiveTranscriptionSession? ActiveLiveSession => this.live;
 
@@ -130,12 +143,11 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     private Task RunAsync(SessionDocumentHost host, FileJobRequest request, InstalledWhisperModel model, IProgress<ProgressChanged>? progress, CancellationToken cancellationToken) =>
         Task.Run(() => this.runner.RunAsync(host, request, this.decoder, this.Provider(model), progress, cancellationToken), CancellationToken.None);
 
-    public async Task<LiveTranscriptionSession> StartLiveAsync(InstalledWhisperModel model, string? deviceId, AudioRetention retention, string title, CancellationToken cancellationToken)
+    /// <param name="deviceId">Microphone device; for <see cref="AudioCaptureMode.SystemAudio"/> it is the output device (null is the default output).</param>
+    /// <param name="systemDeviceId">Output device for <see cref="AudioCaptureMode.MicrophoneAndSystemAudio"/>; null is the default output.</param>
+    public async Task<LiveTranscriptionSession> StartLiveAsync(InstalledWhisperModel model, string? deviceId, AudioRetention retention, string title, CancellationToken cancellationToken, AudioCaptureMode mode = AudioCaptureMode.Microphone, string? systemDeviceId = null)
     {
-        if (this.audioSource is null)
-        {
-            throw new AudioSourceException(AudioSourceErrorKind.Unknown, this.MicrophoneUnavailableReason ?? "No microphone is available.");
-        }
+        var source = this.SourceFor(mode, systemDeviceId);
 
         if (this.live is not null)
         {
@@ -143,7 +155,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         }
 
         var session = new LiveTranscriptionSession(
-            this.audioSource,
+            source,
             this.Provider(model),
             this.microphone,
             this.scheduler,
@@ -153,6 +165,25 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         this.live = session;
         return session;
     }
+
+    private IAudioSource SourceFor(AudioCaptureMode mode, string? systemDeviceId)
+    {
+        var microphone = mode != AudioCaptureMode.SystemAudio
+            ? this.audioSource ?? throw new AudioSourceException(AudioSourceErrorKind.Unknown, this.MicrophoneUnavailableReason ?? "No microphone is available.")
+            : null;
+        var system = mode != AudioCaptureMode.Microphone
+            ? this.systemAudioSource ?? throw new AudioSourceException(AudioSourceErrorKind.NotSupported, this.SystemAudioUnavailableReason ?? "System audio capture is not available.")
+            : null;
+        return mode switch
+        {
+            AudioCaptureMode.Microphone => microphone!,
+            AudioCaptureMode.SystemAudio => system!,
+            _ => new CombinedAudioSource(microphone!, system!) { SystemDeviceId = systemDeviceId }
+        };
+    }
+
+    public ValueTask<IReadOnlyList<AudioInputDevice>> ListSystemAudioDevicesAsync(CancellationToken cancellationToken) =>
+        this.systemAudioSource is null ? ValueTask.FromResult<IReadOnlyList<AudioInputDevice>>([]) : this.systemAudioSource.ListDevicesAsync(cancellationToken);
 
     public async Task StopLiveAsync(CancellationToken cancellationToken)
     {
