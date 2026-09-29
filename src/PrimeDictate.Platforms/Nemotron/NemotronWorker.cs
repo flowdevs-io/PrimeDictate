@@ -39,6 +39,10 @@ public sealed class NemotronWorker : IAsyncDisposable, INemotronEndpoint
     private static readonly System.Text.RegularExpressions.Regex BackendLine = new(@"backend=([A-Za-z]+\d*)", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     private volatile string? reportedBackend;
+    private volatile bool diarizerReportedOn;
+
+    /// <summary>True when the worker's startup line said <c>diarization=on</c>, confirming the diarizer loaded.</summary>
+    public bool DiarizerConfirmed => this.diarizerReportedOn;
 
     private NemotronWorker(Process process, int port, string apiKey, bool hasDiarizer, string requestedDevice)
     {
@@ -152,9 +156,17 @@ public sealed class NemotronWorker : IAsyncDisposable, INemotronEndpoint
         // is dropped because it may echo audio metadata.
         void Inspect(string? line)
         {
-            if (line is not null && worker.reportedBackend is null && BackendLine.Match(line) is { Success: true } m)
+            if (line is null)
+            {
+                return;
+            }
+
+            // Real line (stderr): "[asr] model=.x.gguf head=rnnt backend=CUDA0 diarization=on". It appears at model
+            // load, before /ready, so it says what was chosen; /ready says it works.
+            if (worker.reportedBackend is null && BackendLine.Match(line) is { Success: true } m)
             {
                 worker.reportedBackend = m.Groups[1].Value;
+                worker.diarizerReportedOn = line.Contains("diarization=on", StringComparison.Ordinal);
             }
         }
 
@@ -210,7 +222,7 @@ public sealed class NemotronWorker : IAsyncDisposable, INemotronEndpoint
             try
             {
                 var gpu = await StartAsync(cudaWorkerPath, files, gpuDevice, timeout, cancellationToken, runtimeDirectories(cudaWorkerPath)).ConfigureAwait(false);
-                notice($"Nemotron is running on {gpu.EffectiveBackend}.");
+                notice($"Nemotron is running on {gpu.EffectiveBackend}." + DiarizerWarning(gpu));
                 return gpu;
             }
             catch (Exception ex) when (ex is NemotronException or System.ComponentModel.Win32Exception)
@@ -232,11 +244,14 @@ public sealed class NemotronWorker : IAsyncDisposable, INemotronEndpoint
         }
         else
         {
-            notice($"Nemotron is running on {cpu.EffectiveBackend}.");
+            notice($"Nemotron is running on {cpu.EffectiveBackend}." + DiarizerWarning(cpu));
         }
 
         return cpu;
     }
+
+    private static string DiarizerWarning(NemotronWorker worker) =>
+        worker.HasDiarizer && !worker.DiarizerConfirmed ? " The speaker model was supplied but the worker did not confirm it loaded." : string.Empty;
 
     private async Task WaitUntilReadyAsync(TimeSpan timeout, CancellationToken cancellationToken)
     {

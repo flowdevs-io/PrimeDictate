@@ -614,8 +614,8 @@ public sealed class NemotronTests : IDisposable
             dev=cpu; port=0
             while [ $# -gt 0 ]; do case "$1" in --device) dev="$2";; --port) port="$2";; esac; shift; done
             case "$dev" in
-              cuda*) {{(cudaFails ? "echo 'CUDA error' >&2; exit 5" : "echo '[asr] loaded backend=CUDA0'")}};;
-              *) echo '[asr] loaded backend=CPU';;
+              cuda*) {{(cudaFails ? "exit 5" : "printf '[nemo-speech] serve session started\r\n[asr] model=.nemotron-3.5-asr-streaming-0.6b.q8_0.gguf head=rnnt backend=CUDA0 diarization=on\r\n[asr] mode=offline head=rnnt\r\n' >&2")}};;
+              *) printf '[nemo-speech] serve session started\r\n[asr] model=.nemotron-3.5-asr-streaming-0.6b.q8_0.gguf head=rnnt backend=CPU\r\n' >&2;;
             esac
             exec /usr/bin/python3 -c "
             import http.server
@@ -663,6 +663,7 @@ public sealed class NemotronTests : IDisposable
             {
                 Assert.Equal("cuda:0", gpu.EffectiveBackend);
                 Assert.Null(gpu.FallbackReason);
+                Assert.True(gpu.DiarizerConfirmed); // "diarization=on" on the real startup line, parsed despite CRLF
             }
 
             await using (var fell = await NemotronWorker.StartPreferredAsync(cpu, badCuda, files, "cuda:0", _ => [], notices.Add, default, TimeSpan.FromSeconds(20)))
@@ -676,6 +677,7 @@ public sealed class NemotronTests : IDisposable
             {
                 Assert.Equal("cpu", forced.EffectiveBackend);
                 Assert.Null(forced.FallbackReason);
+                Assert.False(forced.DiarizerConfirmed); // the CPU line without a diarizer has no diarization= field
             }
 
             Assert.Contains(notices, n => n.Contains("running on cuda:0"));
