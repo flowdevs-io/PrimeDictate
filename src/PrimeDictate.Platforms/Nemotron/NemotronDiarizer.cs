@@ -8,13 +8,14 @@ namespace PrimeDictate.Platforms.Nemotron;
 /// <summary>
 /// Runs <c>nemo-speech diarize</c> over the system-audio channel of a finished meeting. The live socket only reports
 /// one speaker per word; this whole-file pass keeps the diarizer's per-speaker segments, which may overlap.
-/// The command line follows the upstream CLI at the pinned commit (<c>diarize FILE --format rttm</c>) and has not been
-/// run against a real worker yet; any failure returns null and the timeline keeps the live view.
+/// The command line was checked against the real CUDA worker at the pinned commit
+/// (<c>diarize INPUT --model GGUF --device cuda:0 --format json</c>, 16 kHz mono WAV in). Any failure returns null and
+/// the timeline keeps the live view.
 /// </summary>
 public static class NemotronDiarizer
 {
-    public static IReadOnlyList<string> BuildArguments(string wavPath, string diarizerModelPath) =>
-        ["diarize", wavPath, "--format", "rttm", "--device", "cpu", "--diar-model", diarizerModelPath];
+    public static IReadOnlyList<string> BuildArguments(string wavPath, string diarizerModelPath, string device) =>
+        ["diarize", wavPath, "--model", diarizerModelPath, "--device", device, "--format", "json"];
 
     /// <summary>Copies one channel of a multi-channel WAV to a mono 16 kHz WAV.</summary>
     public static async Task ExtractChannelAsync(string stereoPath, int channel, string monoPath, CancellationToken cancellationToken)
@@ -39,6 +40,7 @@ public static class NemotronDiarizer
     public static async Task<(DiarizationOverlay? Overlay, string? Error)> RunAsync(
         string executablePath,
         string diarizerModelPath,
+        string device,
         string stereoWavPath,
         string workDirectory,
         TimeSpan timeout,
@@ -56,7 +58,7 @@ public static class NemotronDiarizer
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
-            foreach (var arg in BuildArguments(monoPath, diarizerModelPath))
+            foreach (var arg in BuildArguments(monoPath, diarizerModelPath, device))
             {
                 info.ArgumentList.Add(arg);
             }
@@ -84,7 +86,7 @@ public static class NemotronDiarizer
             }
 
             var text = await output.ConfigureAwait(false);
-            var segments = DiarizationOverlay.ParseRttm(text);
+            var segments = DiarizationOverlay.ParseJson(text);
             if (process.ExitCode != 0 || segments.Count == 0)
             {
                 var reason = (await errors.ConfigureAwait(false)).Trim();

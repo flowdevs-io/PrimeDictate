@@ -61,6 +61,36 @@ public sealed record DiarizationOverlay(IReadOnlyList<DiarizationSegment> Segmen
     public void Save(string mediaDirectory) =>
         File.WriteAllText(Path.Combine(mediaDirectory, FileName), JsonSerializer.Serialize(this, JsonOptions));
 
+    /// <summary>Parses the worker's <c>--format json</c>: <c>{"segments":[{"start":0.0,"end":2.0,"speaker":1}]}</c>. Bad input gives no segments.</summary>
+    public static IReadOnlyList<DiarizationSegment> ParseJson(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("segments", out var list) || list.ValueKind != JsonValueKind.Array)
+            {
+                return [];
+            }
+
+            var result = new List<DiarizationSegment>();
+            foreach (var item in list.EnumerateArray())
+            {
+                if (item.TryGetProperty("start", out var start) && start.TryGetDouble(out var s)
+                    && item.TryGetProperty("end", out var end) && end.TryGetDouble(out var e)
+                    && item.TryGetProperty("speaker", out var speaker) && e > s)
+                {
+                    result.Add(new DiarizationSegment($"speaker_{speaker.ToString()}", s, e));
+                }
+            }
+
+            return result.OrderBy(x => x.Start).ToList();
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
     /// <summary>Parses RTTM: <c>SPEAKER file 1 start duration &lt;NA&gt; &lt;NA&gt; speaker &lt;NA&gt; &lt;NA&gt;</c>. Other lines are ignored.</summary>
     public static IReadOnlyList<DiarizationSegment> ParseRttm(string text)
     {

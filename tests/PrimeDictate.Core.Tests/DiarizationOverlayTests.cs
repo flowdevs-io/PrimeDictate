@@ -24,6 +24,16 @@ public sealed class DiarizationOverlayTests
         Assert.Equal(2, overlay.OverlapSeconds, 3); // 3 s to 5 s
     }
 
+    [Fact]
+    public void Worker_json_becomes_segments_and_bad_json_becomes_none()
+    {
+        var segments = DiarizationOverlay.ParseJson("""{"file":"x","segments":[{"start":2.0,"end":3.0,"speaker":2},{"start":0.0,"end":2.039,"speaker":1},{"start":5,"end":4,"speaker":1}]}""");
+
+        Assert.Equal([new DiarizationSegment("speaker_1", 0, 2.039), new DiarizationSegment("speaker_2", 2, 3)], segments);
+        Assert.Empty(DiarizationOverlay.ParseJson("not json"));
+        Assert.Empty(DiarizationOverlay.ParseJson("{}"));
+    }
+
     private static TranscriptSegment Line(string id, string speaker, double start, double end) =>
         TestData.Segment(id, "words", start, end) with { Speakers = [new SpeakerAttribution(speaker, TimeSpan.FromSeconds(start), TimeSpan.FromSeconds(end), null)] };
 
@@ -90,18 +100,19 @@ public sealed class DiarizationOverlayTests
                 #!/bin/sh
                 echo "$@" > {{seen}}
                 cp "$2" {{dir}}/received.wav
-                echo "SPEAKER f 1 0.000 0.500 <NA> <NA> speaker_0 <NA> <NA>"
+                echo '{"segments":[{"start":0.000,"end":0.500,"speaker":1}]}'
                 """);
             File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
-            var (overlay, error) = await NemotronDiarizer.RunAsync(script, "/m/diar.gguf", stereo, dir, TimeSpan.FromSeconds(30), null, default);
+            var (overlay, error) = await NemotronDiarizer.RunAsync(script, "/m/diar.gguf", "cuda:0", stereo, dir, TimeSpan.FromSeconds(30), null, default);
 
             Assert.Null(error);
             Assert.Single(overlay!.Segments);
             var args = File.ReadAllText(seen);
             Assert.Contains("diarize", args);
-            Assert.Contains("--format rttm", args);
-            Assert.Contains("--diar-model /m/diar.gguf", args);
+            Assert.Contains("--format json", args);
+            Assert.Contains("--model /m/diar.gguf", args);
+            Assert.Contains("--device cuda:0", args);
             var received = new List<float>();
             await foreach (var frame in new WavAudioDecoder().DecodeAsync(Path.Combine(dir, "received.wav"), 0, default))
             {
@@ -140,7 +151,7 @@ public sealed class DiarizationOverlayTests
             File.WriteAllText(script, "#!/bin/sh\necho 'unknown option' >&2\nexit 2\n");
             File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
-            var (overlay, error) = await NemotronDiarizer.RunAsync(script, "/m/d.gguf", stereo, dir, TimeSpan.FromSeconds(30), null, default);
+            var (overlay, error) = await NemotronDiarizer.RunAsync(script, "/m/d.gguf", "cpu", stereo, dir, TimeSpan.FromSeconds(30), null, default);
 
             Assert.Null(overlay);
             Assert.Contains("code 2", error);
