@@ -52,7 +52,8 @@ public sealed class DictationHost : IAsyncDisposable
             this.guard,
             injector ?? new SharpHookTextInjector(),
             microphone,
-            voiceCommands ?? new VoiceCommandProcessor(() => this.Settings.ToVoiceCommandOptions()));
+            voiceCommands ?? new VoiceCommandProcessor(() => this.Settings.ToVoiceCommandOptions()),
+            rewriter: new OllamaRewriter(() => this.Settings.ToOllamaOptions(), report: message => this.Notice?.Invoke(message)));
         this.Controller.Notice += message => this.Notice?.Invoke(message);
         this.Controller.HistoryRequested += () => this.HistoryRequested?.Invoke();
         this.Controller.Options = this.Settings.ToOptions();

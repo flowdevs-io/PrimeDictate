@@ -21,7 +21,9 @@ public sealed record DictationCommit(
     string? TargetWindowTitle,
     string? Error,
     TimeSpan AudioDuration,
-    bool EnterSent);
+    bool EnterSent,
+    string? OriginalTranscript = null,
+    string? RewriteSystemPrompt = null);
 
 /// <summary>
 /// The dictation loop: hotkey toggles capture, a live preview goes to the overlay only, silence or a second
@@ -51,6 +53,7 @@ public sealed class DictationController : IAsyncDisposable
     private readonly MicrophoneCoordinator? microphone;
     private readonly IVoiceCommandProcessor voiceCommands;
     private readonly TimeProvider time;
+    private readonly ITranscriptRewriter? rewriter;
     private readonly SemaphoreSlim gate = new(1, 1);
     private volatile DictationOptions options = new DictationOptions().Normalized();
     private Session? session;
@@ -62,7 +65,8 @@ public sealed class DictationController : IAsyncDisposable
         ITextInjector injector,
         MicrophoneCoordinator? microphone = null,
         IVoiceCommandProcessor? voiceCommands = null,
-        TimeProvider? time = null)
+        TimeProvider? time = null,
+        ITranscriptRewriter? rewriter = null)
     {
         this.audioSource = audioSource;
         this.providerSource = providerSource;
@@ -71,6 +75,7 @@ public sealed class DictationController : IAsyncDisposable
         this.microphone = microphone;
         this.voiceCommands = voiceCommands ?? NoVoiceCommands.Instance;
         this.time = time ?? TimeProvider.System;
+        this.rewriter = rewriter;
     }
 
     public event Action<DictationState>? StateChanged;
@@ -446,6 +451,32 @@ public sealed class DictationController : IAsyncDisposable
         }
 
         this.PartialTranscript?.Invoke(s.Id, transcript);
+        string? original = null;
+        string? rewritePrompt = null;
+        if (this.rewriter is not null)
+        {
+            try
+            {
+                var rewrite = await this.rewriter.RewriteAsync(transcript, s.Target, CancellationToken.None).ConfigureAwait(false);
+                rewritePrompt = rewrite.SystemPrompt;
+                if (rewrite.Rewritten)
+                {
+                    original = transcript;
+                    transcript = rewrite.Text;
+                    this.PartialTranscript?.Invoke(s.Id, transcript);
+                }
+            }
+            catch (Exception ex)
+            {
+                this.Notice?.Invoke($"Rewrite failed; typed as spoken: {ex.Message}");
+            }
+
+            if (s.DiscardRequested)
+            {
+                return;
+            }
+        }
+
         var result = TranscriptDelivery.Deliver(transcript, s.Target, this.guard, this.injector, this.options);
         this.Committed?.Invoke(new DictationCommit(
             s.Id,
@@ -457,7 +488,9 @@ public sealed class DictationController : IAsyncDisposable
             s.Target?.WindowTitle,
             result.Error,
             duration,
-            result.EnterSent));
+            result.EnterSent,
+            original,
+            rewritePrompt));
     }
 
     private static async Task<string> RecognizeAsync(ITranscriptionProvider provider, ReadOnlyMemory<float> samples, string? language, CancellationToken ct)

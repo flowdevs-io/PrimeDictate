@@ -67,6 +67,20 @@ public sealed class DictationSettings
         this.VoiceHistoryPhrase?.Trim() ?? string.Empty,
         []);
 
+    public bool EnableOllamaPostProcessing { get; set; }
+
+    public string OllamaEndpoint { get; set; } = "http://localhost:11434";
+
+    public string OllamaModel { get; set; } = "gemma:2b";
+
+    public OllamaMode OllamaMode { get; set; } = OllamaMode.Default;
+
+    /// <summary>New: allow a non-loopback Ollama endpoint. Off by default so speech stays on this computer.</summary>
+    public bool OllamaAllowRemoteEndpoint { get; set; }
+
+    public OllamaOptions ToOllamaOptions() => new(
+        this.EnableOllamaPostProcessing, this.OllamaEndpoint, this.OllamaModel, this.OllamaMode, this.OllamaAllowRemoteEndpoint);
+
     /// <summary>New: type even where the platform cannot check which window is in front. Off by default.</summary>
     public bool TypeWithoutFocusGuard { get; set; }
 
