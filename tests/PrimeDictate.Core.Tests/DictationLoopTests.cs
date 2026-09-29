@@ -257,6 +257,22 @@ public sealed class DictationLoopTests
         Assert.Null(coordinator.CurrentOwner);
     }
 
+    [Fact]
+    public void Audio_cues_are_valid_wav_files_of_the_expected_length()
+    {
+        foreach (var cue in new[] { DictationAudioCue.Start, DictationAudioCue.Stop })
+        {
+            var wav = AudioCues.Wave(cue);
+            Assert.Equal("RIFF", System.Text.Encoding.ASCII.GetString(wav, 0, 4));
+            Assert.Equal("WAVE", System.Text.Encoding.ASCII.GetString(wav, 8, 4));
+            Assert.Equal(wav.Length - 8, BitConverter.ToInt32(wav, 4));
+            Assert.Equal(24_000, BitConverter.ToInt32(wav, 24));
+            var seconds = (wav.Length - 44) / 2 / 24_000.0;
+            Assert.InRange(seconds, 0.2, 0.3);
+            Assert.Contains(wav.Skip(44), b => b != 0);
+        }
+    }
+
     private static float[] Tone(double seconds)
     {
         var s = new float[(int)(16_000 * seconds)];

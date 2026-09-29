@@ -25,6 +25,8 @@ public sealed class DictationShell : IAsyncDisposable
     private readonly DictationOverlayWindow overlay = new();
     private readonly TrayIcon tray = new();
     private readonly NativeMenuItem toggleItem = new("Start dictation");
+    private readonly IAudioCuePlayer cues = new ProcessAudioCuePlayer();
+    private DictationState lastState = DictationState.Idle;
     private DictationSettingsWindow? settingsWindow;
     private DictationHistoryWindow? historyWindow;
 
@@ -100,6 +102,19 @@ public sealed class DictationShell : IAsyncDisposable
 
     private void OnState(DictationState state)
     {
+        if (this.host.Settings.PlayAudioCues)
+        {
+            if (state == DictationState.Listening)
+            {
+                this.cues.Play(DictationAudioCue.Start);
+            }
+            else if (this.lastState == DictationState.Listening)
+            {
+                this.cues.Play(DictationAudioCue.Stop);
+            }
+        }
+
+        this.lastState = state;
         this.overlay.SetState(state);
         this.tray.Icon = MakeIcon(state);
         this.tray.ToolTipText = state switch

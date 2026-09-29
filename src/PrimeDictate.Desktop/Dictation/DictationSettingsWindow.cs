@@ -17,6 +17,7 @@ public sealed class DictationSettingsWindow : Window
     private readonly ComboBox micBox = new() { MinWidth = 260 };
     private readonly Slider gain = new() { Minimum = 0.5, Maximum = 4, Width = 200 };
     private readonly NumericUpDown silence = new() { Minimum = 0, Maximum = 30, Increment = 1, FormatString = "0", Width = 120 };
+    private readonly CheckBox audioCues = new() { Content = "Play start and stop sounds" };
     private readonly CheckBox sendEnter = new() { Content = "Coding mode: press Enter after typing" };
     private readonly CheckBox returnToStart = new() { Content = "If focus moved, return to the window I started in" };
     private readonly CheckBox typeWithoutGuard = new() { Content = "Type even when the app cannot check which window is in front" };
@@ -54,6 +55,7 @@ public sealed class DictationSettingsWindow : Window
             panel.Children.Add(this.HotkeyRow(action, name));
         }
 
+        panel.Children.Add(this.audioCues);
         panel.Children.Add(this.sendEnter);
         if (OperatingSystem.IsWindows())
         {
@@ -144,6 +146,7 @@ public sealed class DictationSettingsWindow : Window
 
         this.gain.Value = this.working.InputGainMultiplier;
         this.silence.Value = this.working.AutoCommitSilenceSeconds;
+        this.audioCues.IsChecked = this.working.PlayAudioCues;
         this.sendEnter.IsChecked = this.working.SendEnterAfterCommit;
         this.returnToStart.IsChecked = this.working.ReturnToStartTargetOnCommit;
         this.typeWithoutGuard.IsChecked = this.working.TypeWithoutFocusGuard;
@@ -186,6 +189,7 @@ public sealed class DictationSettingsWindow : Window
         s.SelectedInputDeviceId = this.micBox.SelectedIndex is > 0 and var di && di - 1 < this.devices.Count ? this.devices[di - 1].Id : null;
         s.InputGainMultiplier = this.gain.Value;
         s.AutoCommitSilenceSeconds = (int)(this.silence.Value ?? 3);
+        s.PlayAudioCues = this.audioCues.IsChecked == true;
         s.SendEnterAfterCommit = this.sendEnter.IsChecked == true;
         s.ReturnToStartTargetOnCommit = this.returnToStart.IsChecked == true;
         s.TypeWithoutFocusGuard = this.typeWithoutGuard.IsChecked == true;
