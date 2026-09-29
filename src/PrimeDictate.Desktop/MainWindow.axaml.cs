@@ -43,16 +43,16 @@ public sealed partial class MainWindow : Window
         this.workspace = new TranscriptionWorkspaceService(string.IsNullOrWhiteSpace(dataDir) ? null : new AppDataPaths(dataDir));
         this.TranscriptList.ItemsSource = this.rows;
 
-        this.ImportButton.Click += async (_, _) => await this.PickFileAsync();
-        this.RecordButton.Click += async (_, _) => await this.StartRecordingAsync();
-        this.PauseButton.Click += async (_, _) => await this.TogglePauseAsync();
-        this.StopButton.Click += async (_, _) => await this.StopRecordingAsync();
-        this.DiscardButton.Click += async (_, _) => await this.DiscardRecordingAsync();
-        this.RerunButton.Click += async (_, _) => await this.RerunAsync();
-        this.CopyButton.Click += async (_, _) => await this.CopyAsync();
-        this.ExportButton.Click += async (_, _) => await this.ExportAsync();
-        this.DeleteButton.Click += async (_, _) => await this.DeleteAsync();
-        this.SessionList.SelectionChanged += async (_, _) => await this.OpenSelectedAsync();
+        this.ImportButton.Click += async (_, _) => await this.RunSafelyAsync(() => this.PickFileAsync());
+        this.RecordButton.Click += async (_, _) => await this.RunSafelyAsync(() => this.StartRecordingAsync());
+        this.PauseButton.Click += async (_, _) => await this.RunSafelyAsync(() => this.TogglePauseAsync());
+        this.StopButton.Click += async (_, _) => await this.RunSafelyAsync(() => this.StopRecordingAsync());
+        this.DiscardButton.Click += async (_, _) => await this.RunSafelyAsync(() => this.DiscardRecordingAsync());
+        this.RerunButton.Click += async (_, _) => await this.RunSafelyAsync(() => this.RerunAsync());
+        this.CopyButton.Click += async (_, _) => await this.RunSafelyAsync(() => this.CopyAsync());
+        this.ExportButton.Click += async (_, _) => await this.RunSafelyAsync(() => this.ExportAsync());
+        this.DeleteButton.Click += async (_, _) => await this.RunSafelyAsync(() => this.DeleteAsync());
+        this.SessionList.SelectionChanged += async (_, _) => await this.RunSafelyAsync(() => this.OpenSelectedAsync());
         this.Timeline.SegmentClicked += this.OnTimelineSegmentClicked;
         this.Timeline.FollowChanged += this.UpdateJumpButton;
         this.JumpToLiveButton.Click += (_, _) =>
@@ -97,6 +97,19 @@ public sealed partial class MainWindow : Window
         bitmap.Render(this);
         bitmap.Save(path, PngBitmapEncoderOptions.Default);
         await Task.CompletedTask;
+    }
+
+    /// <summary>One failed action reports itself in the status line instead of taking the whole app down.</summary>
+    private async Task RunSafelyAsync(Func<Task> action)
+    {
+        try
+        {
+            await action();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            this.Say("That did not work: " + ex.Message);
+        }
     }
 
     private void Say(string message) => Dispatcher.UIThread.Post(() => this.StatusText.Text = message);
@@ -668,10 +681,19 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        var wasRecording = this.workspace.IsRecording(this.host.Document.SessionId);
         var result = await this.workspace.DeleteSessionAsync(this.host.Document.SessionId, CancellationToken.None);
+        if (wasRecording)
+        {
+            this.live = null;
+            this.EndJob();
+        }
+
         this.Attach(null);
         await this.ReloadSessionsAsync();
-        this.Say(result.KeptExternalFiles.Count > 0
+        this.Say(result.FailedFiles.Count > 0
+            ? $"Session deleted, but a file is still in use and was left behind: {result.FailedFiles[0]}"
+            : result.KeptExternalFiles.Count > 0
             ? $"Session deleted. Your original file was not touched: {result.KeptExternalFiles[0]}"
             : "Session deleted.");
     }

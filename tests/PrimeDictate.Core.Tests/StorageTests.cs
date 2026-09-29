@@ -137,6 +137,29 @@ public sealed class StorageTests : IDisposable
     }
 
     [Fact]
+    public async Task Delete_reports_a_locked_file_instead_of_throwing()
+    {
+        await using var store = await this.OpenStoreAsync();
+        var doc = NewDocument();
+        var mediaDir = store.GetSessionMediaDirectory(doc.SessionId);
+        Directory.CreateDirectory(mediaDir);
+        var owned = Path.Combine(mediaDir, "recording-16k-stereo.wav");
+        doc = doc with { Audio = [new AudioReference(AudioReferenceKind.Owned, owned, null)] };
+        await store.SaveCheckpointAsync(doc, CancellationToken.None);
+
+        // Same situation as a live recording's writer: the file is open with no sharing.
+        await using var held = new FileStream(owned, FileMode.Create, FileAccess.ReadWrite, FileShare.None);
+        var result = await store.DeleteAsync(doc.SessionId, CancellationToken.None);
+
+        Assert.True(result.Existed);
+        Assert.Null(await store.LoadAsync(doc.SessionId, CancellationToken.None));
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Contains(owned, result.FailedFiles);
+        }
+    }
+
+    [Fact]
     public async Task Transcript_only_retention_deletes_audio_and_keeps_text()
     {
         await using var store = await this.OpenStoreAsync();

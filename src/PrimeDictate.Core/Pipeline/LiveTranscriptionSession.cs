@@ -560,7 +560,7 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
     {
         var host = this.Host!;
         var sessionId = host.Document.SessionId;
-        var detector = new UtteranceDetector(this.options.Detector);
+        var detector = new UtteranceDetector(this.options.Detector ?? new UtteranceDetectorOptions { MaxUtterance = TimeSpan.FromSeconds(15) });
         var previewRevision = new Dictionary<int, long>();
         var ct = this.stopSignal.Token;
 

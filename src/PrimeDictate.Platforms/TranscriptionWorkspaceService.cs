@@ -269,8 +269,19 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     public ValueTask<IReadOnlyList<AudioInputDevice>> ListMicrophonesAsync(CancellationToken cancellationToken) =>
         this.audioSource is null ? ValueTask.FromResult<IReadOnlyList<AudioInputDevice>>([]) : this.audioSource.ListDevicesAsync(cancellationToken);
 
-    public ValueTask<SessionDeletionResult> DeleteSessionAsync(Guid id, CancellationToken cancellationToken) =>
-        this.store.DeleteAsync(id, cancellationToken);
+    /// <summary>True while a live recording owns this session's files.</summary>
+    public bool IsRecording(Guid id) => this.live?.Host?.Document.SessionId == id;
+
+    public async ValueTask<SessionDeletionResult> DeleteSessionAsync(Guid id, CancellationToken cancellationToken)
+    {
+        // Deleting a session that is still recording stops it first so the audio writer releases its file.
+        if (this.IsRecording(id))
+        {
+            await this.DiscardLiveAsync().ConfigureAwait(false);
+        }
+
+        return await this.store.DeleteAsync(id, cancellationToken).ConfigureAwait(false);
+    }
 
     public static async Task ExportAsync(TranscriptDocument document, string path, ExportOptions options, CancellationToken cancellationToken)
     {
