@@ -45,6 +45,7 @@ public sealed class DictationOnboardingWindow : Window
                 this.checks,
                 new TextBlock { Text = "Speech model" },
                 this.modelBox,
+                new ModelDownloadPanel(host, this.Populate),
                 new TextBlock { Text = $"Press {hotkey} in any app to start dictating, and again to type what you said.", TextWrapping = TextWrapping.Wrap, Opacity = 0.8 },
                 new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Children = { more, done } }
             }
@@ -59,7 +60,7 @@ public sealed class DictationOnboardingWindow : Window
         var models = this.host.InstalledModels();
         this.Add(models.Count > 0, "Speech model", models.Count > 0
             ? $"{models.Count} installed."
-            : $"None found. Copy a Whisper ONNX model folder into {this.host.ModelsFolder} (the PrimeDictate for Windows installer and its Settings download one there).");
+            : $"None installed yet. Download one below (Tiny English is the fastest to start with), or copy a Whisper ONNX model folder into {this.host.ModelsFolder}.");
         this.Add(this.host.HotkeyUnavailableReason is null, "Global hotkey", this.host.HotkeyUnavailableReason ?? "Available.");
         this.Add(this.host.FocusGuardAvailable, "Typing into the right window", this.host.FocusGuardAvailable
             ? "PrimeDictate checks that the window you started in is still in front before typing."

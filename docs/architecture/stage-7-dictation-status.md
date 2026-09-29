@@ -27,7 +27,8 @@ Branch `claude/dictation-parity-4k0tl9`, following `stage-7-parity-plan.md`. "Ra
 | Audio cues (synthesized WAV; Windows `PlaySound`, macOS `afplay`, Linux `paplay`/`aplay`) | `AudioCues.cs`, `ProcessAudioCuePlayer.cs` | WAV generation ran; playback not heard on any OS |
 | Tray icon: the WPF "voice wire" icon redrawn in Avalonia, five states | `TrayIconRenderer.cs` | Rendered under Xvfb and viewed (`--render-tray-icons <dir>`); not seen in a real tray |
 | `--show` / `--workspace` (accepted; the window is the default start) and new `--background` (tray only, Windows and macOS) | `App.axaml.cs` | Not run on Windows |
-| First-run check (mic, model, hotkey, typing guard, model choice) | `DictationOnboardingWindow.cs` | Starts under Xvfb without errors; not looked at |
+| Whisper model download (same 7 models, GitHub release URLs and install folders as WPF, so installs are shared; staged unpack, validated before it is moved into place; progress and cancel in Settings and first run) | `Platforms/Speech/WhisperModelDownloader.cs`, `ModelDownloadPanel.cs` | Ran: unit tests with a fake HTTP server and real `tar` (good archive, incomplete archive, HTTP error, broken archive, already installed). Confirmed from this container that the real tiny.en archive is reachable, 118,071,777 bytes as in the catalog, and holds both full and int8 files (the locator prefers int8). Not run: a full real download through the app, the progress UI, `tar` on Windows |
+| First-run check (mic, model, hotkey, typing guard, model choice, model download) | `DictationOnboardingWindow.cs` | Starts under Xvfb without errors; not looked at |
 
 ## Rules kept from AGENTS.md
 
@@ -42,7 +43,7 @@ Final-only typing, no clipboard, no live retyping into the target, Enter only af
 ## Not done yet
 
 - Voice shell commands: matching is ported, running is not. Off until an explicit opt-in with a visible warning exists. Never in transcription mode.
-- Stats and achievements, launch at login, updater, model download (the new app reads the same models folder but cannot fetch models yet), installers.
+- Stats and achievements, launch at login, updater, installers.
 - Wake word uses a Tiny/Base Whisper model when installed, else the dictation model (as WPF does). Moonshine/Whisper.net wake models are not ported.
 - The WPF app's focused-edit-control insertion (`WindowsFocusedTextControl`) and direct injection into the original target.
 - Compact-mode ripple animation and the copy/pin buttons of the WPF overlay, macOS `NSPanel`, Linux X11 hints, saved overlay position.

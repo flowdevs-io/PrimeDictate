@@ -106,6 +106,10 @@ public sealed class DictationHost : IAsyncDisposable
 
     public IReadOnlyList<InstalledWhisperModel> InstalledModels() => WhisperOnnxModelLocator.Discover(this.paths.ModelsDirectory);
 
+    /// <summary>Downloads a catalog model into the shared managed folder (the same one the WPF app uses).</summary>
+    public Task<InstalledWhisperModel> DownloadModelAsync(WhisperModelOption option, IProgress<ModelDownloadProgress>? progress, CancellationToken cancellationToken) =>
+        new WhisperModelDownloader().DownloadAsync(option, this.paths.ModelsDirectory, progress, cancellationToken);
+
     /// <summary>Starts the global hotkey hook in the background. Failure (missing permission, Wayland) is reported, not thrown.</summary>
     public void StartHotkeys()
     {

@@ -13,6 +13,7 @@ public sealed class DictationSettingsWindow : Window
 {
     private readonly DictationHost host;
     private readonly IAudioSource? audio;
+    private List<string> shownModels = [];
     private readonly ComboBox modelBox = new() { MinWidth = 260 };
     private readonly ComboBox micBox = new() { MinWidth = 260 };
     private readonly Slider gain = new() { Minimum = 0.5, Maximum = 4, Width = 200 };
@@ -47,6 +48,8 @@ public sealed class DictationSettingsWindow : Window
 
         var panel = new StackPanel { Margin = new Thickness(20), Spacing = 10 };
         panel.Children.Add(Row("Model", this.modelBox));
+        panel.Children.Add(new TextBlock { Text = "Download another model", FontWeight = Avalonia.Media.FontWeight.SemiBold });
+        panel.Children.Add(new ModelDownloadPanel(host, this.RefreshModels));
         panel.Children.Add(Row("Microphone", this.micBox));
         panel.Children.Add(Row("Input gain", this.gain));
         panel.Children.Add(Row("Auto-commit after silence (seconds, 0 = hotkey only)", this.silence));
@@ -123,17 +126,19 @@ public sealed class DictationSettingsWindow : Window
         };
     }
 
-    private async Task LoadAsync()
+    private void RefreshModels()
     {
         var models = this.host.InstalledModels();
+        var current = this.modelBox.SelectedIndex is >= 0 and var ci && ci < this.shownModels.Count ? this.shownModels[ci] : this.working.ResolveModelId();
+        this.shownModels = models.Select(m => m.ModelId).ToList();
         this.modelBox.ItemsSource = models.Select(m => m.DisplayName).ToList();
-        var wanted = this.working.ResolveModelId();
-        this.modelBox.SelectedIndex = Math.Max(0, models.ToList().FindIndex(m => m.ModelId == wanted));
-        if (models.Count == 0)
-        {
-            this.status.Text = "No Whisper model is installed. Put one in the models folder or download it from the WPF app; it is shared.";
-        }
+        this.modelBox.SelectedIndex = Math.Max(0, this.shownModels.IndexOf(current));
+        this.status.Text = models.Count == 0 ? "No Whisper model is installed. Download one below." : string.Empty;
+    }
 
+    private async Task LoadAsync()
+    {
+        this.RefreshModels();
         if (this.audio is not null)
         {
             this.devices = await this.audio.ListDevicesAsync(CancellationToken.None);
