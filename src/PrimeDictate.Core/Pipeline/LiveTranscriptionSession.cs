@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Threading.Channels;
 using PrimeDictate.Core.Audio;
 using PrimeDictate.Core.Coordination;
@@ -46,7 +47,10 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
     private readonly ITranscriptionSessionStore store;
     private readonly LiveSessionOptions options;
     private readonly Func<DateTimeOffset> clock;
-    private readonly Channel<Item> queue = Channel.CreateBounded<Item>(new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.Wait, SingleReader = true, SingleWriter = true });
+    // Unbounded on purpose: capture and the recording file must never wait for recognition. If the model is
+    // slower than real time the audio queues here (about 64 KB per second) and Backlog reports it; nothing is
+    // dropped and capture is never blocked. Recognition catches up when speech pauses or after Stop.
+    private readonly Channel<Item> queue = Channel.CreateUnbounded<Item>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
     private readonly CancellationTokenSource stopSignal = new();
     private IAsyncDisposable? micLease;
     private IAudioCaptureLease? capture;
@@ -434,9 +438,6 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         this.Level = peak;
         this.LevelChanged?.Invoke(peak);
         Interlocked.Add(ref this.backlogSamples, samples.Length);
-        // A full queue makes capture wait here, and the capture lease's own queue absorbs the wait.
-        // If that fills too, the lease skips sequence numbers and the loop above marks a gap. Nothing is
-        // dropped silently.
         await this.queue.Writer.WriteAsync(new Samples(samples)).ConfigureAwait(false);
     }
 
@@ -560,7 +561,6 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         var host = this.Host!;
         var sessionId = host.Document.SessionId;
         var detector = new UtteranceDetector(this.options.Detector);
-        var lastPreview = DateTimeOffset.MinValue;
         var previewRevision = new Dictionary<int, long>();
         var ct = this.stopSignal.Token;
 
@@ -601,6 +601,23 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
             }
         }
 
+        // Previews are best effort and must never delay finals. They run only when the queue is nearly drained,
+        // and the gap between them grows with what the last one cost, so a slow model cannot fall further
+        // behind because of its own previews.
+        var lastPreviewEnd = long.MinValue;
+        var lastPreviewCost = TimeSpan.Zero;
+
+        bool PreviewAllowed()
+        {
+            if (Interlocked.Read(ref this.backlogSamples) > 16_000 * 0.6)
+            {
+                return false;
+            }
+
+            var gap = TimeSpan.FromTicks(Math.Max(this.options.PreviewInterval.Ticks, lastPreviewCost.Ticks * 2));
+            return lastPreviewEnd == long.MinValue || Stopwatch.GetElapsedTime(lastPreviewEnd) >= gap;
+        }
+
         async Task HandleAsync(IReadOnlyList<UtteranceEvent> events)
         {
             foreach (var e in events)
@@ -609,10 +626,12 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
                 {
                     await RecognizeAsync(e, final: true).ConfigureAwait(false);
                 }
-                else if (this.clock() - lastPreview >= this.options.PreviewInterval && e.Samples.Length >= 16_000 * 0.8)
+                else if (PreviewAllowed() && e.Samples.Length >= 16_000 * 0.8)
                 {
-                    lastPreview = this.clock();
+                    var started = Stopwatch.GetTimestamp();
                     await RecognizeAsync(e, final: false).ConfigureAwait(false);
+                    lastPreviewEnd = Stopwatch.GetTimestamp();
+                    lastPreviewCost = Stopwatch.GetElapsedTime(started, lastPreviewEnd);
                 }
             }
         }
@@ -624,7 +643,7 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
                 switch (item)
                 {
                     case Samples s:
-                        await HandleAsync(detector.Add(s.Data)).ConfigureAwait(false);
+                        await HandleAsync(detector.Add(s.Data, PreviewAllowed())).ConfigureAwait(false);
                         Interlocked.Add(ref this.backlogSamples, -s.Data.Length);
                         break;
                     case Flush:

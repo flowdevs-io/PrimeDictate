@@ -69,7 +69,12 @@ public sealed class UtteranceDetector
 
     public bool InUtterance => this.inUtterance;
 
-    public IReadOnlyList<UtteranceEvent> Add(ReadOnlySpan<float> samples)
+    /// <param name="samples">New audio.</param>
+    /// <param name="emitGrowing">
+    /// False skips the <see cref="UtteranceEventKind.Growing"/> snapshot, which copies the whole utterance so far;
+    /// callers that are not going to preview should not pay for it.
+    /// </param>
+    public IReadOnlyList<UtteranceEvent> Add(ReadOnlySpan<float> samples, bool emitGrowing = true)
     {
         this.pending.AddRange(samples.ToArray());
         var events = new List<UtteranceEvent>();
@@ -108,7 +113,7 @@ public sealed class UtteranceDetector
             this.consumed += this.frameSamples;
         }
 
-        if (grew && this.inUtterance)
+        if (emitGrowing && grew && this.inUtterance)
         {
             events.Add(new UtteranceEvent(UtteranceEventKind.Growing, this.index, this.utteranceStart, this.utterance.ToArray()));
         }
