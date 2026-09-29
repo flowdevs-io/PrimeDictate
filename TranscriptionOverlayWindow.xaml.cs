@@ -123,16 +123,29 @@ internal partial class TranscriptionOverlayWindow : Window
             this.RightWaveform.Children.Add(rightBar);
         }
 
-        var particleBrush = new SolidColorBrush(MediaColor.FromRgb(100, 200, 255));
-        particleBrush.Freeze();
+        var chromaColors = new[]
+        {
+            MediaColor.FromRgb(0, 210, 255),   // Cosmic Cyan
+            MediaColor.FromRgb(157, 0, 255),   // Neon Violet
+            MediaColor.FromRgb(255, 0, 119),   // Electric Magenta
+            MediaColor.FromRgb(255, 183, 0),   // Solar Gold
+            MediaColor.FromRgb(0, 255, 160)    // Quantum Emerald
+        };
+
         for (int i = 0; i < ParticleCount; i++)
         {
             this.ResetParticle(i);
-             
+
+            var particleColor = chromaColors[i % chromaColors.Length];
+            var particleBrush = new SolidColorBrush(particleColor);
+            particleBrush.Freeze();
+
+            double pSize = 1.8 + (this.random.NextDouble() * 2.4);
+
             this.pShapes[i] = new System.Windows.Shapes.Ellipse
             {
-                Width = 2 + (this.random.NextDouble() * 2),
-                Height = 2 + (this.random.NextDouble() * 2),
+                Width = pSize,
+                Height = pSize,
                 Fill = particleBrush,
                 Opacity = 0,
                 IsHitTestVisible = false
@@ -437,13 +450,20 @@ internal partial class TranscriptionOverlayWindow : Window
         }
 
         double particleIntensityBoost = dbIntensity * 0.05;
+        double timeSec = (DateTime.UtcNow - this.startTime).TotalSeconds;
         for (int i = 0; i < ParticleCount; i++)
         {
-            // Pure vertical drift
-            this.pY[i] += this.pVY[i] + (this.pVY[i] * particleIntensityBoost);
+            // Mathematical vector field smoke physics: vx = sin(y*k + t), vy = -cos(x*k + t)
+            double kFactor = 0.035;
+            double vx = Math.Sin((this.pY[i] * kFactor) + (timeSec * 2.2) + (i * 0.15)) * (0.85 + particleIntensityBoost);
+            double vy = -0.4 - Math.Abs(Math.Cos((this.pX[i] * kFactor) + (timeSec * 1.6))) * (0.65 + particleIntensityBoost);
+
+            this.pX[i] += vx;
+            this.pY[i] += vy;
             
-            this.pLife[i] -= 0.01 + (particleIntensityBoost * 0.005);
-            if (this.pLife[i] <= 0 || this.pY[i] < -20 || this.pY[i] > this.ParticleCanvas.ActualHeight + 20)
+            this.pLife[i] -= 0.008 + (particleIntensityBoost * 0.004);
+            if (this.pLife[i] <= 0 || this.pY[i] < -20 || this.pY[i] > this.ParticleCanvas.ActualHeight + 20 ||
+                this.pX[i] < -20 || this.pX[i] > this.ParticleCanvas.ActualWidth + 20)
             {
                 this.ResetParticle(i);
             }
@@ -451,8 +471,7 @@ internal partial class TranscriptionOverlayWindow : Window
             System.Windows.Controls.Canvas.SetLeft(this.pShapes[i], this.pX[i]);
             System.Windows.Controls.Canvas.SetTop(this.pShapes[i], this.pY[i]);
             
-            double brightness = this.pLife[i] * (0.3 + (dbIntensity * 0.02));
-            if (brightness > 1.0) brightness = 1.0;
+            double brightness = Math.Clamp(this.pLife[i] * (0.4 + (dbIntensity * 0.03)), 0.0, 1.0);
             this.pShapes[i].Opacity = brightness;
         }
     }

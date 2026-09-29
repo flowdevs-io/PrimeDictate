@@ -155,6 +155,11 @@ public static class NemotronResponseParser
                 : [new RecognizedSegment(TimeSpan.Zero, windowDuration, text, null, null, null, TimingProvenance.ApproximateChunk)];
         }
 
+        if (withSpeakers)
+        {
+            SmoothSpeakers(words);
+        }
+
         var segments = new List<RecognizedSegment>();
         var group = new List<(string Text, TimeSpan Start, TimeSpan End, double? Confidence, int? Speaker)>();
 
@@ -189,6 +194,79 @@ public static class NemotronResponseParser
 
         Flush();
         return segments;
+    }
+
+    /// <summary>A speaker run shorter than this, sitting between two runs of the same speaker, is treated as a wobble in the diarizer.</summary>
+    internal static readonly TimeSpan WobbleLength = TimeSpan.FromSeconds(1.5);
+
+    /// <summary>
+    /// The diarizer changes its mind word by word, which splits one sentence into pieces owned by different speakers.
+    /// Two repairs: an A-B-A pattern where B is short becomes all A, and a one-word run joins the longer neighbour.
+    /// Real turn changes last longer than a word or two, so they survive.
+    /// </summary>
+    internal static void SmoothSpeakers(List<(string Text, TimeSpan Start, TimeSpan End, double? Confidence, int? Speaker)> words)
+    {
+        for (var pass = 0; pass <= words.Count; pass++)
+        {
+            var runs = new List<(int From, int To)>();
+            for (var i = 0; i < words.Count; i++)
+            {
+                if (runs.Count > 0 && words[runs[^1].From].Speaker == words[i].Speaker)
+                {
+                    runs[^1] = (runs[^1].From, i);
+                }
+                else
+                {
+                    runs.Add((i, i));
+                }
+            }
+
+            var changed = false;
+            TimeSpan Length((int From, int To) r) => words[r.To].End - words[r.From].Start;
+
+            for (var r = 0; r < runs.Count; r++)
+            {
+                var run = runs[r];
+                var speaker = words[run.From].Speaker;
+                if (speaker is null)
+                {
+                    continue;
+                }
+
+                var previous = r > 0 ? words[runs[r - 1].From].Speaker : null;
+                var next = r + 1 < runs.Count ? words[runs[r + 1].From].Speaker : null;
+                int? target = null;
+                if (previous is not null && previous == next && Length(run) < WobbleLength)
+                {
+                    target = previous;
+                }
+                else if (run.From == run.To && (previous is not null || next is not null))
+                {
+                    var previousLength = r > 0 && previous is not null ? Length(runs[r - 1]) : TimeSpan.MinValue;
+                    var nextLength = r + 1 < runs.Count && next is not null ? Length(runs[r + 1]) : TimeSpan.MinValue;
+                    target = previousLength >= nextLength ? previous : next;
+                }
+
+                if (target is null)
+                {
+                    continue;
+                }
+
+                for (var i = run.From; i <= run.To; i++)
+                {
+                    var w = words[i];
+                    words[i] = (w.Text, w.Start, w.End, w.Confidence, target);
+                }
+
+                changed = true;
+                break;
+            }
+
+            if (!changed)
+            {
+                return;
+            }
+        }
     }
 
     private static TimeSpan Seconds(JsonElement e, string name) =>

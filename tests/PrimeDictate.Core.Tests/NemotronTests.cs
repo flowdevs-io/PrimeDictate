@@ -39,10 +39,10 @@ public sealed class NemotronTests : IDisposable
         var json = File.ReadAllText(SamplePath("file-verbose-json-diarization.json"));
         var segments = NemotronResponseParser.ParseVerboseJson(json, TimeSpan.FromSeconds(12), withSpeakers: true);
 
-        Assert.True(segments.Count >= 2);
-        Assert.All(segments, s => Assert.StartsWith("speaker-", s.SpeakerLabel));
-        Assert.Contains(segments, s => s.SpeakerLabel == "speaker-1");
-        Assert.Contains(segments, s => s.SpeakerLabel == "speaker-2");
+        // The real response flickers to speaker 2 for the single word "file"; smoothing keeps it in speaker 1's sentence.
+        var only = Assert.Single(segments);
+        Assert.Equal("speaker-1", only.SpeakerLabel);
+        Assert.Contains("plain text file back", only.Text);
         Assert.All(segments, s => Assert.Equal(TimingProvenance.Model, s.Provenance));
         Assert.All(segments, s => Assert.True(s.Words!.Count > 0 && s.Start <= s.End));
         Assert.All(segments, s => Assert.All(s.Words!, w => Assert.Equal(s.SpeakerLabel, w.SpeakerId)));
@@ -50,6 +50,31 @@ public sealed class NemotronTests : IDisposable
         var joined = string.Join(' ', segments.Select(s => s.Text));
         Assert.StartsWith("From a plain text file", joined);
         Assert.Equal(segments.Sum(s => s.Words!.Count), segments.SelectMany(s => s.Words!).Count());
+    }
+
+    private static string WordsJson(params (string Word, double Start, int Speaker)[] words) =>
+        "{\"words\":[" + string.Join(',', words.Select(w =>
+            FormattableString.Invariant($"{{\"word\":\"{w.Word}\",\"start\":{w.Start},\"end\":{w.Start + 0.3},\"speaker\":{w.Speaker}}}"))) + "]}";
+
+    [Fact]
+    public void A_short_wobble_inside_one_speakers_sentence_does_not_split_it()
+    {
+        var json = WordsJson(("hey", 0, 1), ("there", 0.4, 1), ("my", 0.8, 1), ("friend", 2.0, 2), ("thats", 2.4, 2), ("an", 2.8, 2), ("insult", 3.2, 3), ("that", 3.6, 2), ("I", 4.0, 2), ("like", 4.4, 2));
+        var segments = NemotronResponseParser.ParseVerboseJson(json, TimeSpan.FromSeconds(6), withSpeakers: true);
+
+        Assert.Equal(2, segments.Count);
+        Assert.Equal("speaker-1", segments[0].SpeakerLabel);
+        Assert.Equal("friend thats an insult that I like", segments[1].Text);
+        Assert.All(segments[1].Words!, w => Assert.Equal("speaker-2", w.SpeakerId));
+    }
+
+    [Fact]
+    public void A_real_turn_change_of_several_words_is_kept()
+    {
+        var json = WordsJson(("one", 0, 1), ("two", 0.4, 1), ("three", 0.8, 1), ("four", 1.2, 1), ("five", 1.6, 2), ("six", 2.0, 2), ("seven", 2.4, 2), ("eight", 2.8, 2), ("nine", 3.2, 2));
+        var segments = NemotronResponseParser.ParseVerboseJson(json, TimeSpan.FromSeconds(4), withSpeakers: true);
+
+        Assert.Equal(["speaker-1", "speaker-2"], segments.Select(s => s.SpeakerLabel));
     }
 
     [Fact]
@@ -156,7 +181,7 @@ public sealed class NemotronTests : IDisposable
             Assert.Contains("verbose_json", request);
             Assert.Contains("name=language", request);
             Assert.True(provider.Capabilities.CombinedDiarization);
-            Assert.Contains(segments, s => s.SpeakerLabel == "speaker-2");
+            Assert.All(segments, s => Assert.StartsWith("speaker-", s.SpeakerLabel));
         }
 
         var (withoutListener, withoutClient) = StartFake();

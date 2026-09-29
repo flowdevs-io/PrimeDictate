@@ -31,6 +31,8 @@ public sealed class SpeakerTimelineControl : Control
     private bool follow = true;
     private bool live;
     private string? selectedSegmentId;
+    private TranscriptDocument? document;
+    private IReadOnlyList<OverlayBar>? overlay;
 
     private sealed record Lane(string SpeakerId, string Name, int Index);
 
@@ -72,8 +74,19 @@ public sealed class SpeakerTimelineControl : Control
 
     private double MaxLaneOffset => Math.Max(0, (this.lanes.Count - MaxVisibleLanes) * (LaneHeight + LaneGap));
 
+    /// <summary>
+    /// Bars from the whole-file diarizer for the remote speakers, which can overlap. While set, they replace the
+    /// per-line bars of every speaker except the local microphone; clicking one selects nothing.
+    /// </summary>
+    public void SetOverlay(IReadOnlyList<OverlayBar>? overlay)
+    {
+        this.overlay = overlay is { Count: > 0 } ? overlay : null;
+        this.SetDocument(this.document, this.live);
+    }
+
     public void SetDocument(TranscriptDocument? document, bool isLive)
     {
+        this.document = document;
         this.live = isLive;
         if (document is null || document.Speakers.Count == 0)
         {
@@ -99,10 +112,25 @@ public sealed class SpeakerTimelineControl : Control
                     continue;
                 }
 
+                if (this.overlay is not null && shownAs != "local")
+                {
+                    continue;
+                }
+
                 var s = attribution.Start.TotalSeconds;
                 var e = Math.Max(attribution.End.TotalSeconds, s + 0.05);
                 bars.Add(new Bar(segment.Id, lane, s, e, provisional));
                 end = Math.Max(end, e);
+            }
+        }
+
+        foreach (var bar in this.overlay ?? [])
+        {
+            var lane = lanes.FindIndex(l => l.SpeakerId == document.ResolveSpeakerId(bar.SpeakerId));
+            if (lane >= 0)
+            {
+                bars.Add(new Bar(string.Empty, lane, bar.Start, Math.Max(bar.End, bar.Start + 0.05), false));
+                end = Math.Max(end, bar.End);
             }
         }
 
@@ -189,7 +217,7 @@ public sealed class SpeakerTimelineControl : Control
         var t = this.XToTime(p.X);
         var lane = (int)Math.Floor((p.Y - AxisHeight + this.laneOffset) / (LaneHeight + LaneGap));
         var hit = this.bars.Where(b => b.Lane == lane && t >= b.Start && t <= b.End).OrderBy(b => b.End - b.Start).FirstOrDefault();
-        if (hit is not null)
+        if (hit is { SegmentId.Length: > 0 })
         {
             this.selectedSegmentId = hit.SegmentId;
             this.SegmentClicked?.Invoke(hit.SegmentId);

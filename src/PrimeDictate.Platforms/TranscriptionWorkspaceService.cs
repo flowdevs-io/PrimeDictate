@@ -418,6 +418,36 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         }
     }
 
+    /// <summary>The overlap-aware speaker timeline saved for a meeting, if one was computed.</summary>
+    public DiarizationOverlay? LoadOverlay(Guid sessionId) =>
+        DiarizationOverlay.TryLoad(this.store.GetSessionMediaDirectory(sessionId));
+
+    /// <summary>
+    /// After a meeting, runs the whole-file diarizer over the system channel so the timeline can show people talking
+    /// over each other. Returns null with a reason when it was not possible; the live view stays as it was.
+    /// </summary>
+    public async Task<(DiarizationOverlay? Overlay, string? Reason)> BuildOverlayAsync(Guid sessionId, CancellationToken cancellationToken)
+    {
+        var directory = this.store.GetSessionMediaDirectory(sessionId);
+        var stereo = Path.Combine(directory, "recording-16k-stereo.wav");
+        if (!File.Exists(stereo))
+        {
+            return (null, "This session has no stereo recording.");
+        }
+
+        var setup = this.nemotron.FirstOrDefault(n => n.Files.DiarizerPath is not null);
+        if (setup is null)
+        {
+            return (null, "The Nemotron diarizer file is not installed.");
+        }
+
+        var worker = setup.WorkerPath;
+        var (overlay, error) = await NemotronDiarizer.RunAsync(
+            worker, setup.Files.DiarizerPath!, stereo, directory, TimeSpan.FromMinutes(10), this.CudaRuntimeDirectories(worker), cancellationToken).ConfigureAwait(false);
+        overlay?.Save(directory);
+        return (overlay, error);
+    }
+
     public async Task DiscardLiveAsync()
     {
         var session = Interlocked.Exchange(ref this.live, null);
