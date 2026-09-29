@@ -2,9 +2,16 @@ using PrimeDictate.Core.Audio;
 
 // Usage: ChannelSkew <recording-16k-stereo.wav>
 // Left channel = microphone, right channel = system audio. Works when the microphone heard the speakers.
+if (args.Length >= 1 && args[0] == "--probe")
+{
+    // ChannelSkew --probe [--save recording.wav]: self-contained measurement, no app needed.
+    var save = args.Length >= 3 && args[1] == "--save" ? args[2] : null;
+    return await Probe.RunAsync(save);
+}
+
 if (args.Length != 1 || !File.Exists(args[0]))
 {
-    Console.Error.WriteLine("Usage: ChannelSkew <recording-16k-stereo.wav>");
+    Console.Error.WriteLine("Usage: ChannelSkew <recording-16k-stereo.wav> | ChannelSkew --probe [--save out.wav]");
     return 2;
 }
 

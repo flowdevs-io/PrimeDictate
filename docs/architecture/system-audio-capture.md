@@ -129,3 +129,13 @@ To measure a real recording: `dotnet run --project src/PrimeDictate.Tools.Channe
 (left = microphone, right = system audio). It correlates the two channels' loudness and prints the lag;
 it needs the microphone to have heard the speakers (speakers, not headphones). Below correlation 0.3 the
 number is meaningless.
+
+## Self-contained skew probe
+
+`dotnet run --project src/PrimeDictate.Tools.ChannelSkew -- --probe [--save out.wav]` opens the same combined
+lease as the app, plays a known 3.2 s noise-burst train through the default output, and finds the train in each
+channel with a matched filter (`ReferenceLocator`). It prints the lag of the microphone behind system audio, plus
+correlation and peak/sidelobe for each side, and says RESULT: unusable when either side did not hear the train.
+The matched filter finds a faint copy in room noise, so it works where envelope correlation of a recording did not.
+The lag includes the speaker path (output device latency, ~3 ms/m of air). Linux check with a null sink whose
+suspend-on-idle module is unloaded: +14 ms (the miniaudio mic's known ~20 ms). Not yet run on Windows.
