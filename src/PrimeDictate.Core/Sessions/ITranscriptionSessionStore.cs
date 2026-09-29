@@ -12,7 +12,11 @@ public sealed record TranscriptSessionSummary(
     TimeSpan? Duration,
     int SegmentCount);
 
-public sealed record SessionDeletionResult(bool Existed, IReadOnlyList<string> DeletedFiles, IReadOnlyList<string> KeptExternalFiles);
+public sealed record SessionDeletionResult(bool Existed, IReadOnlyList<string> DeletedFiles, IReadOnlyList<string> KeptExternalFiles)
+{
+    /// <summary>Files that could not be removed (locked, permissions). The session row is already gone; retry later.</summary>
+    public IReadOnlyList<string> FailedFiles { get; init; } = [];
+}
 
 /// <summary>
 /// Versioned local persistence for transcription sessions. Separate from dictation history.

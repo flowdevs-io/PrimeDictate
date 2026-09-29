@@ -506,6 +506,11 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
 
         using var lease = await this.scheduler.AcquireAsync(this.provider.ModelId, ModelLeasePriority.Live, ct).ConfigureAwait(false);
         await using var stream = await this.provider.StartStreamingAsync(this.options.Session.Language, diarize, ct).ConfigureAwait(false);
+        if (stream is IStreamingNotices notices)
+        {
+            notices.Notice += message => this.Error?.Invoke(message);
+        }
+
 
         var reader = Task.Run(async () =>
         {
@@ -598,7 +603,7 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
     {
         var host = this.Host!;
         var sessionId = host.Document.SessionId;
-        var detector = new UtteranceDetector(this.options.Detector);
+        var detector = new UtteranceDetector(this.options.Detector ?? new UtteranceDetectorOptions { MaxUtterance = TimeSpan.FromSeconds(15) });
         var previewRevision = new Dictionary<int, long>();
         var ct = this.stopSignal.Token;
 

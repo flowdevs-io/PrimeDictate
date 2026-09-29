@@ -103,6 +103,7 @@ public sealed class SherpaWhisperProvider : ITranscriptionProvider
         config.FeatConfig.FeatureDim = 80;
         config.ModelConfig.Debug = 0;
         config.ModelConfig.Provider = "cpu";
+        config.ModelConfig.NumThreads = InferenceThreads.Default;
         config.ModelConfig.Tokens = this.model.Tokens;
         config.ModelConfig.Whisper.Encoder = this.model.Encoder;
         config.ModelConfig.Whisper.Decoder = this.model.Decoder;
@@ -111,4 +112,11 @@ public sealed class SherpaWhisperProvider : ITranscriptionProvider
         config.ModelConfig.Whisper.Task = "transcribe";
         return new OfflineRecognizer(config);
     }
+}
+
+/// <summary>sherpa-onnx runs on a single thread unless told otherwise, which is far too slow for live recognition.</summary>
+internal static class InferenceThreads
+{
+    /// <summary>Half the logical cores, at least 2 and at most 8, leaving room for capture and the UI.</summary>
+    public static int Default { get; } = Math.Clamp(Environment.ProcessorCount / 2, 2, 8);
 }

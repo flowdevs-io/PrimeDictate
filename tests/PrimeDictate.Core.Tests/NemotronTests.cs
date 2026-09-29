@@ -390,4 +390,192 @@ public sealed class NemotronTests : IDisposable
         Assert.Contains(seen, x => x == "Provisional:hello");
         Assert.DoesNotContain(doc.Segments, s => s.State != SegmentState.Final);
     }
+
+    /// <summary>Counts audio bytes per connection; connection 1 optionally never answers (the wedge in NeMo-Speech.cpp#48).</summary>
+    private static (HttpListener Listener, Uri Base, List<long> AudioBytes) StartCountingServer(bool wedgeFirst)
+    {
+        var port = new Random().Next(20000, 60000);
+        var listener = new HttpListener();
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        listener.Start();
+        var bytes = new List<long>();
+        _ = Task.Run(async () =>
+        {
+            var n = 0;
+            while (true)
+            {
+                HttpListenerContext context;
+                try
+                {
+                    context = await listener.GetContextAsync();
+                }
+                catch (Exception)
+                {
+                    return;
+                }
+
+                var wedged = wedgeFirst && n == 0;
+                var slot = n++;
+                lock (bytes)
+                {
+                    bytes.Add(0);
+                }
+
+                _ = Task.Run(async () =>
+                {
+                    var ws = (await context.AcceptWebSocketAsync(null)).WebSocket;
+                    async Task Send(string json) => await ws.SendAsync(Encoding.UTF8.GetBytes(json), System.Net.WebSockets.WebSocketMessageType.Text, true, default);
+                    await Send("""{"type":"session.created"}""");
+                    var buffer = new byte[64 * 1024];
+                    try
+                    {
+                        while (ws.State == System.Net.WebSockets.WebSocketState.Open)
+                        {
+                            var r = await ws.ReceiveAsync(buffer, default);
+                            if (r.MessageType == System.Net.WebSockets.WebSocketMessageType.Close)
+                            {
+                                break;
+                            }
+
+                            if (r.MessageType == System.Net.WebSockets.WebSocketMessageType.Binary)
+                            {
+                                lock (bytes)
+                                {
+                                    bytes[slot] += r.Count;
+                                }
+
+                                if (!wedged && bytes[slot] == r.Count)
+                                {
+                                    await Send("""{"type":"conversation.item.input_audio_transcription.delta","delta":"hi","audio_processed":1}""");
+                                }
+
+                                continue;
+                            }
+
+                            var text = Encoding.UTF8.GetString(buffer, 0, r.Count);
+                            if (text.Contains("session.update"))
+                            {
+                                await Send("""{"type":"session.updated"}""");
+                            }
+                            else if (text.Contains("commit") && !wedged)
+                            {
+                                await Send("""{"type":"conversation.item.input_audio_transcription.completed","audio_processed":1,"transcript":"hi there","words":[{"word":"hi","start":0.1,"end":0.3,"speaker":1},{"word":"there","start":0.4,"end":0.6,"speaker":1}]}""");
+                            }
+                        }
+                    }
+                    catch (Exception)
+                    {
+                    }
+                });
+            }
+        });
+        return (listener, new Uri($"http://127.0.0.1:{port}/"), bytes);
+    }
+
+    private static AudioFrame Frame(float[] samples, long offset, long seq, bool synthetic = false) =>
+        AudioFrame.CopyFrom(samples, new AudioFormat(16_000, 1, AudioSampleFormat.Float32), seq, offset, synthetic);
+
+    [Fact]
+    public async Task Realtime_session_does_not_send_long_runs_of_zero_audio_but_keeps_offsets()
+    {
+        var (listener, uri, bytes) = StartCountingServer(false);
+        using var _ = listener;
+        await using var session = await NemotronRealtimeSession.ConnectAsync(uri, "k", diarize: true, default);
+        var tone = Enumerable.Range(0, 1600).Select(i => 0.3f * MathF.Sin(i * 0.05f)).ToArray();
+
+        long seq = 0, offset = 0;
+        for (var i = 0; i < 10; i++)
+        {
+            await session.WriteAsync(Frame(tone, offset, seq++), default);
+            offset += 1600;
+        }
+
+        // 60 s of exact zeros, some flagged and some not: only the first half second may reach the worker.
+        for (var i = 0; i < 600; i++)
+        {
+            await session.WriteAsync(Frame(new float[1600], offset, seq++, synthetic: i % 2 == 0), default);
+            offset += 1600;
+        }
+
+        var resumeAt = offset;
+        for (var i = 0; i < 10; i++)
+        {
+            await session.WriteAsync(Frame(tone, offset, seq++), default);
+            offset += 1600;
+        }
+
+        await session.CommitAsync(default);
+        await Task.Delay(300);
+        long sent;
+        lock (bytes)
+        {
+            sent = bytes[0];
+        }
+
+        // 20 tone blocks + at most 0.5 s of zeros + the commit flush; certainly far below the 60 s of zeros.
+        Assert.True(sent <= (20 * 1600 + 8_000 + 1600) * 2, $"sent {sent} bytes");
+        Assert.True(sent >= 20 * 1600 * 2);
+        // The post-gap speech carries its true timeline position (the first commit covers speech from sample 0).
+        var updates = new List<StreamingUpdate>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        await foreach (var u in session.ReadUpdatesAsync(cts.Token))
+        {
+            updates.Add(u);
+            if (u.IsFinal)
+            {
+                break;
+            }
+        }
+
+        Assert.Contains(updates, u => u.IsFinal && u.Segment.Text.Contains("hi"));
+        Assert.True(resumeAt > 16_000 * 60);
+    }
+
+    [Fact]
+    public async Task Realtime_session_restarts_a_stalled_connection_and_keeps_speaker_numbers_apart()
+    {
+        var (listener, uri, bytes) = StartCountingServer(true);
+        using var _ = listener;
+        await using var session = await NemotronRealtimeSession.ConnectAsync(uri, "k", diarize: true, default, TimeSpan.FromSeconds(1));
+        var notices = new List<string>();
+        session.Notice += notices.Add;
+        var tone = Enumerable.Range(0, 1600).Select(i => 0.3f * MathF.Sin(i * 0.05f)).ToArray();
+
+        long seq = 0, offset = 0;
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (session.Restarts == 0 && DateTime.UtcNow < deadline)
+        {
+            await session.WriteAsync(Frame(tone, offset, seq++), default);
+            offset += 1600;
+            await Task.Delay(50);
+        }
+
+        Assert.Equal(1, session.Restarts);
+        Assert.Single(notices);
+
+        // The new connection works: speech gets text and the final's speaker is kept apart from earlier numbering.
+        for (var i = 0; i < 5; i++)
+        {
+            await session.WriteAsync(Frame(tone, offset, seq++), default);
+            offset += 1600;
+        }
+
+        await session.CommitAsync(default);
+        var finals = new List<StreamingUpdate>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await foreach (var u in session.ReadUpdatesAsync(cts.Token))
+        {
+            if (u.IsFinal && u.Segment.Text.Length > 0)
+            {
+                finals.Add(u);
+                break;
+            }
+        }
+
+        Assert.Single(finals);
+        lock (bytes)
+        {
+            Assert.True(bytes.Count >= 2 && bytes[1] > 0, "audio should flow on the replacement connection");
+        }
+    }
 }

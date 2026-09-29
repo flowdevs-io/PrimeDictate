@@ -366,7 +366,7 @@ public sealed class SqliteTranscriptionSessionStore : ITranscriptionSessionStore
             var conn = this.RequireConnection();
             var id = sessionId.ToString("D");
             var refs = await this.ReadAudioRefsAsync(conn, id, cancellationToken).ConfigureAwait(false);
-            var deleted = this.DeleteOwnedFiles(refs);
+            var deleted = this.DeleteOwnedFiles(refs, []);
             await using var cmd = conn.CreateCommand();
             cmd.CommandText = $"DELETE FROM audio_refs WHERE session_id = $id AND kind = {(int)AudioReferenceKind.Owned};";
             cmd.Parameters.AddWithValue("$id", id);
@@ -396,16 +396,25 @@ public sealed class SqliteTranscriptionSessionStore : ITranscriptionSessionStore
                 removed = await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            var deleted = this.DeleteOwnedFiles(refs);
+            // The row is already removed; a locked file must be reported, not crash the caller.
+            var failed = new List<string>();
+            var deleted = this.DeleteOwnedFiles(refs, failed);
             var sessionMedia = this.GetSessionMediaDirectory(sessionId);
             if (Directory.Exists(sessionMedia))
             {
-                Directory.Delete(sessionMedia, recursive: true);
-                deleted.Add(sessionMedia);
+                try
+                {
+                    Directory.Delete(sessionMedia, recursive: true);
+                    deleted.Add(sessionMedia);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    failed.Add(sessionMedia);
+                }
             }
 
             var kept = refs.Where(r => r.Kind == AudioReferenceKind.ExternalReference).Select(r => r.Path).ToList();
-            return new SessionDeletionResult(removed > 0, deleted, kept);
+            return new SessionDeletionResult(removed > 0, deleted, kept) { FailedFiles = failed };
         }
         finally
         {
@@ -433,7 +442,7 @@ public sealed class SqliteTranscriptionSessionStore : ITranscriptionSessionStore
         }
     }
 
-    private List<string> DeleteOwnedFiles(IEnumerable<AudioReference> refs)
+    private List<string> DeleteOwnedFiles(IEnumerable<AudioReference> refs, List<string> failed)
     {
         var deleted = new List<string>();
         foreach (var audio in refs.Where(r => r.Kind == AudioReferenceKind.Owned))
@@ -445,10 +454,17 @@ public sealed class SqliteTranscriptionSessionStore : ITranscriptionSessionStore
                 continue;
             }
 
-            if (File.Exists(full))
+            try
             {
-                File.Delete(full);
-                deleted.Add(full);
+                if (File.Exists(full))
+                {
+                    File.Delete(full);
+                    deleted.Add(full);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                failed.Add(full);
             }
         }
 
