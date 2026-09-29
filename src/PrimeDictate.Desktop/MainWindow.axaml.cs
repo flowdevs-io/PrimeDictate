@@ -51,6 +51,8 @@ public sealed partial class MainWindow : Window
         this.ExportButton.Click += async (_, _) => await this.ExportAsync();
         this.DeleteButton.Click += async (_, _) => await this.DeleteAsync();
         this.SessionList.SelectionChanged += async (_, _) => await this.OpenSelectedAsync();
+        this.Timeline.SegmentClicked += this.OnTimelineSegmentClicked;
+        this.TranscriptList.SelectionChanged += (_, _) => this.Timeline.SelectedSegmentId = (this.TranscriptList.SelectedItem as SegmentRow)?.Id;
         this.SearchBox.TextChanged += (_, _) => this.Refresh();
         this.TranscriptList.AddHandler(GotFocusEvent, this.OnRowFocus, RoutingStrategies.Bubble);
         this.TranscriptList.AddHandler(LostFocusEvent, this.OnRowBlur, RoutingStrategies.Bubble);
@@ -218,6 +220,8 @@ public sealed partial class MainWindow : Window
         }
 
         this.RefreshSpeakers(document);
+        this.Timeline.SetDocument(document, this.live is not null);
+        this.Timeline.Height = document is { Speakers.Count: > 0 } ? this.Timeline.DesiredContentHeight : 0;
         var has = document is not null && document.ActiveSegments.Any();
         this.EmptyText.IsVisible = this.rows.Count == 0;
         this.CopyButton.IsEnabled = has;
@@ -294,6 +298,15 @@ public sealed partial class MainWindow : Window
         {
             this.host.RenameSpeaker(id, name);
             _ = this.host.CheckpointAsync().AsTask();
+        }
+    }
+
+    private void OnTimelineSegmentClicked(string segmentId)
+    {
+        if (this.rowsById.TryGetValue(segmentId, out var row) && this.rows.Contains(row))
+        {
+            this.TranscriptList.SelectedItem = row;
+            this.TranscriptList.ScrollIntoView(row);
         }
     }
 
