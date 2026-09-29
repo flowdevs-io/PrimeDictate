@@ -111,7 +111,53 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         }
     }
 
-    private sealed record NemotronSetup(string WorkerPath, PinnedNemotronModel Asr, NemotronModelFiles Files);
+    private sealed record NemotronSetup(string WorkerPath, string? CudaWorkerPath, PinnedNemotronModel Asr, NemotronModelFiles Files);
+
+    /// <summary>Raised with things the user should see, such as which backend Nemotron actually runs on or why it fell back.</summary>
+    public event Action<string>? Notice;
+
+    private string nemotronPreference = (Environment.GetEnvironmentVariable("PRIMEDICTATE_NEMO_DEVICE") ?? "auto").Trim().ToLowerInvariant();
+    private string? nemotronWorkerPreference;
+
+    /// <summary>
+    /// Which device Nemotron should use: <c>auto</c> (CUDA when a CUDA worker is installed, else CPU), <c>cpu</c>,
+    /// or <c>cuda:N</c>. Default comes from the PRIMEDICTATE_NEMO_DEVICE environment variable. Vulkan is not
+    /// offered because it aborts at the pinned commit. Takes effect the next time the model is used.
+    /// </summary>
+    public string NemotronDevice
+    {
+        get => this.nemotronPreference;
+        set => this.nemotronPreference = string.IsNullOrWhiteSpace(value) ? "auto" : value.Trim().ToLowerInvariant();
+    }
+
+    /// <summary>The backend the running Nemotron worker reported, for example "cuda:0" or "cpu". Null until it has started.</summary>
+    public string? NemotronBackend => this.nemotronWorker?.EffectiveBackend;
+
+    private void RaiseNotice(string message) => this.Notice?.Invoke(message);
+
+    private IEnumerable<string> CudaRuntimeDirectories(string workerPath)
+    {
+        var explicitBin = Environment.GetEnvironmentVariable("PRIMEDICTATE_CUDA_BIN");
+        if (!string.IsNullOrWhiteSpace(explicitBin))
+        {
+            yield return explicitBin;
+        }
+
+        var cudaPath = Environment.GetEnvironmentVariable("CUDA_PATH");
+        if (!string.IsNullOrWhiteSpace(cudaPath))
+        {
+            yield return Path.Combine(cudaPath, "bin", "x64");
+            yield return Path.Combine(cudaPath, "bin");
+        }
+
+        if (Path.GetDirectoryName(workerPath) is { } dir)
+        {
+            yield return dir;
+        }
+    }
+
+    private Task<NemotronWorker> StartNemotronWorkerAsync(NemotronSetup setup, CancellationToken cancellationToken) =>
+        NemotronWorker.StartPreferredAsync(setup.WorkerPath, setup.CudaWorkerPath, setup.Files, this.nemotronPreference, this.CudaRuntimeDirectories, this.RaiseNotice, cancellationToken);
 
     /// <summary>Everything the user can pick: installed Whisper ONNX models, plus Nemotron when its worker and pinned model files are present.</summary>
     public IReadOnlyList<SpeechModelChoice> AvailableModels()
@@ -128,9 +174,10 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         if (this.nemotron is { } n)
         {
             var speakers = n.Files.DiarizerPath is not null;
+            var gpu = n.CudaWorkerPath is not null && this.nemotronPreference != "cpu";
             choices.Add(new SpeechModelChoice(
                 $"nemotron:{n.Asr.Id}",
-                "Nemotron 3.5 (CPU)" + (speakers ? ", speakers" : string.Empty),
+                (gpu ? "Nemotron 3.5 (GPU, CPU if it fails)" : "Nemotron 3.5 (CPU)") + (speakers ? ", speakers" : string.Empty),
                 null,
                 speakers,
                 speakers ? null : "Speaker detection needs the Nemotron-3-Diarization file next to the speech model."));
@@ -149,6 +196,15 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
             worker = new[] { Path.Combine(folder, exeName), Path.Combine(AppContext.BaseDirectory, exeName) }.FirstOrDefault(File.Exists);
         }
 
+        // A CUDA build lives beside the CPU one, in models\nemotron\cuda, or wherever PRIMEDICTATE_NEMO_SPEECH_CUDA points.
+        var cuda = Environment.GetEnvironmentVariable("PRIMEDICTATE_NEMO_SPEECH_CUDA");
+        if (string.IsNullOrWhiteSpace(cuda) || !File.Exists(cuda))
+        {
+            cuda = new[] { Path.Combine(folder, "cuda", exeName) }.FirstOrDefault(File.Exists);
+        }
+
+        // With only a CUDA build installed it also serves as the CPU worker (--device cpu).
+        worker ??= cuda;
         if (worker is null || !Directory.Exists(folder))
         {
             return null;
@@ -158,7 +214,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         {
             if (NemotronModelFiles.TryFind(folder, asr) is { } files)
             {
-                return new NemotronSetup(worker, asr, files);
+                return new NemotronSetup(worker, cuda, asr, files);
             }
         }
 
@@ -185,6 +241,18 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         await this.providerGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // A changed device preference restarts the worker, so drop its cached providers first.
+            if (this.nemotronWorker is not null && this.nemotronWorkerPreference != this.nemotronPreference)
+            {
+                await this.nemotronWorker.DisposeAsync().ConfigureAwait(false);
+                this.nemotronWorker = null;
+                foreach (var stale in this.providers.Keys.Where(k => k.StartsWith("nemotron:", StringComparison.Ordinal)).ToList())
+                {
+                    await this.providers[stale].DisposeAsync().ConfigureAwait(false);
+                    this.providers.Remove(stale);
+                }
+            }
+
             if (this.providers.TryGetValue(model.ModelId, out var existing))
             {
                 return existing;
@@ -204,7 +272,8 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
                     this.nemotronWorker = null;
                 }
 
-                this.nemotronWorker ??= await NemotronWorker.StartAsync(setup.WorkerPath, setup.Files, TimeSpan.FromSeconds(90), cancellationToken).ConfigureAwait(false);
+                this.nemotronWorker ??= await this.StartNemotronWorkerAsync(setup, cancellationToken).ConfigureAwait(false);
+                this.nemotronWorkerPreference = this.nemotronPreference;
                 this.nemotronWorkerKey = model.ModelId;
                 provider = new NemotronProvider(this.nemotronWorker, model.ModelId, model.DetectsSpeakers);
             }
@@ -254,7 +323,23 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     }
 
     private Task RunAsync(SessionDocumentHost host, FileJobRequest request, SpeechModelChoice model, IProgress<ProgressChanged>? progress, CancellationToken cancellationToken) =>
-        Task.Run(async () => await this.runner.RunAsync(host, request, this.decoder, await this.ProviderAsync(model, cancellationToken).ConfigureAwait(false), progress, cancellationToken).ConfigureAwait(false), CancellationToken.None);
+        Task.Run(
+            async () =>
+            {
+                var provider = await this.ProviderAsync(model, cancellationToken).ConfigureAwait(false);
+                NoteFallback(host, provider);
+                await this.runner.RunAsync(host, request, this.decoder, provider, progress, cancellationToken).ConfigureAwait(false);
+            },
+            CancellationToken.None);
+
+    /// <summary>A session that ran on a different backend than requested says so, next to its transcript.</summary>
+    private static void NoteFallback(SessionDocumentHost host, ITranscriptionProvider provider)
+    {
+        if (provider.Runtime.FallbackReason is { } reason)
+        {
+            host.AddNote($"Requested {provider.Runtime.RequestedBackend}, ran on {provider.Runtime.EffectiveBackend}: {reason}");
+        }
+    }
 
     /// <param name="deviceId">Microphone device; for <see cref="TranscriptSourceType.SystemAudio"/> it is the output device (null is the default output).</param>
     /// <param name="autoGain">Lift quiet system audio before recognition (never changes the saved recording).</param>
@@ -276,6 +361,11 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
             this.store,
             new LiveSessionOptions(Options(model, deviceId, retention), title, this.store.GetSessionMediaDirectory, LiveSessionOptions.DefaultPreviewInterval, null, source, autoGain));
         await session.StartAsync(cancellationToken).ConfigureAwait(false);
+        if (session.Host is { } liveHost)
+        {
+            NoteFallback(liveHost, await this.ProviderAsync(model, cancellationToken).ConfigureAwait(false));
+        }
+
         this.live = session;
         return session;
     }

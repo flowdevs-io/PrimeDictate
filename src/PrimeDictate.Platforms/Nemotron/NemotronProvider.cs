@@ -29,7 +29,7 @@ public sealed class NemotronProvider(INemotronEndpoint worker, string modelId, b
         Languages: ["auto"],
         RequiredSampleRate: 16_000);
 
-    public EffectiveRuntime Runtime { get; } = new("nemo-speech", NemotronPins.RuntimeCommit[..8], "cpu", "cpu", null);
+    public EffectiveRuntime Runtime { get; } = new("nemo-speech", NemotronPins.RuntimeCommit[..8], worker.RequestedBackend, worker.EffectiveBackend, worker.FallbackReason);
 
     public async ValueTask<IReadOnlyList<RecognizedSegment>> RecognizeWindowAsync(ReadOnlyMemory<float> samples, string? language, CancellationToken cancellationToken)
     {
