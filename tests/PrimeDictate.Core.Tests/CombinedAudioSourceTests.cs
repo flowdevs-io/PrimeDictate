@@ -21,7 +21,7 @@ public class CombinedAudioSourceTests
 
         public bool Paused { get; private set; }
 
-        public void Push(float value, int samples, bool skipSequence = false, long skipSamples = 0)
+        public void Push(float value, int samples, bool skipSequence = false, long skipSamples = 0, bool synthetic = false)
         {
             if (skipSequence)
             {
@@ -31,7 +31,7 @@ public class CombinedAudioSourceTests
 
             var data = new float[samples * this.Format.Channels];
             Array.Fill(data, value);
-            this.frames.Writer.TryWrite(AudioFrame.CopyFrom(data, this.Format, this.sequence++, this.offset));
+            this.frames.Writer.TryWrite(AudioFrame.CopyFrom(data, this.Format, this.sequence++, this.offset, synthetic));
             this.offset += samples;
         }
 
@@ -192,5 +192,21 @@ public class CombinedAudioSourceTests
         await lease.DisposeAsync();
         var frames = await ReadAllAsync(lease);
         Assert.Equal(1_000, frames.Sum(f => f.SamplesPerChannel));
+    }
+
+    [Fact]
+    public async Task Synthetic_silence_is_flagged_only_when_both_sides_are_filler()
+    {
+        var (lease, mic, system) = await OpenAsync(16_000, 16_000);
+        mic.Push(0f, 3_200, synthetic: true);
+        system.Push(0f, 3_200, synthetic: true);
+        mic.Push(0.2f, 3_200);
+        system.Push(0f, 3_200, synthetic: true);
+        await lease.DisposeAsync();
+        var frames = await ReadAllAsync(lease);
+        var firstHalf = frames.Where(f => f.SampleOffset < 3_200).ToList();
+        var secondHalf = frames.Where(f => f.SampleOffset >= 3_200).ToList();
+        Assert.All(firstHalf, f => Assert.True(f.IsSyntheticSilence));
+        Assert.All(secondHalf, f => Assert.False(f.IsSyntheticSilence));
     }
 }

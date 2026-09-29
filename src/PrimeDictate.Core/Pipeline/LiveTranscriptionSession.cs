@@ -37,7 +37,7 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
 {
     private abstract record Item;
 
-    private sealed record Samples(float[] Data) : Item;
+    private sealed record Samples(float[] Data, bool SyntheticSilence = false) : Item;
 
     private sealed record Flush : Item;
 
@@ -65,6 +65,7 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
     private AutoGain? gainLeft;
     private AutoGain? gainRight;
     private long streamedSamples;
+    private bool frameSynthetic;
 
     public LiveTranscriptionSession(
         IAudioSource audioSource,
@@ -363,6 +364,7 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
                 }
 
                 expectedSequence = frame.SequenceNumber + 1;
+                this.frameSynthetic = frame.IsSyntheticSilence;
                 if (rightResampler is not null)
                 {
                     var left = resampler.Process(AudioConversion.SelectChannel(frame.Samples.Span, 2, 0));
@@ -375,6 +377,7 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
                 await this.PublishMonoAsync(resampler.Process(mono)).ConfigureAwait(false);
             }
 
+            this.frameSynthetic = false;
             if (rightResampler is not null)
             {
                 await this.PublishStereoAsync(resampler.Flush(), rightResampler.Flush()).ConfigureAwait(false);
@@ -472,7 +475,7 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         // A full queue makes capture wait here, and the capture lease's own queue absorbs the wait.
         // If that fills too, the lease skips sequence numbers and the loop above marks a gap. Nothing is
         // dropped silently.
-        await this.queue.Writer.WriteAsync(new Samples(samples)).ConfigureAwait(false);
+        await this.queue.Writer.WriteAsync(new Samples(samples, this.frameSynthetic)).ConfigureAwait(false);
     }
 
     private Task InferenceLoopAsync() =>
@@ -554,7 +557,7 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
                 switch (item)
                 {
                     case Samples s:
-                        var frame = AudioFrame.CopyFrom(s.Data, format, sequence++, this.streamedSamples);
+                        var frame = AudioFrame.CopyFrom(s.Data, format, sequence++, this.streamedSamples, s.SyntheticSilence);
                         this.streamedSamples += s.Data.Length;
                         await stream.WriteAsync(frame, ct).ConfigureAwait(false);
                         if (detector.Add(s.Data).Any(e => e.Kind == UtteranceEventKind.Ended))

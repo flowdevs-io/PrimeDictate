@@ -84,6 +84,7 @@ public sealed class CombinedAudioSource(IAudioSource microphone, IAudioSource sy
     private sealed class Side(int capacity)
     {
         private readonly List<float> samples = [];
+        private readonly List<bool> synthetic = [];
         public long LastDataTicks;
         public bool Done;
         public readonly Queue<long> GapPositions = new();
@@ -93,11 +94,12 @@ public sealed class CombinedAudioSource(IAudioSource microphone, IAudioSource sy
 
         public int Capacity => capacity;
 
-        public void Add(ReadOnlySpan<float> data)
+        public void Add(ReadOnlySpan<float> data, bool isSynthetic = false)
         {
             foreach (var s in data)
             {
                 this.samples.Add(s);
+                this.synthetic.Add(isSynthetic);
             }
 
             this.Produced += data.Length;
@@ -108,21 +110,27 @@ public sealed class CombinedAudioSource(IAudioSource microphone, IAudioSource sy
             while (this.samples.Count < count)
             {
                 this.samples.Add(0f);
+                this.synthetic.Add(true);
                 this.Produced++;
             }
         }
 
-        public void Take(int count, Span<float> destination)
+        /// <summary>Takes samples; returns true when every one of them was synthetic silence.</summary>
+        public bool Take(int count, Span<float> destination)
         {
+            var allSynthetic = true;
             for (var i = 0; i < count; i++)
             {
                 destination[i] = this.samples[i];
+                allSynthetic &= this.synthetic[i];
             }
 
             this.samples.RemoveRange(0, count);
+            this.synthetic.RemoveRange(0, count);
+            return allSynthetic;
         }
 
-        public void Clear() => this.samples.Clear();
+        
     }
 
     private sealed class CombinedLease : ICombinedAudioCaptureLease
@@ -255,14 +263,14 @@ public sealed class CombinedAudioSource(IAudioSource microphone, IAudioSource sy
                             ? (int)Math.Min(side.Capacity, lostInput * this.options.OutputSampleRate / lease.Format.SampleRate)
                             : 0;
                         // Flag and padding go in under one lock so the emitter cannot send the padded hole before the flag.
-                        this.AddSamples(side, new float[lost], padding: true, gap: true);
+                        this.AddSamples(side, new float[lost], padding: true, gap: true, synthetic: true);
                     }
 
                     expectedSequence = frame.SequenceNumber + 1;
                     expectedOffset = frame.EndSampleOffset;
                     var mono = AudioConversion.DownmixToMono(frame.Samples.Span, frame.Format.Channels);
                     await this.WaitForRoomAsync(side).ConfigureAwait(false);
-                    this.AddSamples(side, resampler.Process(mono), padding: false);
+                    this.AddSamples(side, resampler.Process(mono), padding: false, synthetic: frame.IsSyntheticSilence);
                 }
 
                 this.AddSamples(side, resampler.Flush(), padding: false);
@@ -301,7 +309,7 @@ public sealed class CombinedAudioSource(IAudioSource microphone, IAudioSource sy
             }
         }
 
-        private void AddSamples(Side side, ReadOnlySpan<float> samples, bool padding, bool gap = false)
+        private void AddSamples(Side side, ReadOnlySpan<float> samples, bool padding, bool gap = false, bool synthetic = false)
         {
             lock (this.sync)
             {
@@ -310,7 +318,7 @@ public sealed class CombinedAudioSource(IAudioSource microphone, IAudioSource sy
                     side.GapPositions.Enqueue(side.Produced);
                 }
 
-                side.Add(samples);
+                side.Add(samples, synthetic);
                 if (!padding)
                 {
                     side.LastDataTicks = this.options.Clock.GetTimestamp();
@@ -432,8 +440,8 @@ public sealed class CombinedAudioSource(IAudioSource microphone, IAudioSource sy
 
                 var a = new float[take];
                 var b = new float[take];
-                this.micSide.Take(take, a);
-                this.systemSide.Take(take, b);
+                var micSynthetic = this.micSide.Take(take, a);
+                var systemSynthetic = this.systemSide.Take(take, b);
                 float[] interleaved;
                 if (this.options.Layout == CombinedChannelLayout.Stereo)
                 {
@@ -470,7 +478,7 @@ public sealed class CombinedAudioSource(IAudioSource microphone, IAudioSource sy
                     this.sequence++;
                 }
 
-                batch.Add(AudioFrame.CopyFrom(interleaved, this.Format, this.sequence++, this.sampleOffset));
+                batch.Add(AudioFrame.CopyFrom(interleaved, this.Format, this.sequence++, this.sampleOffset, micSynthetic && systemSynthetic));
                 this.sampleOffset += take;
             }
         }

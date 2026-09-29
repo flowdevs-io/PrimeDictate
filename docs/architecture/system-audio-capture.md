@@ -98,3 +98,12 @@ limiter keeps peaks under full scale. It feeds recognition only: the saved recor
 (so playback is honest and gain can be retuned), which also means a rerun of a saved quiet meeting
 does not get the boost yet. Unrelated to Windows communications ducking, which lowers what you hear
 and may lower what loopback captures; it is set in Windows Sound settings, Communications tab.
+
+## Synthetic silence flag
+
+`AudioFrame.IsSyntheticSilence` marks samples the capture layer inserted to keep the timeline
+continuous (WASAPI loopback silence fill; padding for a stalled or lossy side of the combined lease).
+It propagates through the combined lease (a chunk is flagged only when both sides are filler) and the
+live session's queue to frames handed to a streaming provider, which can skip them (long exact-zero
+runs wedge the Nemotron realtime stream, NeMo-Speech.cpp #48). Offsets and sequence numbers still
+count them.

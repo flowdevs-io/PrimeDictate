@@ -12,8 +12,9 @@ public sealed class AudioFrame
 {
     private readonly float[] samples;
 
-    private AudioFrame(float[] samples, AudioFormat format, long sequenceNumber, long sampleOffset)
+    private AudioFrame(float[] samples, AudioFormat format, long sequenceNumber, long sampleOffset, bool isSyntheticSilence)
     {
+        this.IsSyntheticSilence = isSyntheticSilence;
         this.samples = samples;
         this.Format = format;
         this.SequenceNumber = sequenceNumber;
@@ -21,6 +22,14 @@ public sealed class AudioFrame
     }
 
     public AudioFormat Format { get; }
+
+    /// <summary>
+    /// True when the capture layer produced these samples itself as silence to keep the timeline
+    /// continuous (for example WASAPI loopback, which delivers nothing while nothing plays), not the
+    /// device. Consumers that cannot cope with long exact-zero runs, such as a realtime recognizer,
+    /// can skip these frames without re-detecting zeros. Offsets and sequence numbers still count them.
+    /// </summary>
+    public bool IsSyntheticSilence { get; }
 
     /// <summary>Monotonic per-source counter; a gap means frames were lost upstream.</summary>
     public long SequenceNumber { get; }
@@ -44,10 +53,11 @@ public sealed class AudioFrame
         ReadOnlySpan<float> interleaved,
         AudioFormat format,
         long sequenceNumber,
-        long sampleOffset)
+        long sampleOffset,
+        bool isSyntheticSilence = false)
     {
         Validate(interleaved.Length, format, sequenceNumber, sampleOffset);
-        return new AudioFrame(interleaved.ToArray(), format with { SampleFormat = AudioSampleFormat.Float32 }, sequenceNumber, sampleOffset);
+        return new AudioFrame(interleaved.ToArray(), format with { SampleFormat = AudioSampleFormat.Float32 }, sequenceNumber, sampleOffset, isSyntheticSilence);
     }
 
     /// <summary>Creates a frame from little-endian PCM16 bytes, converting to float.</summary>
@@ -67,7 +77,7 @@ public sealed class AudioFrame
         AudioConversion.Pcm16ToFloat(pcm16, floats);
         var format = new AudioFormat(sampleRate, channels, AudioSampleFormat.Float32);
         Validate(floats.Length, format, sequenceNumber, sampleOffset);
-        return new AudioFrame(floats, format, sequenceNumber, sampleOffset);
+        return new AudioFrame(floats, format, sequenceNumber, sampleOffset, false);
     }
 
     private static void Validate(int sampleCount, AudioFormat format, long sequenceNumber, long sampleOffset)

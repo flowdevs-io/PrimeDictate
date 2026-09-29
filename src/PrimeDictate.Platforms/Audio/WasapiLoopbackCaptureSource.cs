@@ -314,13 +314,13 @@ public sealed class WasapiLoopbackCaptureSource : ISystemAudioSource
 
                 var perChannel = (int)(quiet.TotalSeconds * this.format.SampleRate);
                 this.lastDataTimestamp = now;
-                this.Publish(new float[perChannel * this.format.Channels]);
+                this.Publish(new float[perChannel * this.format.Channels], synthetic: true);
             }
         }
 
-        private void Publish(float[] samples)
+        private void Publish(float[] samples, bool synthetic = false)
         {
-            var frame = AudioFrame.CopyFrom(samples, this.format, this.sequence, this.sampleOffset);
+            var frame = AudioFrame.CopyFrom(samples, this.format, this.sequence, this.sampleOffset, synthetic);
             this.sampleOffset += frame.SamplesPerChannel;
             this.sequence++;
             if (!this.frames.Writer.TryWrite(frame))
