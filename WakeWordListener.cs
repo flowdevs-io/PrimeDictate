@@ -307,16 +307,26 @@ internal sealed class WakeWordListener : IAsyncDisposable
             return false;
         }
 
-        if (text.Contains(target, StringComparison.Ordinal))
+        var altText = text.Replace("okay", "ok", StringComparison.Ordinal);
+        var altTarget = target.Replace("okay", "ok", StringComparison.Ordinal);
+
+        if (text.Contains(target, StringComparison.Ordinal) ||
+            altText.Contains(target, StringComparison.Ordinal) ||
+            altText.Contains(altTarget, StringComparison.Ordinal) ||
+            text.Contains(altTarget, StringComparison.Ordinal))
         {
             return true;
         }
 
-        var altTarget = target.Replace("okay", "ok", StringComparison.Ordinal);
-        var altText = text.Replace("okay", "ok", StringComparison.Ordinal);
-        return altText.Contains(target, StringComparison.Ordinal) ||
-            altText.Contains(altTarget, StringComparison.Ordinal) ||
-            text.Contains(altTarget, StringComparison.Ordinal);
+        // Support thank you variants (thank you, thanks, thankyou, thank u)
+        var isTargetThankYouVariant = target == "thankyou" || target == "thanks" || target == "thank you" || target == "thank u";
+        var isTextThankYouVariant = text.Contains("thankyou") || text.Contains("thanks") || text.Contains("thank you") || text.Contains("thank u");
+        if (isTargetThankYouVariant && isTextThankYouVariant)
+        {
+            return true;
+        }
+
+        return false;
     }
 
     private static string NormalizeForMatch(string value)

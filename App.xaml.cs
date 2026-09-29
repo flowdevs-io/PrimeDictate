@@ -154,6 +154,11 @@ public partial class App : System.Windows.Application
         {
             this.QueueAutomaticUpdateCheck();
             this.SyncWakeWordListener();
+            if (e.Args.Any(arg => string.Equals(arg, "--show", StringComparison.OrdinalIgnoreCase) ||
+                                  string.Equals(arg, "--workspace", StringComparison.OrdinalIgnoreCase)))
+            {
+                this.ShowWorkspaceWindow();
+            }
         }
     }
 
