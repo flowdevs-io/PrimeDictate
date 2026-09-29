@@ -20,6 +20,8 @@ public sealed class App : Application
                 window.Opened += async (_, _) =>
                 {
                     await Task.Delay(1500);
+                    window.SelectFirstSession();
+                    await Task.Delay(1000);
                     await window.SaveScreenshotAsync(path);
                     desktop.Shutdown();
                 };
