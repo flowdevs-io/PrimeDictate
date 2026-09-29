@@ -232,6 +232,7 @@ public sealed partial class MainWindow : Window
         }
 
         this.host = newHost;
+        this.Timeline.SetOverlay(null);
         this.rows.Clear();
         this.rowsByLead.Clear();
         this.rowsById.Clear();
@@ -241,6 +242,29 @@ public sealed partial class MainWindow : Window
         }
 
         this.Refresh();
+        if (newHost is not null && this.live is null && this.workspace.LoadOverlay(newHost.Document.SessionId) is { } saved)
+        {
+            this.Timeline.SetOverlay(saved.MapTo(newHost.Document));
+        }
+    }
+
+    /// <summary>Redraws a finished meeting's speaker timeline from the whole-file diarizer, so overlapping speech shows.</summary>
+    private async Task RefineTimelineAsync(Guid sessionId)
+    {
+        var (overlay, reason) = await this.workspace.BuildOverlayAsync(sessionId, CancellationToken.None);
+        if (this.host is not { } current || current.Document.SessionId != sessionId)
+        {
+            return;
+        }
+
+        if (overlay is null)
+        {
+            current.AddNote($"Speaker timeline was not redrawn: {reason}");
+            return;
+        }
+
+        this.Timeline.SetOverlay(overlay.MapTo(current.Document));
+        current.AddNote($"Speaker timeline redrawn from the diarizer: {overlay.SpeakerCount} system speakers, {overlay.OverlapSeconds:0.#} s of overlapping speech.");
     }
 
     private void OnDocumentChanged(TranscriptDocument _)
@@ -732,6 +756,12 @@ public sealed partial class MainWindow : Window
         this.EndJob();
         this.Say(target?.Document.Status == TranscriptSessionStatus.Completed ? "Saved." : $"Stopped: {target?.Document.Status}. What was captured is kept.");
         await this.ReloadSessionsAsync(target?.Document.SessionId);
+        if (target is { Document.SourceType: TranscriptSourceType.Meeting } meeting && meeting.Document.Status == TranscriptSessionStatus.Completed)
+        {
+            this.Say("Saved. Redrawing the speaker timeline…");
+            await this.RunSafelyAsync(() => this.RefineTimelineAsync(meeting.Document.SessionId));
+            this.Say("Saved.");
+        }
     }
 
     private async Task DiscardRecordingAsync()
