@@ -20,6 +20,8 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
 {
     private const int BlockSamples = 1600;
 
+    private static readonly System.Text.RegularExpressions.Regex LanguageTag = new(@"^[a-z]{2,3}(-[A-Za-z]{2,4})?$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
     /// <summary>
     /// Exact-zero (or flagged synthetic) audio longer than this is not sent. NeMo-Speech.cpp issue #48: a long
     /// run of zero PCM with endpointing on wedges the stream. The audio stays in the saved recording; only the wire skips it.
@@ -80,7 +82,14 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
     public static async ValueTask<NemotronRealtimeSession> ConnectAsync(Uri baseAddress, string apiKey, bool diarize, CancellationToken cancellationToken, TimeSpan? stallTimeout = null, string? language = null)
     {
         var wanted = string.IsNullOrWhiteSpace(language) || language == "auto" ? null : language;
-        var session = new NemotronRealtimeSession(baseAddress, apiKey, diarize, stallTimeout ?? TimeSpan.FromSeconds(6), wanted);
+        // The worker accepts any string (even "xx-YY") and decodes as it likes, so the app checks the value itself.
+        string? invalidNote = null;
+        if (wanted is not null && !LanguageTag.IsMatch(wanted))
+        {
+            invalidNote = $"'{wanted}' is not a language tag like en-US, so the language is being auto-detected.";
+            wanted = null;
+        }
+        var session = new NemotronRealtimeSession(baseAddress, apiKey, diarize, stallTimeout ?? TimeSpan.FromSeconds(6), wanted) { StartupNotice = invalidNote };
         try
         {
             await session.OpenAsync(cancellationToken).ConfigureAwait(false);

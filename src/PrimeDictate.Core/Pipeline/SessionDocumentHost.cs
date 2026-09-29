@@ -10,6 +10,7 @@ namespace PrimeDictate.Core.Pipeline;
 public sealed class SessionDocumentHost
 {
     private readonly object sync = new();
+    private readonly object speakerSync = new();
     private readonly ITranscriptionSessionStore store;
     private readonly Func<DateTimeOffset> clock;
     private TranscriptDocument document;
@@ -59,11 +60,22 @@ public sealed class SessionDocumentHost
     /// </summary>
     public void EnsureSpeakers(IEnumerable<TranscriptSegment> segments)
     {
-        foreach (var id in segments.SelectMany(s => s.Speakers).Select(a => a.SpeakerId).Distinct())
+        lock (this.speakerSync)
         {
-            if (!this.Document.Speakers.Any(s => s.Id == id))
+            foreach (var id in segments.SelectMany(s => s.Speakers).Select(a => a.SpeakerId).Distinct())
             {
-                this.Apply(new SpeakerUpdated(this.Document.SessionId, new TranscriptSpeaker(id, $"Speaker {this.Document.Speakers.Count + 1}", null)));
+                if (!this.Document.Speakers.Any(s => s.Id == id))
+                {
+                    // In a meeting the microphone is "You" and undiarized system audio is "Remote"; the rest count up.
+                    var named = this.Document.Speakers.Count(s => s.Id is not ("local" or "remote"));
+                    var label = id switch
+                    {
+                        "local" => "You",
+                        "remote" => "Remote",
+                        _ => $"Speaker {named + 1}"
+                    };
+                    this.Apply(new SpeakerUpdated(this.Document.SessionId, new TranscriptSpeaker(id, label, null)));
+                }
             }
         }
     }

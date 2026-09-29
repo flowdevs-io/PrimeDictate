@@ -114,6 +114,106 @@ public sealed class LiveSourceTests : IDisposable
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
+    private sealed class FakeStream(bool diarize) : IStreamingRecognitionSession
+    {
+        private readonly Channel<StreamingUpdate> updates = Channel.CreateUnbounded<StreamingUpdate>();
+        private long voicedStart = -1;
+        private long voicedEnd;
+        private int committed;
+
+        public bool Diarize { get; } = diarize;
+
+        public bool Disposed { get; private set; }
+
+        public long VoicedSamples { get; private set; }
+
+        public ValueTask WriteAsync(AudioFrame frame, CancellationToken cancellationToken)
+        {
+            foreach (var x in frame.Samples.Span)
+            {
+                if (Math.Abs(x) > 0.01f)
+                {
+                    this.VoicedSamples++;
+                }
+            }
+
+            if (frame.Samples.Span.ToArray().Any(x => Math.Abs(x) > 0.01f))
+            {
+                if (this.voicedStart < 0)
+                {
+                    this.voicedStart = frame.SampleOffset;
+                }
+
+                this.voicedEnd = frame.EndSampleOffset;
+            }
+
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask CommitAsync(CancellationToken cancellationToken)
+        {
+            if (this.voicedStart >= 0)
+            {
+                var segment = new RecognizedSegment(
+                    TimeSpan.FromSeconds(this.voicedStart / 16_000d),
+                    TimeSpan.FromSeconds(this.voicedEnd / 16_000d),
+                    this.Diarize ? "remote talk" : "hello from mic",
+                    null,
+                    null,
+                    this.Diarize ? "speaker-1" : null,
+                    TimingProvenance.ApproximateChunk);
+                this.updates.Writer.TryWrite(new StreamingUpdate($"{this.committed++}.0", segment, true));
+                this.voicedStart = -1;
+            }
+
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask CompleteAsync(CancellationToken cancellationToken)
+        {
+            this.updates.Writer.TryComplete();
+            return ValueTask.CompletedTask;
+        }
+
+        public IAsyncEnumerable<StreamingUpdate> ReadUpdatesAsync(CancellationToken cancellationToken) => this.updates.Reader.ReadAllAsync(cancellationToken);
+
+        public ValueTask DisposeAsync()
+        {
+            this.Disposed = true;
+            this.updates.Writer.TryComplete();
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class FakeStreamProvider(int failOnCall = 0) : ITranscriptionProvider
+    {
+        private int calls;
+
+        public List<FakeStream> Streams { get; } = [];
+
+        public string ModelId => "fake:stream";
+
+        public TranscriptionProviderCapabilities Capabilities { get; } = new(true, LiveRecognitionMode.NativeStreaming, TimingCapabilities.SegmentTimestamps, true, 8, TimeSpan.FromSeconds(30), ["en"], 16_000);
+
+        public EffectiveRuntime Runtime { get; } = new("fake", "1", "cpu", "cpu", null);
+
+        public ValueTask<IReadOnlyList<RecognizedSegment>> RecognizeWindowAsync(ReadOnlyMemory<float> samples, string? language, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public ValueTask<IStreamingRecognitionSession> StartStreamingAsync(string? language, bool diarize, CancellationToken cancellationToken)
+        {
+            if (++this.calls == failOnCall)
+            {
+                throw new InvalidOperationException("worker busy");
+            }
+
+            var stream = new FakeStream(diarize);
+            this.Streams.Add(stream);
+            return ValueTask.FromResult<IStreamingRecognitionSession>(stream);
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
     private sealed class Consumer : IMicrophoneConsumer
     {
         public string Name => "wake word";
@@ -194,6 +294,72 @@ public sealed class LiveSourceTests : IDisposable
         Assert.NotEmpty(session.Host!.Document.ActiveSegments);
         var wav = Assert.Single(session.Host.Document.Audio);
         Assert.True(new FileInfo(wav.Path).Length >= 60 * 16_000 * 2, "recording lost samples");
+    }
+
+    private async Task<(TranscriptDocument Doc, FakeStreamProvider Provider)> RunMeetingAsync(FakeStreamProvider provider)
+    {
+        // Left (microphone) talks 0-2 s, right (system audio) talks 1-3 s, so they overlap for a second; then silence.
+        var frames = 6 * 16_000;
+        var data = new float[frames * 2];
+        for (var i = 0; i < frames; i++)
+        {
+            var t = i / 16_000d;
+            data[2 * i] = t < 2 ? 0.3f * MathF.Sin(i * 0.05f) : 0f;
+            data[(2 * i) + 1] = t is >= 1 and < 3 ? 0.3f * MathF.Sin(i * 0.07f) : 0f;
+        }
+
+        await using var store = SqliteTranscriptionSessionStore.Create(new AppDataPaths(this.root));
+        await store.InitializeAsync(default);
+        var options = new LiveSessionOptions(
+            new TranscriptionSessionOptions("fake:stream", null, "cpu", "en-US", null, AudioRetention.KeepAudio, DownmixMode.Average, null, null, null),
+            "t", store.GetSessionMediaDirectory, TimeSpan.FromSeconds(60), null, TranscriptSourceType.Meeting);
+        await using var session = new LiveTranscriptionSession(new FakeSource(2, data), provider, new MicrophoneCoordinator(), new ModelLeaseScheduler(), store, options);
+        await session.StartAsync(default);
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        while (session.Elapsed < TimeSpan.FromSeconds(5.9) && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+        }
+
+        await session.StopAsync(default);
+        return (session.Host!.Document, provider);
+    }
+
+    [Fact]
+    public async Task Meetings_run_the_microphone_and_system_audio_as_separate_streams_that_overlap_in_time()
+    {
+        var (doc, provider) = await this.RunMeetingAsync(new FakeStreamProvider());
+
+        Assert.Equal(2, provider.Streams.Count);
+        Assert.False(provider.Streams[0].Diarize); // microphone: one local person, no diarization needed
+        Assert.True(provider.Streams[1].Diarize);  // system audio: remote people, speaker detection on
+        // Each stream heard only its own channel (about 2 s of speech each), not the 3 s blended mix.
+        Assert.InRange(provider.Streams[0].VoicedSamples, 30_000, 36_000);
+        Assert.InRange(provider.Streams[1].VoicedSamples, 30_000, 36_000);
+
+        var lines = doc.ActiveSegments.ToList();
+        var you = Assert.Single(lines, l => l.Speakers[0].SpeakerId == "local");
+        var remote = Assert.Single(lines, l => l.Speakers[0].SpeakerId == "speaker-1");
+        Assert.Equal("hello from mic", you.RawText);
+        Assert.Equal("remote talk", remote.RawText);
+        Assert.True(you.Start < remote.End && remote.Start < you.End, "the two rows overlap in time");
+        Assert.Equal("You", doc.Speakers.Single(s => s.Id == "local").Name);
+        Assert.Equal("Speaker 1", doc.Speakers.Single(s => s.Id == "speaker-1").Name);
+        Assert.Contains(doc.Notes, n => n.Contains("two separate streams"));
+    }
+
+    [Fact]
+    public async Task Meetings_fall_back_to_one_mixed_stream_when_a_second_stream_cannot_open()
+    {
+        var (doc, provider) = await this.RunMeetingAsync(new FakeStreamProvider(failOnCall: 2));
+
+        Assert.True(provider.Streams[0].Disposed); // the microphone stream that was opened first is released
+        Assert.True(provider.Streams[1].Diarize);  // the single mixed stream
+        Assert.Equal(2, provider.Streams.Count);
+        Assert.Contains(doc.Notes, n => n.Contains("could not be opened"));
+        Assert.Contains(doc.ActiveSegments, l => l.RawText == "remote talk");
+        // The mixed stream carries the blend of both channels: about 3 s of speech.
+        Assert.InRange(provider.Streams[1].VoicedSamples, 44_000, 52_000);
     }
 
     [Fact]
