@@ -168,6 +168,25 @@ Caveat: one early script variant saw no events after resuming from a pause. It d
 with a corrected script across three configurations (first 11 s or 1 s, gap 6 s, second 1 s or 5 s), so it is treated as
 a test-script error; a resumed send of the full 11 s clip was not re-run.
 
+### N-cuda. CUDA build on the RTX 5070 (Windows)
+
+CUDA Toolkit 13.4 was installed with `winget install Nvidia.CUDA` (beside 12.3, which cannot target
+Blackwell), and the same pinned commit was built with
+`build.ps1 -Backend cuda -Http -AsrOnly -CudaArch 120` (232 build steps). Driver 591.86.
+
+- `serve --device cuda:0` loads (`backend=CUDA0`, ready in 4.1 s) with the ASR and diarization models.
+  Peak host memory 875 MB, about 6 GB of GPU memory in use.
+- `nemo-speech.exe` exits with `0xC0000135` (DLL not found) unless the CUDA 13 `bind` folder is on
+  `PATH`; a shell opened before the install does not have it. The app must set `PATH` for the worker
+  or ship the cuBLAS DLLs beside it.
+- Offline speed, same clips as the CPU run: JFK (11 s) 0.07 s (CPU 1.7 s); AMI 60 s with diarization
+  1.0 s (CPU 33.3 s). Speaker word counts were identical (63, 48, 15).
+- Realtime is bounded by the audio rate, so latency changed little: first partial at the same point
+  and `completed` about 0.5 s after commit.
+- Vulkan on the same machine still aborts (`GGML_ASSERT(ne3 == ne13)`); it is the open upstream issue
+  NVIDIA/NeMo-Speech.cpp#48, and the pin is upstream's newest commit.
+- `NemotronWorker.cs` starts the worker with `--device cpu`; using the GPU needs a setting there.
+
 ### Nemotron blockers
 
 - **Model files.** `huggingface.co` is denied by this environment's network policy, so neither

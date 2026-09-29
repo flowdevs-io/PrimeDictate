@@ -8,6 +8,7 @@ using Avalonia.Interactivity;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using PrimeDictate.Core.Collections;
 using PrimeDictate.Core.Coordination;
 using PrimeDictate.Core.Export;
 using PrimeDictate.Core.Pipeline;
@@ -286,28 +287,8 @@ public sealed partial class MainWindow : Window
         }
 
         // Only touch the collection when membership or order changed, so a row being edited keeps focus.
-        if (!this.rows.SequenceEqual(visible))
-        {
-            for (var i = this.rows.Count - 1; i >= 0; i--)
-            {
-                if (!visible.Contains(this.rows[i]))
-                {
-                    this.rows.RemoveAt(i);
-                }
-            }
-
-            for (var i = 0; i < visible.Count; i++)
-            {
-                if (i >= this.rows.Count)
-                {
-                    this.rows.Add(visible[i]);
-                }
-                else if (!ReferenceEquals(this.rows[i], visible[i]))
-                {
-                    this.rows.Insert(i, visible[i]);
-                }
-            }
-        }
+        // Lines from the two meeting streams arrive out of order, so rows also have to move, not only be added.
+        ListReconciler.Reconcile(this.rows, visible);
 
         this.RefreshBackendBadge(document);
         this.RefreshSpeakers(document);

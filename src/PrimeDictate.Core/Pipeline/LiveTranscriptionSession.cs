@@ -664,6 +664,48 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         }
     }
 
+    private int echoNoted;
+
+    /// <summary>
+    /// The microphone hears the speakers, so the same words come out of both streams. A microphone line whose words
+    /// mostly repeat an overlapping system-audio line is hidden (its text is emptied as an edit, the recognized text is
+    /// kept and can be restored). Checked both ways because either stream can finish first.
+    /// </summary>
+    private void HideMicrophoneEchoes(SessionDocumentHost host, bool isMicrophone, List<TranscriptSegment> justFinalized)
+    {
+        var document = host.Document;
+        IEnumerable<TranscriptSegment> Finals(string prefix) => document.ActiveSegments.Where(s => s.State == SegmentState.Final && s.Id.StartsWith(prefix, StringComparison.Ordinal));
+        var hidden = 0;
+        if (isMicrophone)
+        {
+            var system = Finals("us").ToList();
+            foreach (var mic in justFinalized)
+            {
+                if (system.Any(s => EchoMatcher.Overlaps(mic.Start, mic.End, s.Start, s.End) && EchoMatcher.Repeats(mic.RawText, s.RawText)))
+                {
+                    host.Edit(mic.Id, string.Empty);
+                    hidden++;
+                }
+            }
+        }
+        else
+        {
+            foreach (var mic in Finals("um").Where(m => m.DisplayText.Length > 0))
+            {
+                if (justFinalized.Any(s => EchoMatcher.Overlaps(mic.Start, mic.End, s.Start, s.End) && EchoMatcher.Repeats(mic.RawText, s.RawText)))
+                {
+                    host.Edit(mic.Id, string.Empty);
+                    hidden++;
+                }
+            }
+        }
+
+        if (hidden > 0 && Interlocked.Exchange(ref this.echoNoted, 1) == 0)
+        {
+            host.AddNote("Microphone lines that repeat what the system audio just said (the microphone hears the speakers) are hidden. The recognized text is kept in the session.");
+        }
+    }
+
     private async Task ReadUpdatesAsync(StreamPipe pipe, SessionDocumentHost host, Guid sessionId)
     {
         try
@@ -697,6 +739,11 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
 
                 if (update.IsFinal)
                 {
+                    if (pipe.Prefix.Length > 0)
+                    {
+                        this.HideMicrophoneEchoes(host, pipe.ForcedSpeaker == "local", mapped);
+                    }
+
                     await host.CheckpointAsync(CancellationToken.None).ConfigureAwait(false);
                 }
             }
