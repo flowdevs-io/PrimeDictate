@@ -165,8 +165,9 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         Task.Run(() => this.runner.RunAsync(host, request, this.decoder, this.Provider(model), progress, cancellationToken), CancellationToken.None);
 
     /// <param name="deviceId">Microphone device; for <see cref="TranscriptSourceType.SystemAudio"/> it is the output device (null is the default output).</param>
+    /// <param name="autoGain">Lift quiet system audio before recognition (never changes the saved recording).</param>
     /// <param name="systemDeviceId">Output device for <see cref="TranscriptSourceType.Meeting"/>; null is the default output.</param>
-    public async Task<LiveTranscriptionSession> StartLiveAsync(InstalledWhisperModel model, string? deviceId, AudioRetention retention, string title, CancellationToken cancellationToken, TranscriptSourceType source = TranscriptSourceType.Microphone, string? systemDeviceId = null)
+    public async Task<LiveTranscriptionSession> StartLiveAsync(InstalledWhisperModel model, string? deviceId, AudioRetention retention, string title, CancellationToken cancellationToken, TranscriptSourceType source = TranscriptSourceType.Microphone, string? systemDeviceId = null, bool autoGain = true)
     {
         var captureSource = this.SourceFor(source, systemDeviceId);
 
@@ -181,7 +182,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
             this.microphone,
             this.scheduler,
             this.store,
-            new LiveSessionOptions(Options(model, deviceId, retention), title, this.store.GetSessionMediaDirectory, LiveSessionOptions.DefaultPreviewInterval, null, source));
+            new LiveSessionOptions(Options(model, deviceId, retention), title, this.store.GetSessionMediaDirectory, LiveSessionOptions.DefaultPreviewInterval, null, source, autoGain));
         await session.StartAsync(cancellationToken).ConfigureAwait(false);
         this.live = session;
         return session;

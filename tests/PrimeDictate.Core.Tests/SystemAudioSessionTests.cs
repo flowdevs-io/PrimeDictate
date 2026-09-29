@@ -109,4 +109,79 @@ public sealed class SystemAudioSessionTests : IDisposable
         Assert.Equal(44 + 32_000, new FileInfo(path).Length);
         Assert.Equal(32_000u, BitConverter.ToUInt32(File.ReadAllBytes(path), 40));
     }
+
+    private async Task<(int Segments, float[] Saved)> RunQuietAsync(bool autoGain)
+    {
+        var lease = new CombinedAudioSourceTests.FakeLease(16_000, "speakers");
+        await using var store = SqliteTranscriptionSessionStore.Create(new AppDataPaths(Path.Combine(this.root, autoGain ? "on" : "off")));
+        await store.InitializeAsync(default);
+        var options = new LiveSessionOptions(
+            new TranscriptionSessionOptions("fake:model", null, "cpu", "en", null, AudioRetention.KeepAudio, DownmixMode.Average, null, null, null),
+            "t", store.GetSessionMediaDirectory, TimeSpan.FromSeconds(1), null, TranscriptSourceType.SystemAudio, autoGain);
+        await using var session = new LiveTranscriptionSession(new Device(lease), new Provider(), new MicrophoneCoordinator(), new ModelLeaseScheduler(), store, options);
+        await session.StartAsync(default);
+        for (var i = 0; i < 300; i++)
+        {
+            lease.PushSine(0.008f, 160); // RMS about 0.0057: below the speech threshold, above the gain gate
+        }
+
+        lease.Push(0f, 16_000);
+        await Task.Delay(1000);
+        await session.StopAsync(default);
+        var saved = new List<float>();
+        await foreach (var f in new WavAudioDecoder().DecodeAsync(Assert.Single(session.Host!.Document.Audio).Path, 0, default))
+        {
+            saved.AddRange(f.Samples.ToArray());
+        }
+
+        return (session.Host.Document.ActiveSegments.Count(), saved.ToArray());
+    }
+
+    [Fact]
+    public async Task Quiet_system_audio_is_transcribed_with_auto_gain_and_the_saved_file_is_untouched()
+    {
+        var off = await this.RunQuietAsync(autoGain: false);
+        var on = await this.RunQuietAsync(autoGain: true);
+
+        Assert.Equal(0, off.Segments);
+        Assert.True(on.Segments > 0);
+        // Saved recording is as captured either way (16-bit rounding aside).
+        Assert.InRange(on.Saved.Max(Math.Abs), 0.0075f, 0.0085f);
+        Assert.Equal(off.Saved.Length, on.Saved.Length);
+    }
+
+    [Fact]
+    public void Auto_gain_lifts_quiet_speech_keeps_silence_silent_and_never_clips()
+    {
+        var gain = new AutoGain();
+        var quiet = new float[16_000 * 3];
+        for (var i = 0; i < quiet.Length; i++)
+        {
+            quiet[i] = 0.008f * MathF.Sin(i * 0.3f);
+        }
+
+        var lifted = gain.Process(quiet);
+        var tail = lifted.AsSpan(lifted.Length - 8_000);
+        var rms = MathF.Sqrt(tail.ToArray().Select(v => v * v).Average());
+        Assert.InRange(rms, 0.07f, 0.13f);
+        Assert.All(gain.Process(new float[16_000]), v => Assert.Equal(0f, v));
+        Assert.All(new AutoGain(new AutoGainOptions { MaxGain = 30f }).Process(quiet.Select(v => v * 500).ToArray()), v => Assert.InRange(v, -1f, 1f));
+        Assert.Equal(0.5f, AutoGain.Limit(0.5f));
+    }
+
+    [Fact]
+    public void Auto_gain_does_not_lift_noise_below_the_gate_and_respects_the_ceiling()
+    {
+        var gain = new AutoGain(new AutoGainOptions { MaxGain = 4f });
+        var noise = new float[16_000 * 2];
+        for (var i = 0; i < noise.Length; i++)
+        {
+            noise[i] = 0.002f * MathF.Sin(i * 0.7f);
+        }
+
+        Assert.Equal(noise.Max(), gain.Process(noise).Max(), 4);
+        var quiet = noise.Select(v => v * 4).ToArray(); // above the gate, needs far more than 4x
+        gain.Process(quiet);
+        Assert.InRange(gain.CurrentGain, 1f, 4.01f);
+    }
 }

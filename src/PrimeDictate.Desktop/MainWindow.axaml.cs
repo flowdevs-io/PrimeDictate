@@ -449,6 +449,7 @@ public sealed partial class MainWindow : Window
         this.ImportButton.IsEnabled = !active;
         this.RecordButton.IsEnabled = !active && this.workspace.CanRecord;
         this.SourceBox.IsEnabled = !active;
+        this.AutoGainBox.IsEnabled = !active;
         this.StopButton.IsVisible = active && canStop;
         this.StopButton.Content = this.live is null ? "Cancel" : "Stop";
         this.ModelBox.IsEnabled = !active;
@@ -483,7 +484,7 @@ public sealed partial class MainWindow : Window
                 TranscriptSourceType.Meeting => "microphone and system audio",
                 _ => "microphone"
             };
-            this.live = await this.workspace.StartLiveAsync(model, null, AudioRetention.KeepAudio, $"{(mode == TranscriptSourceType.Microphone ? "Recording" : "Meeting")} {DateTime.Now:g}", CancellationToken.None, mode);
+            this.live = await this.workspace.StartLiveAsync(model, null, AudioRetention.KeepAudio, $"{(mode == TranscriptSourceType.Microphone ? "Recording" : "Meeting")} {DateTime.Now:g}", CancellationToken.None, mode, null, this.AutoGainBox.IsChecked == true);
             this.recordingLabel = label;
             this.RecordingIndicator.Text = "● Recording " + label;
             this.RecordingIndicator.IsVisible = true;

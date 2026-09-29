@@ -35,6 +35,22 @@ public class CombinedAudioSourceTests
             this.offset += samples;
         }
 
+        public void PushSine(float amplitude, int samples)
+        {
+            var data = new float[samples * this.Format.Channels];
+            for (var i = 0; i < samples; i++)
+            {
+                var v = amplitude * MathF.Sin((this.offset + i) * 0.3f);
+                for (var c = 0; c < this.Format.Channels; c++)
+                {
+                    data[(i * this.Format.Channels) + c] = v;
+                }
+            }
+
+            this.frames.Writer.TryWrite(AudioFrame.CopyFrom(data, this.Format, this.sequence++, this.offset));
+            this.offset += samples;
+        }
+
         public void Complete() => this.frames.Writer.TryComplete();
 
         public IAsyncEnumerable<AudioFrame> ReadFramesAsync(CancellationToken cancellationToken) =>

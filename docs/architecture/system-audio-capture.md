@@ -87,3 +87,14 @@ The picker maps to `TranscriptSourceType` (Microphone, SystemAudio, Meeting) and
 lease. `LiveTranscriptionSession` (main thread's change) keeps a stereo file for meetings and reads
 channel 0 as the microphone and channel 1 as system audio. `CombinedMeetingTests` proves that order
 end to end. Not built: an output-device picker, per-app capture, and following default-output changes.
+
+## Boost quiet audio (auto gain)
+
+`AutoGain` (Core) lifts quiet audio toward about -20 dBFS RMS before recognition, in system-only and
+meeting sessions, on by default (checkbox "Boost quiet audio for recognition"). It runs per channel:
+the system channel can gain up to 30x, the meeting microphone only 4x so room noise is not amplified
+into "speech". Blocks below about -48 dBFS never raise the gain, gain is never below 1, and a soft
+limiter keeps peaks under full scale. It feeds recognition only: the saved recording stays as captured
+(so playback is honest and gain can be retuned), which also means a rerun of a saved quiet meeting
+does not get the boost yet. Unrelated to Windows communications ducking, which lowers what you hear
+and may lower what loopback captures; it is set in Windows Sound settings, Communications tab.

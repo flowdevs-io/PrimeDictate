@@ -15,7 +15,9 @@ public sealed record LiveSessionOptions(
     /// <summary>How often a still-growing utterance is re-recognized for the provisional preview.</summary>
     TimeSpan PreviewInterval,
     UtteranceDetectorOptions? Detector = null,
-    TranscriptSourceType Source = TranscriptSourceType.Microphone)
+    TranscriptSourceType Source = TranscriptSourceType.Microphone,
+    /// <summary>Normalizes quiet audio before recognition (system audio and meetings only). The saved recording is never changed.</summary>
+    bool AutoGain = true)
 {
     public static readonly TimeSpan DefaultPreviewInterval = TimeSpan.FromSeconds(1.5);
 }
@@ -60,6 +62,8 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
     private int stopped;
     private long backlogSamples;
     private long samplesSinceFlush;
+    private AutoGain? gainLeft;
+    private AutoGain? gainRight;
 
     public LiveTranscriptionSession(
         IAudioSource audioSource,
@@ -328,6 +332,14 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         var lease = this.capture!;
         var resampler = new StreamingResampler(lease.Format.SampleRate, AudioFormat.SpeechTimeline.SampleRate);
         var rightResampler = this.keepStereo ? new StreamingResampler(lease.Format.SampleRate, AudioFormat.SpeechTimeline.SampleRate) : null;
+        if (this.options.AutoGain && this.options.Source != TranscriptSourceType.Microphone)
+        {
+            // Left is the microphone in a meeting: a low ceiling, since room noise must not be amplified into speech.
+            var systemGain = new AutoGainOptions();
+            this.gainLeft = new AutoGain(this.options.Source == TranscriptSourceType.Meeting ? systemGain with { MaxGain = 4f } : systemGain);
+            this.gainRight = this.keepStereo ? new AutoGain(systemGain) : null;
+        }
+
         long expectedSequence = 0;
         try
         {
@@ -359,7 +371,7 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
                 }
 
                 var mono = AudioConversion.DownmixToMono(frame.Samples.Span, frame.Format.Channels);
-                await this.PublishAsync(resampler.Process(mono)).ConfigureAwait(false);
+                await this.PublishMonoAsync(resampler.Process(mono)).ConfigureAwait(false);
             }
 
             if (rightResampler is not null)
@@ -368,7 +380,7 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
             }
             else
             {
-                await this.PublishAsync(resampler.Flush()).ConfigureAwait(false);
+                await this.PublishMonoAsync(resampler.Flush()).ConfigureAwait(false);
             }
         }
         catch (AudioSourceException ex)
@@ -394,6 +406,9 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         }
     }
 
+    private Task PublishMonoAsync(float[] samples) =>
+        this.gainLeft is null ? this.PublishAsync(samples) : this.PublishAsync(this.gainLeft.Process(samples), samples);
+
     private Task PublishStereoAsync(float[] left, float[] right)
     {
         var count = Math.Min(left.Length, right.Length);
@@ -404,6 +419,18 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
             interleaved[2 * i] = left[i];
             interleaved[(2 * i) + 1] = right[i];
             mono[i] = (left[i] + right[i]) * 0.5f;
+        }
+
+        if (this.gainLeft is not null && this.gainRight is not null)
+        {
+            // Per channel, so a quiet remote side is lifted without lifting the microphone. The sum keeps
+            // one speaker at full level, and the limiter handles both talking at once.
+            var l = this.gainLeft.Process(left.AsSpan(0, count));
+            var r = this.gainRight.Process(right.AsSpan(0, count));
+            for (var i = 0; i < count; i++)
+            {
+                mono[i] = AutoGain.Limit(l[i] + r[i]);
+            }
         }
 
         return this.PublishAsync(mono, interleaved);
@@ -433,7 +460,7 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         }
 
         var peak = 0f;
-        foreach (var s in samples)
+        foreach (var s in fileSamples ?? samples)
         {
             peak = Math.Max(peak, Math.Abs(s));
         }
