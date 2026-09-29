@@ -22,7 +22,7 @@ After install, users open PrimeDictate and choose a model in first-run setup or 
 
 ## Prerequisites (maintainer)
 
-- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) (version pinned in `global.json`)
 
 ## Build
 
