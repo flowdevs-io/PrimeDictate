@@ -185,7 +185,7 @@ public sealed partial class MainWindow : Window
                     this.rowsById[segment.Id] = row;
                 }
 
-                row.Update(segment);
+                row.Update(segment, document.Speakers);
                 if (string.IsNullOrEmpty(search) || row.Text.Contains(search, StringComparison.OrdinalIgnoreCase))
                 {
                     visible.Add(row);
@@ -217,6 +217,7 @@ public sealed partial class MainWindow : Window
             }
         }
 
+        this.RefreshSpeakers(document);
         var has = document is not null && document.ActiveSegments.Any();
         this.EmptyText.IsVisible = this.rows.Count == 0;
         this.CopyButton.IsEnabled = has;
@@ -234,6 +235,65 @@ public sealed partial class MainWindow : Window
         if (this.live is { } session)
         {
             this.LevelText.Text = $"Recorded {(int)session.Elapsed.TotalMinutes}:{session.Elapsed.Seconds:00}" + (session.Backlog > TimeSpan.FromSeconds(5) ? $" · model is {session.Backlog.TotalSeconds:0}s behind" : string.Empty);
+        }
+    }
+
+    private readonly Dictionary<string, TextBox> speakerBoxes = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// One editable name per detected speaker, usable while a live recording runs. A rename only
+    /// changes the name mapping, so every segment keeps its speaker id.
+    /// </summary>
+    private void RefreshSpeakers(TranscriptDocument? document)
+    {
+        var speakers = document?.Speakers ?? [];
+        this.SpeakersPanel.IsVisible = speakers.Count > 0;
+        if (!speakers.Select(s => s.Id).SequenceEqual(this.speakerBoxes.Keys))
+        {
+            this.speakerBoxes.Clear();
+            this.SpeakerBoxes.Children.Clear();
+            foreach (var speaker in speakers)
+            {
+                var box = new TextBox { Width = 140, Tag = speaker.Id, PlaceholderText = speaker.DefaultLabel, Text = speaker.DisplayName ?? string.Empty };
+                box.LostFocus += (_, _) => this.CommitSpeakerName(box);
+                box.KeyDown += (_, e) =>
+                {
+                    if (e.Key == Key.Enter)
+                    {
+                        this.CommitSpeakerName(box);
+                        this.TranscriptList.Focus();
+                    }
+                };
+                this.speakerBoxes[speaker.Id] = box;
+                this.SpeakerBoxes.Children.Add(box);
+            }
+
+            return;
+        }
+
+        foreach (var speaker in speakers)
+        {
+            var box = this.speakerBoxes[speaker.Id];
+            if (!box.IsFocused)
+            {
+                box.Text = speaker.DisplayName ?? string.Empty;
+            }
+        }
+    }
+
+    private void CommitSpeakerName(TextBox box)
+    {
+        if (this.host is null || box.Tag is not string id)
+        {
+            return;
+        }
+
+        var current = this.host.Document.Speakers.FirstOrDefault(s => s.Id == id)?.DisplayName ?? string.Empty;
+        var name = box.Text?.Trim() ?? string.Empty;
+        if (name != current)
+        {
+            this.host.RenameSpeaker(id, name);
+            _ = this.host.CheckpointAsync().AsTask();
         }
     }
 
