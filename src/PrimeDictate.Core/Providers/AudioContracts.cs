@@ -8,7 +8,10 @@ public enum AudioSourceErrorKind
     DeviceRemoved = 1,
     DeviceChanged = 2,
     FormatUnsupported = 3,
-    Unknown = 4
+    Unknown = 4,
+
+    /// <summary>This platform has no implementation of the requested source (for example system audio on macOS).</summary>
+    NotSupported = 5
 }
 
 public sealed class AudioSourceException(AudioSourceErrorKind kind, string message, Exception? inner = null)
@@ -38,7 +41,22 @@ public interface IAudioCaptureLease : IAsyncDisposable
     ValueTask ResumeAsync(CancellationToken cancellationToken);
 }
 
-public sealed record AudioInputDevice(string Id, string Name, bool IsDefault);
+public enum AudioDeviceKind
+{
+    Microphone = 0,
+
+    /// <summary>An output endpoint whose playback is captured (WASAPI loopback, PulseAudio monitor).</summary>
+    SystemAudio = 1
+}
+
+public sealed record AudioInputDevice(string Id, string Name, bool IsDefault, AudioDeviceKind Kind = AudioDeviceKind.Microphone);
+
+/// <summary>
+/// Captures what the computer is playing (speakers or headphones), so remote participants of a call
+/// can be transcribed. Devices are output endpoints. Sources must only start on an explicit user
+/// action, must never persist capture across sessions, and never send audio off the device.
+/// </summary>
+public interface ISystemAudioSource : IAudioSource;
 
 public interface IAudioSource
 {

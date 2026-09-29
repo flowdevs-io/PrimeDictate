@@ -67,6 +67,8 @@ public sealed partial class MainWindow : Window
         };
 
         this.ImportButton.Click += async (_, _) => await this.RunSafelyAsync(() => this.PickFileAsync());
+        this.SourceBox.ItemsSource = new[] { "Microphone", "System audio (speakers)", "Microphone + system audio" };
+        this.SourceBox.SelectedIndex = 0;
         this.RecordButton.Click += async (_, _) => await this.RunSafelyAsync(() => this.StartRecordingAsync());
         this.PauseButton.Click += async (_, _) => await this.RunSafelyAsync(() => this.TogglePauseAsync());
         this.StopButton.Click += async (_, _) => await this.RunSafelyAsync(() => this.StopRecordingAsync());
@@ -173,9 +175,14 @@ public sealed partial class MainWindow : Window
                 notes.Add("ffmpeg was not found, so only WAV files can be imported.");
             }
 
-            if (!this.workspace.CanRecord)
+            if (!this.workspace.CanRecordMicrophone)
             {
                 notes.Add("Microphone recording is unavailable: " + this.workspace.MicrophoneUnavailableReason);
+            }
+
+            if (!this.workspace.CanRecordSystemAudio)
+            {
+                notes.Add(this.workspace.SystemAudioUnavailableReason ?? "System audio capture is unavailable.");
             }
 
             this.RecordButton.IsEnabled = this.workspace.CanRecord && this.models.Count > 0;
@@ -616,6 +623,8 @@ public sealed partial class MainWindow : Window
         this.Progress.IsIndeterminate = active;
         this.ImportButton.IsEnabled = !active;
         this.RecordButton.IsEnabled = !active && this.workspace.CanRecord;
+        this.SourceBox.IsEnabled = !active;
+        this.AutoGainBox.IsEnabled = !active;
         this.StopButton.IsVisible = active && canStop;
         this.StopButton.Content = this.live is null ? "Cancel" : "Stop";
         this.ModelBox.IsEnabled = !active;
@@ -628,8 +637,11 @@ public sealed partial class MainWindow : Window
         this.SetJobUi(active: false, canStop: false);
         this.PauseButton.IsVisible = false;
         this.DiscardButton.IsVisible = false;
+        this.RecordingIndicator.IsVisible = false;
         this.Refresh();
     }
+
+    private string recordingLabel = "microphone";
 
     private async Task StartRecordingAsync()
     {
@@ -640,7 +652,17 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            this.live = await this.workspace.StartLiveAsync(model, null, AudioRetention.KeepAudio, $"Recording {DateTime.Now:g}", CancellationToken.None);
+            var mode = this.SourceBox.SelectedIndex switch { 1 => TranscriptSourceType.SystemAudio, 2 => TranscriptSourceType.Meeting, _ => TranscriptSourceType.Microphone };
+            var label = mode switch
+            {
+                TranscriptSourceType.SystemAudio => "system audio",
+                TranscriptSourceType.Meeting => "microphone and system audio",
+                _ => "microphone"
+            };
+            this.live = await this.workspace.StartLiveAsync(model, null, AudioRetention.KeepAudio, $"{(mode == TranscriptSourceType.Microphone ? "Recording" : "Meeting")} {DateTime.Now:g}", CancellationToken.None, mode, null, this.AutoGainBox.IsChecked == true);
+            this.recordingLabel = label;
+            this.RecordingIndicator.Text = "● Recording " + label;
+            this.RecordingIndicator.IsVisible = true;
             this.live.Error += this.Say;
             this.live.LevelChanged += level => Dispatcher.UIThread.Post(() => this.LevelText.Text = $"Level {new string('█', (int)Math.Min(20, level * 60))}");
             this.jobCancel = new CancellationTokenSource();
@@ -661,7 +683,12 @@ public sealed partial class MainWindow : Window
         }
         catch (AudioSourceException ex)
         {
-            this.Say(ex.Kind == AudioSourceErrorKind.PermissionDenied ? "Microphone access was denied. Allow it in your system privacy settings." : "Microphone problem: " + ex.Message);
+            this.Say(ex.Kind switch
+            {
+                AudioSourceErrorKind.PermissionDenied => "Audio access was denied. Allow it in your system privacy settings.",
+                AudioSourceErrorKind.NotSupported => ex.Message,
+                _ => "Audio problem: " + ex.Message
+            });
         }
     }
 
@@ -676,12 +703,14 @@ public sealed partial class MainWindow : Window
         {
             await session.ResumeAsync(CancellationToken.None);
             this.PauseButton.Content = "Pause";
+            this.RecordingIndicator.Text = "● Recording " + this.recordingLabel;
             this.Say("Recording.");
         }
         else
         {
             await session.PauseAsync(CancellationToken.None);
             this.PauseButton.Content = "Resume";
+            this.RecordingIndicator.Text = "Ⅱ Paused, not recording";
             this.Say("Paused. Nothing is being recorded.");
         }
     }
