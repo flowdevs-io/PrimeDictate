@@ -89,6 +89,25 @@ public sealed class LiveSourceTests : IDisposable
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
+    private sealed class GatedProvider(TaskCompletionSource gate) : ITranscriptionProvider
+    {
+        public string ModelId => "fake:model";
+
+        public TranscriptionProviderCapabilities Capabilities { get; } = new(true, LiveRecognitionMode.BufferedWindows, TimingCapabilities.SegmentTimestamps, false, null, TimeSpan.FromSeconds(30), ["en"], 16_000);
+
+        public EffectiveRuntime Runtime { get; } = new("fake", "1", "cpu", "cpu", null);
+
+        public async ValueTask<IReadOnlyList<RecognizedSegment>> RecognizeWindowAsync(ReadOnlyMemory<float> samples, string? language, CancellationToken cancellationToken)
+        {
+            await gate.Task.WaitAsync(cancellationToken);
+            return [new RecognizedSegment(TimeSpan.Zero, TimeSpan.FromSeconds(samples.Length / 16_000d), "hello", null, null, null, TimingProvenance.ApproximateChunk)];
+        }
+
+        public ValueTask<IStreamingRecognitionSession> StartStreamingAsync(string? language, bool diarize, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
     private sealed class Consumer : IMicrophoneConsumer
     {
         public string Name => "wake word";
@@ -137,6 +156,38 @@ public sealed class LiveSourceTests : IDisposable
         await Task.Delay(400);
         await session.StopAsync(default);
         return (session.Host!.Document, consumer);
+    }
+
+    [Fact]
+    public async Task Slow_recognition_never_stalls_capture_or_drops_audio()
+    {
+        // 60 s of continuous speech-level audio fed as fast as the source allows: far more than the old
+        // 256-item queue, with recognition completely blocked.
+        var audio = Stereo(60, 0.5f, 0.5f).Where((_, i) => i % 2 == 0).ToArray();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var store = SqliteTranscriptionSessionStore.Create(new AppDataPaths(this.root));
+        await store.InitializeAsync(default);
+        var options = new LiveSessionOptions(
+            new TranscriptionSessionOptions("fake:model", null, "cpu", "en", null, AudioRetention.KeepAudio, DownmixMode.Average, null, null, null),
+            "t", store.GetSessionMediaDirectory, TimeSpan.FromMilliseconds(50), null, TranscriptSourceType.Microphone);
+        await using var session = new LiveTranscriptionSession(new FakeSource(1, audio), new GatedProvider(gate), new MicrophoneCoordinator(), new ModelLeaseScheduler(), store, options);
+        await session.StartAsync(default);
+
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        while (session.Elapsed < TimeSpan.FromSeconds(59.9) && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(50);
+        }
+
+        Assert.True(session.Elapsed >= TimeSpan.FromSeconds(59.9), $"capture stalled at {session.Elapsed}");
+        Assert.True(session.Backlog > TimeSpan.FromSeconds(10), "backlog should be reported while recognition is blocked");
+
+        gate.SetResult();
+        await session.StopAsync(default);
+        Assert.Equal(TimeSpan.Zero, session.Backlog);
+        Assert.NotEmpty(session.Host!.Document.ActiveSegments);
+        var wav = Assert.Single(session.Host.Document.Audio);
+        Assert.True(new FileInfo(wav.Path).Length >= 60 * 16_000 * 2, "recording lost samples");
     }
 
     [Fact]
