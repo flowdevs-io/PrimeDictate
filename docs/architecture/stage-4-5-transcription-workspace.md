@@ -41,3 +41,17 @@ Built against the real protocol samples in `docs/architecture/nemotron-samples/`
 Limits:
 - Speaker numbers are consistent within one 30 s window. The worker does not give speaker identity across windows, so a long file can relabel the same person. Renaming maps one id at a time.
 - Live speakers need native streaming over the realtime socket (word times restart at 0 after each commit, and speaker labels appear only on final events). Buffered Live with Nemotron transcribes but does not label speakers yet.
+
+## Stage 6 (second part): live Nemotron streaming with speakers
+
+Live sessions whose provider reports native streaming (Nemotron) use the worker's realtime socket instead of re-recognizing windows. Written against the captured message samples; tested with a fake socket that replays those shapes. **Not yet run against the real worker.**
+
+- Audio goes out as binary PCM16 (about 100 ms blocks). Silence of 1.2 s ends an utterance and sends a commit; a 30 s cap, Pause and Stop also commit.
+- The worker returns final text, word times and speaker numbers only after a commit, and word times restart at 0 after each commit. The session adds the offset of the audio each commit covered, so lanes and lines sit on the recording timeline.
+- Deltas (partial text) are shown as a gray provisional line with no speaker ("speaker pending"). They can be a suffix or a whole revised partial, so they are reconciled by prefix and always replaced by the final text. An utterance whose final is empty removes its provisional line.
+- One speaker turn becomes one segment (`u3.0`, `u3.1`, ...), registered as "Speaker N" and drawn in the timeline.
+- The speaker request is sent only when the diarizer was loaded (the worker otherwise errors on every audio frame).
+- One model lease covers the whole live session, so file imports wait until it stops.
+- If the socket drops, what was transcribed is kept and the session ends as failed-recoverable.
+
+**Open question for the real worker:** whether speaker numbers stay the same across commits on one connection. If they restart at each commit, two different people can both be "speaker 1" in different utterances. The test steps ask for this to be checked; the fallback is committing much less often (only on long pauses and Pause/Stop).

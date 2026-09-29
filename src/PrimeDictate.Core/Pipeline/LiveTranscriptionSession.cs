@@ -64,6 +64,7 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
     private long samplesSinceFlush;
     private AutoGain? gainLeft;
     private AutoGain? gainRight;
+    private long streamedSamples;
 
     public LiveTranscriptionSession(
         IAudioSource audioSource,
@@ -474,7 +475,122 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         await this.queue.Writer.WriteAsync(new Samples(samples)).ConfigureAwait(false);
     }
 
-    private async Task InferenceLoopAsync()
+    private Task InferenceLoopAsync() =>
+        this.provider.Capabilities.LiveMode == LiveRecognitionMode.NativeStreaming
+            ? this.StreamingInferenceLoopAsync()
+            : this.WindowedInferenceLoopAsync();
+
+    /// <summary>
+    /// Native streaming: audio flows to the provider continuously and the provider reports text as it is
+    /// recognized. Silence ends an utterance (a commit), which is when the provider can report final text
+    /// and, with speaker detection, who said it. One lease covers the whole session so file jobs wait.
+    /// </summary>
+    private async Task StreamingInferenceLoopAsync()
+    {
+        var host = this.Host!;
+        var sessionId = host.Document.SessionId;
+        var ct = this.stopSignal.Token;
+        var detectorOptions = this.options.Detector ?? new UtteranceDetectorOptions
+        {
+            // Each commit is a chance for speaker identity to reset, so end utterances on real pauses only.
+            EndSilence = TimeSpan.FromMilliseconds(1200),
+            MaxUtterance = TimeSpan.FromSeconds(30)
+        };
+        var detector = new UtteranceDetector(detectorOptions);
+        var revisions = new Dictionary<string, long>(StringComparer.Ordinal);
+        var diarize = this.provider.Capabilities.CombinedDiarization;
+
+        using var lease = await this.scheduler.AcquireAsync(this.provider.ModelId, ModelLeasePriority.Live, ct).ConfigureAwait(false);
+        await using var stream = await this.provider.StartStreamingAsync(this.options.Session.Language, diarize, ct).ConfigureAwait(false);
+
+        var reader = Task.Run(async () =>
+        {
+            try
+            {
+                await foreach (var update in stream.ReadUpdatesAsync(CancellationToken.None).ConfigureAwait(false))
+                {
+                    var id = "u" + update.UtteranceId;
+                    var text = update.Segment.Text.Trim();
+                    if (text.Length == 0)
+                    {
+                        if (update.IsFinal)
+                        {
+                            host.Apply(new SegmentRemoved(sessionId, id, 1));
+                        }
+
+                        continue;
+                    }
+
+                    var revision = revisions.GetValueOrDefault(id) + 1;
+                    revisions[id] = revision;
+                    var mapped = SegmentMapper.Map([update.Segment], "x", 0, TimeSpan.FromDays(365), 1, revision, update.IsFinal ? SegmentState.Final : SegmentState.Provisional)
+                        .Select(m => m with { Id = id }).ToList();
+                    host.EnsureSpeakers(mapped);
+                    foreach (var segment in mapped)
+                    {
+                        host.Apply(update.IsFinal ? new SegmentFinalized(sessionId, segment) : new SegmentUpserted(sessionId, segment));
+                    }
+
+                    if (update.IsFinal)
+                    {
+                        await host.CheckpointAsync(CancellationToken.None).ConfigureAwait(false);
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // The provider connection died; keep what is transcribed so far and stop safely.
+                this.failure ??= ex;
+                this.Error?.Invoke("Live transcription stopped: " + ex.Message);
+            }
+        }, CancellationToken.None);
+
+        long sequence = 0;
+        var format = AudioFormat.SpeechTimeline;
+        try
+        {
+            await foreach (var item in this.queue.Reader.ReadAllAsync(ct).ConfigureAwait(false))
+            {
+                switch (item)
+                {
+                    case Samples s:
+                        var frame = AudioFrame.CopyFrom(s.Data, format, sequence++, this.streamedSamples);
+                        this.streamedSamples += s.Data.Length;
+                        await stream.WriteAsync(frame, ct).ConfigureAwait(false);
+                        if (detector.Add(s.Data).Any(e => e.Kind == UtteranceEventKind.Ended))
+                        {
+                            await stream.CommitAsync(ct).ConfigureAwait(false);
+                        }
+
+                        Interlocked.Add(ref this.backlogSamples, -s.Data.Length);
+                        break;
+                    case Flush:
+                        // Pause or a gap in capture: finalize what was said so far.
+                        detector.Flush();
+                        await stream.CommitAsync(ct).ConfigureAwait(false);
+                        break;
+                }
+            }
+
+            if (!this.discard)
+            {
+                await stream.CommitAsync(ct).ConfigureAwait(false);
+                await stream.CompleteAsync(ct).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (this.discard)
+        {
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            this.failure ??= ex;
+            this.Error?.Invoke("Live transcription stopped: " + ex.Message);
+        }
+
+        await reader.ConfigureAwait(false);
+    }
+
+    private async Task WindowedInferenceLoopAsync()
     {
         var host = this.Host!;
         var sessionId = host.Document.SessionId;

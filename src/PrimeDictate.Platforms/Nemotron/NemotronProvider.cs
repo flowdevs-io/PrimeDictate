@@ -21,7 +21,7 @@ public sealed class NemotronProvider(INemotronEndpoint worker, string modelId, b
 
     public TranscriptionProviderCapabilities Capabilities { get; } = new(
         SupportsFiles: true,
-        LiveMode: LiveRecognitionMode.BufferedWindows,
+        LiveMode: LiveRecognitionMode.NativeStreaming,
         Timing: TimingCapabilities.SegmentTimestamps | TimingCapabilities.WordTimestamps | TimingCapabilities.Confidence,
         CombinedDiarization: worker.HasDiarizer && identifySpeakers,
         MaxSpeakers: worker.HasDiarizer ? 8 : null,
@@ -76,8 +76,12 @@ public sealed class NemotronProvider(INemotronEndpoint worker, string modelId, b
         return NemotronResponseParser.ParseVerboseJson(body, TimeSpan.FromSeconds(samples.Length / 16_000d), diarize);
     }
 
-    public ValueTask<IStreamingRecognitionSession> StartStreamingAsync(string? language, bool diarize, CancellationToken cancellationToken) =>
-        throw new NotSupportedException("Native streaming for Nemotron is not wired into the live session yet.");
+    public async ValueTask<IStreamingRecognitionSession> StartStreamingAsync(string? language, bool diarize, CancellationToken cancellationToken)
+    {
+        // The worker accepts a speaker request without a diarizer and then errors on every audio frame, so never send it.
+        var withSpeakers = diarize && worker.HasDiarizer;
+        return await NemotronRealtimeSession.ConnectAsync(worker.BaseAddress, worker.ApiKey, withSpeakers, cancellationToken).ConfigureAwait(false);
+    }
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
@@ -104,7 +108,12 @@ public static class NemotronResponseParser
     public static IReadOnlyList<RecognizedSegment> ParseVerboseJson(string json, TimeSpan windowDuration, bool withSpeakers)
     {
         using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
+        return ParseVerboseJson(doc.RootElement, windowDuration, withSpeakers, null);
+    }
+
+    /// <summary>Same as the string overload for an already parsed object; <paramref name="fallbackText"/> is used when the object has no <c>text</c> and no words (realtime events call it <c>transcript</c>).</summary>
+    public static IReadOnlyList<RecognizedSegment> ParseVerboseJson(JsonElement root, TimeSpan windowDuration, bool withSpeakers, string? fallbackText)
+    {
         var words = new List<(string Text, TimeSpan Start, TimeSpan End, double? Confidence, int? Speaker)>();
         if (root.TryGetProperty("words", out var list) && list.ValueKind == JsonValueKind.Array)
         {
@@ -127,7 +136,7 @@ public static class NemotronResponseParser
 
         if (words.Count == 0)
         {
-            var text = root.TryGetProperty("text", out var t) ? t.GetString()?.Trim() : null;
+            var text = (root.TryGetProperty("text", out var t) ? t.GetString() : fallbackText)?.Trim();
             return string.IsNullOrEmpty(text)
                 ? []
                 : [new RecognizedSegment(TimeSpan.Zero, windowDuration, text, null, null, null, TimingProvenance.ApproximateChunk)];

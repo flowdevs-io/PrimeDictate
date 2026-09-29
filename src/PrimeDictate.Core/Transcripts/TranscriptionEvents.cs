@@ -12,6 +12,9 @@ public sealed record SegmentUpserted(Guid SessionId, TranscriptSegment Segment) 
 
 public sealed record SegmentFinalized(Guid SessionId, TranscriptSegment Segment) : TranscriptionEvent(SessionId);
 
+/// <summary>Drops a provisional segment that recognition ended up not confirming. Final segments are never removed by events.</summary>
+public sealed record SegmentRemoved(Guid SessionId, string SegmentId, int ResultVersion) : TranscriptionEvent(SessionId);
+
 public sealed record SpeakerUpdated(Guid SessionId, TranscriptSpeaker Speaker) : TranscriptionEvent(SessionId);
 
 public enum TranscriptionPhase
