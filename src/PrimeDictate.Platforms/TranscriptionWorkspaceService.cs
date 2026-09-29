@@ -441,9 +441,26 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
             return (null, "The Nemotron diarizer file is not installed.");
         }
 
-        var worker = setup.WorkerPath;
-        var (overlay, error) = await NemotronDiarizer.RunAsync(
-            worker, setup.Files.DiarizerPath!, stereo, directory, TimeSpan.FromMinutes(10), this.CudaRuntimeDirectories(worker), cancellationToken).ConfigureAwait(false);
+        // Same choice as the live worker: CUDA when a CUDA build is installed and not switched off, then CPU.
+        var attempts = new List<(string Worker, string Device)>();
+        if (setup.CudaWorkerPath is not null && this.nemotronPreference != "cpu")
+        {
+            attempts.Add((setup.CudaWorkerPath, this.nemotronPreference.StartsWith("cuda", StringComparison.Ordinal) ? this.nemotronPreference : "cuda:0"));
+        }
+
+        attempts.Add((setup.WorkerPath, "cpu"));
+        DiarizationOverlay? overlay = null;
+        string? error = null;
+        foreach (var (worker, device) in attempts)
+        {
+            (overlay, error) = await NemotronDiarizer.RunAsync(
+                worker, setup.Files.DiarizerPath!, device, stereo, directory, TimeSpan.FromMinutes(10), this.CudaRuntimeDirectories(worker), cancellationToken).ConfigureAwait(false);
+            if (overlay is not null)
+            {
+                break;
+            }
+        }
+
         overlay?.Save(directory);
         return (overlay, error);
     }
