@@ -102,3 +102,81 @@ public sealed class DictationSettingsTests : IDisposable
         Assert.Null(SharpHookHotkeySource.DetectUnavailableReason(Env(), isLinux: false));
     }
 }
+
+public sealed class DictationHostTests : IDisposable
+{
+    private readonly string root = Path.Combine(Path.GetTempPath(), "pd-host-" + Guid.NewGuid().ToString("N"));
+
+    public DictationHostTests() => Directory.CreateDirectory(this.root);
+
+    public void Dispose() => Directory.Delete(this.root, recursive: true);
+
+    private sealed class FakeHotkeys : IHotkeySource
+    {
+        public event Action<HotkeyAction>? Pressed;
+
+        public string? UnavailableReason => null;
+
+        public IReadOnlyDictionary<HotkeyAction, HotkeyGesture>? Bindings { get; private set; }
+
+        public void SetBindings(IReadOnlyDictionary<HotkeyAction, HotkeyGesture> bindings) => this.Bindings = bindings;
+
+        public Task RunAsync() => Task.CompletedTask;
+
+        public void Raise(HotkeyAction action) => this.Pressed?.Invoke(action);
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class NoAudio : PrimeDictate.Core.Providers.IAudioSource
+    {
+        public ValueTask<IReadOnlyList<PrimeDictate.Core.Providers.AudioInputDevice>> ListDevicesAsync(CancellationToken cancellationToken) =>
+            ValueTask.FromResult<IReadOnlyList<PrimeDictate.Core.Providers.AudioInputDevice>>([]);
+
+        public ValueTask<PrimeDictate.Core.Providers.IAudioCaptureLease> OpenAsync(string? deviceId, CancellationToken cancellationToken) =>
+            throw new PrimeDictate.Core.Providers.AudioSourceException(PrimeDictate.Core.Providers.AudioSourceErrorKind.DeviceRemoved, "unplugged");
+    }
+
+    [Fact]
+    public async Task Hotkey_press_reaches_the_controller_and_reports_a_missing_model()
+    {
+        var hotkeys = new FakeHotkeys();
+        await using var host = new PrimeDictate.Platforms.Dictation.DictationHost(
+            new AppDataPaths(this.root), new PrimeDictate.Core.Coordination.MicrophoneCoordinator(), new NoAudio(), hotkeys);
+        var notice = new TaskCompletionSource<string>();
+        host.Notice += m => notice.TrySetResult(m);
+        Assert.Equal(HotkeyGesture.Default, hotkeys.Bindings![HotkeyAction.ToggleDictation]);
+
+        hotkeys.Raise(HotkeyAction.ToggleDictation);
+        Assert.Contains("model", await notice.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.False(host.Controller!.IsRecording);
+    }
+
+    [Fact]
+    public async Task Applying_settings_rebinds_hotkeys_and_persists_only_the_new_file()
+    {
+        var hotkeys = new FakeHotkeys();
+        await using var host = new PrimeDictate.Platforms.Dictation.DictationHost(
+            new AppDataPaths(this.root), new PrimeDictate.Core.Coordination.MicrophoneCoordinator(), new NoAudio(), hotkeys);
+        var settings = host.Settings;
+        settings.DictationHotkey = HotkeyDto.From(new HotkeyGesture("VcF8", true, false, false));
+        settings.AutoCommitSilenceSeconds = 0;
+        host.ApplySettings(settings);
+
+        Assert.Equal("VcF8", hotkeys.Bindings![HotkeyAction.ToggleDictation].Key);
+        Assert.Equal(TimeSpan.Zero, host.Controller!.Options.AutoCommitSilence);
+        Assert.True(File.Exists(Path.Combine(this.root, "dictation-settings.json")));
+        Assert.False(File.Exists(Path.Combine(this.root, "settings.json")));
+    }
+
+    [Fact]
+    public async Task Without_a_microphone_the_host_says_why_and_has_no_controller()
+    {
+        await using var host = new PrimeDictate.Platforms.Dictation.DictationHost(
+            new AppDataPaths(this.root), new PrimeDictate.Core.Coordination.MicrophoneCoordinator(), audio: null);
+        Assert.Null(host.Controller);
+        Assert.NotNull(host.UnavailableReason);
+    }
+}
