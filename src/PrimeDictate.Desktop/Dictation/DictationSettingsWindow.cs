@@ -4,6 +4,7 @@ using Avalonia.Layout;
 using PrimeDictate.Core.Dictation;
 using PrimeDictate.Core.Providers;
 using PrimeDictate.Platforms.Dictation;
+using PrimeDictate.Platforms.Startup;
 using PrimeDictate.Platforms.Input;
 
 namespace PrimeDictate.Desktop.Dictation;
@@ -19,6 +20,8 @@ public sealed class DictationSettingsWindow : Window
     private readonly Slider gain = new() { Minimum = 0.5, Maximum = 4, Width = 200 };
     private readonly NumericUpDown silence = new() { Minimum = 0, Maximum = 30, Increment = 1, FormatString = "0", Width = 120 };
     private readonly CheckBox audioCues = new() { Content = "Play start and stop sounds" };
+    private readonly LaunchAtLogin launch = new();
+    private readonly CheckBox launchAtLogin = new() { Content = "Start PrimeDictate when I sign in (tray only)" };
     private readonly CheckBox sendEnter = new() { Content = "Coding mode: press Enter after typing" };
     private readonly CheckBox returnToStart = new() { Content = "If focus moved, return to the window I started in" };
     private readonly CheckBox typeWithoutGuard = new() { Content = "Type even when the app cannot check which window is in front" };
@@ -59,6 +62,7 @@ public sealed class DictationSettingsWindow : Window
         }
 
         panel.Children.Add(this.audioCues);
+        panel.Children.Add(this.launchAtLogin);
         panel.Children.Add(this.sendEnter);
         if (OperatingSystem.IsWindows())
         {
@@ -132,7 +136,7 @@ public sealed class DictationSettingsWindow : Window
         var current = this.modelBox.SelectedIndex is >= 0 and var ci && ci < this.shownModels.Count ? this.shownModels[ci] : this.working.ResolveModelId();
         this.shownModels = models.Select(m => m.ModelId).ToList();
         this.modelBox.ItemsSource = models.Select(m => m.DisplayName).ToList();
-        this.modelBox.SelectedIndex = Math.Max(0, this.shownModels.IndexOf(current));
+        this.modelBox.SelectedIndex = Math.Max(0, this.shownModels.IndexOf(current ?? string.Empty));
         this.status.Text = models.Count == 0 ? "No Whisper model is installed. Download one below." : string.Empty;
     }
 
@@ -152,6 +156,7 @@ public sealed class DictationSettingsWindow : Window
         this.gain.Value = this.working.InputGainMultiplier;
         this.silence.Value = this.working.AutoCommitSilenceSeconds;
         this.audioCues.IsChecked = this.working.PlayAudioCues;
+        this.launchAtLogin.IsChecked = this.launch.IsEnabled;
         this.sendEnter.IsChecked = this.working.SendEnterAfterCommit;
         this.returnToStart.IsChecked = this.working.ReturnToStartTargetOnCommit;
         this.typeWithoutGuard.IsChecked = this.working.TypeWithoutFocusGuard;
@@ -181,6 +186,16 @@ public sealed class DictationSettingsWindow : Window
         }
     }
 
+    private void ApplyLaunchAtLogin()
+    {
+        var wanted = this.launchAtLogin.IsChecked == true;
+        if (wanted != this.launch.IsEnabled && this.launch.Apply(wanted) is { } problem)
+        {
+            this.status.Text = problem;
+            this.launchAtLogin.IsChecked = this.launch.IsEnabled;
+        }
+    }
+
     private void Save()
     {
         var models = this.host.InstalledModels();
@@ -195,6 +210,7 @@ public sealed class DictationSettingsWindow : Window
         s.InputGainMultiplier = this.gain.Value;
         s.AutoCommitSilenceSeconds = (int)(this.silence.Value ?? 3);
         s.PlayAudioCues = this.audioCues.IsChecked == true;
+        this.ApplyLaunchAtLogin();
         s.SendEnterAfterCommit = this.sendEnter.IsChecked == true;
         s.ReturnToStartTargetOnCommit = this.returnToStart.IsChecked == true;
         s.TypeWithoutFocusGuard = this.typeWithoutGuard.IsChecked == true;
