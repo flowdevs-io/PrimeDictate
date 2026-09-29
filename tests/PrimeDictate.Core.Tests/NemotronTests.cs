@@ -735,6 +735,19 @@ public sealed class NemotronTests : IDisposable
             }
         }
 
+        // A malformed value is caught by the app (the worker would accept anything) and reported.
+        var bad = new List<string>();
+        var (listener4, uri4, _) = StartCountingServer(false, false, bad);
+        using (listener4)
+        {
+            await using var s = await NemotronRealtimeSession.ConnectAsync(uri4, "k", diarize: false, default, language: "english please");
+            Assert.Contains("auto-detected", s.StartupNotice);
+            lock (bad)
+            {
+                Assert.DoesNotContain(bad, x => x.Contains("language"));
+            }
+        }
+
         // "auto" and unset send no language at all.
         var auto = new List<string>();
         var (listener3, uri3, _) = StartCountingServer(false, false, auto);

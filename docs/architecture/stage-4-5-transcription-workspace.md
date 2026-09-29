@@ -55,3 +55,14 @@ Live sessions whose provider reports native streaming (Nemotron) use the worker'
 - If the socket drops, what was transcribed is kept and the session ends as failed-recoverable.
 
 **Open question for the real worker:** whether speaker numbers stay the same across commits on one connection. If they restart at each commit, two different people can both be "speaker 1" in different utterances. The test steps ask for this to be checked; the fallback is committing much less often (only on long pauses and Pause/Stop).
+
+## Meetings: one stream per channel (unverified against the real worker)
+
+A stereo meeting (left = microphone, right = system audio) on a native-streaming provider opens two realtime
+streams on the same worker: the microphone stream is undiarized and every line is speaker `local` ("You"); the
+system-audio stream runs speaker detection for the remote people (or is labelled `remote` when no diarizer is
+installed). Each stream has its own utterance detection and commits, both use the shared session clock, so a
+line from each side can overlap in time and keeps its own row. If the second stream cannot be opened the session
+falls back to one mixed stream and records a note. `LiveSessionOptions.SeparateMeetingChannels = false` forces the
+mixed stream. Not yet checked: whether the real worker serves two concurrent realtime sockets, and how much GPU
+memory a second session adds.

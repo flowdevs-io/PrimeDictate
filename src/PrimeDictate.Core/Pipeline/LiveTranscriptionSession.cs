@@ -18,7 +18,12 @@ public sealed record LiveSessionOptions(
     UtteranceDetectorOptions? Detector = null,
     TranscriptSourceType Source = TranscriptSourceType.Microphone,
     /// <summary>Normalizes quiet audio before recognition (system audio and meetings only). The saved recording is never changed.</summary>
-    bool AutoGain = true)
+    bool AutoGain = true,
+    /// <summary>
+    /// Meeting sessions on a streaming provider run one stream per channel (microphone = You, system audio = remote
+    /// people, with speaker detection) so overlapping speech is not blended into one signal. False mixes to mono.
+    /// </summary>
+    bool SeparateMeetingChannels = true)
 {
     public static readonly TimeSpan DefaultPreviewInterval = TimeSpan.FromSeconds(1.5);
 }
@@ -38,7 +43,7 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
 {
     private abstract record Item;
 
-    private sealed record Samples(float[] Data, bool SyntheticSilence = false) : Item;
+    private sealed record Samples(float[] Data, bool SyntheticSilence = false, float[]? Left = null, float[]? Right = null) : Item;
 
     private sealed record Flush : Item;
 
@@ -429,22 +434,25 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
             mono[i] = (left[i] + right[i]) * 0.5f;
         }
 
+        var recognitionLeft = left.AsSpan(0, count).ToArray();
+        var recognitionRight = right.AsSpan(0, count).ToArray();
         if (this.gainLeft is not null && this.gainRight is not null)
         {
             // Per channel, so a quiet remote side is lifted without lifting the microphone. The sum keeps
-            // one speaker at full level, and the limiter handles both talking at once.
-            var l = this.gainLeft.Process(left.AsSpan(0, count));
-            var r = this.gainRight.Process(right.AsSpan(0, count));
+            // one speaker at full level, and the limiter handles both talking at once. The per-channel
+            // streams of a two-stream meeting get the same lifted signals.
+            recognitionLeft = this.gainLeft.Process(recognitionLeft);
+            recognitionRight = this.gainRight.Process(recognitionRight);
             for (var i = 0; i < count; i++)
             {
-                mono[i] = AutoGain.Limit(l[i] + r[i]);
+                mono[i] = AutoGain.Limit(recognitionLeft[i] + recognitionRight[i]);
             }
         }
 
-        return this.PublishAsync(mono, interleaved);
+        return this.PublishAsync(mono, interleaved, recognitionLeft, recognitionRight);
     }
 
-    private async Task PublishAsync(float[] samples, float[]? fileSamples = null)
+    private async Task PublishAsync(float[] samples, float[]? fileSamples = null, float[]? left = null, float[]? right = null)
     {
         if (samples.Length == 0)
         {
@@ -476,7 +484,7 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         this.Level = peak;
         this.LevelChanged?.Invoke(peak);
         Interlocked.Add(ref this.backlogSamples, samples.Length);
-        await this.queue.Writer.WriteAsync(new Samples(samples, this.frameSynthetic)).ConfigureAwait(false);
+        await this.queue.Writer.WriteAsync(new Samples(samples, this.frameSynthetic, left, right)).ConfigureAwait(false);
     }
 
     private Task InferenceLoopAsync() =>
@@ -489,125 +497,214 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
     /// recognized. Silence ends an utterance (a commit), which is when the provider can report final text
     /// and, with speaker detection, who said it. One lease covers the whole session so file jobs wait.
     /// </summary>
+    private sealed class StreamPipe(IStreamingRecognitionSession stream, string prefix, string? forcedSpeaker, Func<Samples, float[]?> pick, UtteranceDetector detector)
+    {
+        public IStreamingRecognitionSession Stream { get; } = stream;
+
+        public string Prefix { get; } = prefix;
+
+        /// <summary>Every line from this stream belongs to this speaker id (the microphone, or undiarized remote audio).</summary>
+        public string? ForcedSpeaker { get; } = forcedSpeaker;
+
+        public Func<Samples, float[]?> Pick { get; } = pick;
+
+        public UtteranceDetector Detector { get; } = detector;
+
+        public long Sequence { get; set; }
+
+        public Dictionary<string, long> Revisions { get; } = new(StringComparer.Ordinal);
+
+        public Task? Reader { get; set; }
+    }
+
+    private UtteranceDetector NewStreamingDetector() => new(this.options.Detector ?? new UtteranceDetectorOptions
+    {
+        // Each commit is a chance for speaker identity to reset and every commit splits the text into a new
+        // segment, so end utterances on real pauses only. 1.8 s rides over short breaths in a sentence.
+        EndSilence = TimeSpan.FromMilliseconds(1800),
+        MaxUtterance = TimeSpan.FromSeconds(30)
+    });
+
+    /// <summary>
+    /// Opens the streams for this session: one mixed stream, or for a stereo meeting one per channel. If the worker
+    /// cannot serve two streams, falls back to the mixed one and says so.
+    /// </summary>
+    private async Task<List<StreamPipe>> OpenPipesAsync(CancellationToken ct)
+    {
+        var host = this.Host!;
+        var diarize = this.provider.Capabilities.CombinedDiarization;
+        var language = this.options.Session.Language;
+        if (this.keepStereo && this.options.SeparateMeetingChannels)
+        {
+            IStreamingRecognitionSession? mic = null;
+            try
+            {
+                mic = await this.provider.StartStreamingAsync(language, false, ct).ConfigureAwait(false);
+                var system = await this.provider.StartStreamingAsync(language, diarize, ct).ConfigureAwait(false);
+                host.AddNote("Microphone and system audio are recognized as two separate streams.");
+                return
+                [
+                    new StreamPipe(mic, "m", "local", s => s.Left, this.NewStreamingDetector()),
+                    new StreamPipe(system, "s", diarize ? null : "remote", s => s.Right, this.NewStreamingDetector())
+                ];
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                if (mic is not null)
+                {
+                    await mic.DisposeAsync().ConfigureAwait(false);
+                }
+
+                var note = $"Two live streams could not be opened ({ex.Message}); microphone and system audio are mixed into one stream, so speech that overlaps may be recognized poorly.";
+                host.AddNote(note);
+                this.Error?.Invoke(note);
+            }
+        }
+
+        var single = await this.provider.StartStreamingAsync(language, diarize, ct).ConfigureAwait(false);
+        return [new StreamPipe(single, string.Empty, null, s => s.Data, this.NewStreamingDetector())];
+    }
+
+    /// <summary>
+    /// Native streaming: audio flows to the provider continuously and the provider reports text as it is
+    /// recognized. Silence ends an utterance (a commit), which is when the provider can report final text
+    /// and, with speaker detection, who said it. One lease covers the whole session so file jobs wait.
+    /// A stereo meeting runs one stream per channel, each with its own utterance detection, on the shared clock.
+    /// </summary>
     private async Task StreamingInferenceLoopAsync()
     {
         var host = this.Host!;
         var sessionId = host.Document.SessionId;
         var ct = this.stopSignal.Token;
-        var detectorOptions = this.options.Detector ?? new UtteranceDetectorOptions
-        {
-            // Each commit is a chance for speaker identity to reset and every commit splits the text into a new
-            // segment, so end utterances on real pauses only. 1.8 s rides over short breaths in a sentence.
-            EndSilence = TimeSpan.FromMilliseconds(1800),
-            MaxUtterance = TimeSpan.FromSeconds(30)
-        };
-        var detector = new UtteranceDetector(detectorOptions);
-        var revisions = new Dictionary<string, long>(StringComparer.Ordinal);
-        var diarize = this.provider.Capabilities.CombinedDiarization;
 
         using var lease = await this.scheduler.AcquireAsync(this.provider.ModelId, ModelLeasePriority.Live, ct).ConfigureAwait(false);
-        await using var stream = await this.provider.StartStreamingAsync(this.options.Session.Language, diarize, ct).ConfigureAwait(false);
-        if (stream is IStreamingNotices notices)
+        var pipes = await this.OpenPipesAsync(ct).ConfigureAwait(false);
+        try
         {
-            if (notices.StartupNotice is { } startup)
+            foreach (var pipe in pipes)
             {
-                host.AddNote(startup);
-                this.Error?.Invoke(startup);
+                if (pipe.Stream is IStreamingNotices notices)
+                {
+                    if (notices.StartupNotice is { } startup)
+                    {
+                        host.AddNote(startup);
+                        this.Error?.Invoke(startup);
+                    }
+
+                    notices.Notice += message =>
+                    {
+                        host.AddNote($"{TimeSpan.FromTicks(this.Elapsed.Ticks):hh\\:mm\\:ss}: {message}");
+                        this.Error?.Invoke(message);
+                    };
+                }
+
+                pipe.Reader = Task.Run(() => this.ReadUpdatesAsync(pipe, host, sessionId), CancellationToken.None);
             }
 
-            notices.Notice += message =>
-            {
-                host.AddNote($"{TimeSpan.FromTicks(this.Elapsed.Ticks):hh\\:mm\\:ss}: {message}");
-                this.Error?.Invoke(message);
-            };
-        }
-
-
-        var reader = Task.Run(async () =>
-        {
+            var format = AudioFormat.SpeechTimeline;
             try
             {
-                await foreach (var update in stream.ReadUpdatesAsync(CancellationToken.None).ConfigureAwait(false))
+                await foreach (var item in this.queue.Reader.ReadAllAsync(ct).ConfigureAwait(false))
                 {
-                    var id = "u" + update.UtteranceId;
-                    var text = update.Segment.Text.Trim();
-                    if (text.Length == 0)
+                    switch (item)
                     {
-                        if (update.IsFinal)
-                        {
-                            host.Apply(new SegmentRemoved(sessionId, id, 1));
-                        }
+                        case Samples s:
+                            foreach (var pipe in pipes)
+                            {
+                                var data = pipe.Pick(s) ?? s.Data;
+                                var frame = AudioFrame.CopyFrom(data, format, pipe.Sequence++, this.streamedSamples, s.SyntheticSilence && pipes.Count == 1);
+                                await pipe.Stream.WriteAsync(frame, ct).ConfigureAwait(false);
+                                if (pipe.Detector.Add(data).Any(e => e.Kind == UtteranceEventKind.Ended))
+                                {
+                                    await pipe.Stream.CommitAsync(ct).ConfigureAwait(false);
+                                }
+                            }
 
-                        continue;
-                    }
+                            this.streamedSamples += s.Data.Length;
+                            Interlocked.Add(ref this.backlogSamples, -s.Data.Length);
+                            break;
+                        case Flush:
+                            // Pause or a gap in capture: finalize what was said so far.
+                            foreach (var pipe in pipes)
+                            {
+                                pipe.Detector.Flush();
+                                await pipe.Stream.CommitAsync(ct).ConfigureAwait(false);
+                            }
 
-                    var revision = revisions.GetValueOrDefault(id) + 1;
-                    revisions[id] = revision;
-                    var mapped = SegmentMapper.Map([update.Segment], "x", 0, TimeSpan.FromDays(365), 1, revision, update.IsFinal ? SegmentState.Final : SegmentState.Provisional)
-                        .Select(m => m with { Id = id }).ToList();
-                    host.EnsureSpeakers(mapped);
-                    foreach (var segment in mapped)
-                    {
-                        host.Apply(update.IsFinal ? new SegmentFinalized(sessionId, segment) : new SegmentUpserted(sessionId, segment));
-                    }
-
-                    if (update.IsFinal)
-                    {
-                        await host.CheckpointAsync(CancellationToken.None).ConfigureAwait(false);
+                            break;
                     }
                 }
+
+                if (!this.discard)
+                {
+                    foreach (var pipe in pipes)
+                    {
+                        await pipe.Stream.CommitAsync(ct).ConfigureAwait(false);
+                        await pipe.Stream.CompleteAsync(ct).ConfigureAwait(false);
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (this.discard)
+            {
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // The provider connection died; keep what is transcribed so far and stop safely.
                 this.failure ??= ex;
                 this.Error?.Invoke("Live transcription stopped: " + ex.Message);
             }
-        }, CancellationToken.None);
 
-        long sequence = 0;
-        var format = AudioFormat.SpeechTimeline;
-        try
+            await Task.WhenAll(pipes.Select(p => p.Reader!)).ConfigureAwait(false);
+        }
+        finally
         {
-            await foreach (var item in this.queue.Reader.ReadAllAsync(ct).ConfigureAwait(false))
+            foreach (var pipe in pipes)
             {
-                switch (item)
-                {
-                    case Samples s:
-                        var frame = AudioFrame.CopyFrom(s.Data, format, sequence++, this.streamedSamples, s.SyntheticSilence);
-                        this.streamedSamples += s.Data.Length;
-                        await stream.WriteAsync(frame, ct).ConfigureAwait(false);
-                        if (detector.Add(s.Data).Any(e => e.Kind == UtteranceEventKind.Ended))
-                        {
-                            await stream.CommitAsync(ct).ConfigureAwait(false);
-                        }
-
-                        Interlocked.Add(ref this.backlogSamples, -s.Data.Length);
-                        break;
-                    case Flush:
-                        // Pause or a gap in capture: finalize what was said so far.
-                        detector.Flush();
-                        await stream.CommitAsync(ct).ConfigureAwait(false);
-                        break;
-                }
-            }
-
-            if (!this.discard)
-            {
-                await stream.CommitAsync(ct).ConfigureAwait(false);
-                await stream.CompleteAsync(ct).ConfigureAwait(false);
+                await pipe.Stream.DisposeAsync().ConfigureAwait(false);
             }
         }
-        catch (OperationCanceledException) when (this.discard)
+    }
+
+    private async Task ReadUpdatesAsync(StreamPipe pipe, SessionDocumentHost host, Guid sessionId)
+    {
+        try
         {
+            await foreach (var update in pipe.Stream.ReadUpdatesAsync(CancellationToken.None).ConfigureAwait(false))
+            {
+                var id = "u" + pipe.Prefix + update.UtteranceId;
+                var text = update.Segment.Text.Trim();
+                if (text.Length == 0)
+                {
+                    if (update.IsFinal)
+                    {
+                        host.Apply(new SegmentRemoved(sessionId, id, 1));
+                    }
+
+                    continue;
+                }
+
+                var revision = pipe.Revisions.GetValueOrDefault(id) + 1;
+                pipe.Revisions[id] = revision;
+                var recognized = pipe.ForcedSpeaker is null ? update.Segment : update.Segment with { SpeakerLabel = pipe.ForcedSpeaker };
+                var mapped = SegmentMapper.Map([recognized], "x", 0, TimeSpan.FromDays(365), 1, revision, update.IsFinal ? SegmentState.Final : SegmentState.Provisional)
+                    .Select(m => m with { Id = id }).ToList();
+                host.EnsureSpeakers(mapped);
+                foreach (var segment in mapped)
+                {
+                    host.Apply(update.IsFinal ? new SegmentFinalized(sessionId, segment) : new SegmentUpserted(sessionId, segment));
+                }
+
+                if (update.IsFinal)
+                {
+                    await host.CheckpointAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            // The provider connection died; keep what is transcribed so far and stop safely.
             this.failure ??= ex;
             this.Error?.Invoke("Live transcription stopped: " + ex.Message);
         }
-
-        await reader.ConfigureAwait(false);
     }
 
     private async Task WindowedInferenceLoopAsync()
