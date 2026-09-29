@@ -21,6 +21,9 @@ public interface ICombinedAudioCaptureLease : IAudioCaptureLease
 
     /// <summary>Output samples of silence inserted for the system-audio side because it stalled or lost samples.</summary>
     long SystemAudioPaddedSamples { get; }
+
+    /// <summary>How long after the microphone the system-audio device was opened (negative if before). Diagnostic.</summary>
+    TimeSpan SystemOpenedAfterMicrophone { get; }
 }
 
 public sealed record CombinedAudioOptions
@@ -30,8 +33,12 @@ public sealed record CombinedAudioOptions
     /// <summary>Common rate both sides are resampled to. Speech engines consume 16 kHz, so no second conversion is needed.</summary>
     public int OutputSampleRate { get; init; } = AudioFormat.SpeechTimeline.SampleRate;
 
-    /// <summary>How long one side may deliver nothing while the other has audio before it is padded with silence.</summary>
-    public TimeSpan MaxSkew { get; init; } = TimeSpan.FromMilliseconds(200);
+    /// <summary>
+    /// How long one side may deliver nothing while the other has audio before it is treated as dead and
+    /// padded with silence. Kept long on purpose: a device that is merely late (start-up, a busy CPU) usually
+    /// delivers its backlog afterwards, and padding first would shift all of its audio later by the stall.
+    /// </summary>
+    public TimeSpan MaxSkew { get; init; } = TimeSpan.FromSeconds(3);
 
     /// <summary>Audio buffered per side before its reader waits, which pushes back on the device queue.</summary>
     public TimeSpan MaxBufferedPerSide { get; init; } = TimeSpan.FromSeconds(5);
@@ -67,6 +74,7 @@ public sealed class CombinedAudioSource(IAudioSource microphone, IAudioSource sy
     public async ValueTask<IAudioCaptureLease> OpenAsync(string? deviceId, CancellationToken cancellationToken)
     {
         var mic = await microphone.OpenAsync(deviceId, cancellationToken).ConfigureAwait(false);
+        var micOpened = this.options.Clock.GetTimestamp();
         IAudioCaptureLease system;
         try
         {
@@ -78,7 +86,8 @@ public sealed class CombinedAudioSource(IAudioSource microphone, IAudioSource sy
             throw;
         }
 
-        return new CombinedLease(mic, system, this.options);
+        var systemOpened = this.options.Clock.GetTimestamp();
+        return new CombinedLease(mic, system, this.options, this.options.Clock.GetElapsedTime(micOpened, systemOpened));
     }
 
     private sealed class Side(int capacity)
@@ -153,7 +162,7 @@ public sealed class CombinedAudioSource(IAudioSource microphone, IAudioSource sy
         private long sampleOffset;
         private bool disposed;
 
-        public CombinedLease(IAudioCaptureLease mic, IAudioCaptureLease system, CombinedAudioOptions options)
+        public CombinedLease(IAudioCaptureLease mic, IAudioCaptureLease system, CombinedAudioOptions options, TimeSpan systemOpenedAfterMic)
         {
             this.mic = mic;
             this.system = system;
@@ -170,6 +179,17 @@ public sealed class CombinedAudioSource(IAudioSource microphone, IAudioSource sy
             var now = options.Clock.GetTimestamp();
             this.micSide.LastDataTicks = now;
             this.systemSide.LastDataTicks = now;
+            // Sample 0 of each device is the moment it was opened. The device opened second started capturing
+            // later, so its timeline begins that much later on the shared clock: put the difference in front.
+            // (Placing sample 0 by first arrival instead would move a device's audio whenever its delivery is late.)
+            var lead = (int)Math.Min(capacity, Math.Abs(systemOpenedAfterMic.TotalSeconds) * options.OutputSampleRate);
+            if (lead < options.OutputSampleRate / 200)
+            {
+                lead = 0; // under 5 ms is call overhead, not a real difference
+            }
+
+            (systemOpenedAfterMic >= TimeSpan.Zero ? this.systemSide : this.micSide).Add(new float[lead], isSynthetic: true);
+            this.SystemOpenedAfterMicrophone = systemOpenedAfterMic;
             this.micPump = Task.Run(() => this.PumpAsync(mic, this.micSide));
             this.systemPump = Task.Run(() => this.PumpAsync(system, this.systemSide));
             this.emitter = Task.Run(this.EmitLoopAsync);
@@ -180,6 +200,8 @@ public sealed class CombinedAudioSource(IAudioSource microphone, IAudioSource sy
         public string DeviceId { get; }
 
         public string DeviceName { get; }
+
+        public TimeSpan SystemOpenedAfterMicrophone { get; }
 
         public long MicrophonePaddedSamples { get; private set; }
 

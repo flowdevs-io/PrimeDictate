@@ -34,7 +34,7 @@ without headphones the mic also hears the speakers, so both channels contain rem
 - Buffers are bounded (5 s per side, 500 output chunks, plus each device's 30 s queue). Full buffers
   push back on the device queue; the audio thread never blocks and never drops without a gap.
 - Windows loopback sends no packets during silence, so the lease inserts zeros for any stretch
-  with no data (50 ms threshold) to keep its clock running.
+  with no data (250 ms threshold) to keep its clock running.
 - Pause pauses both devices, waits 100 ms for frames in flight, then flushes the shorter side.
 
 ## What was and was not run
@@ -107,3 +107,25 @@ It propagates through the combined lease (a chunk is flagged only when both side
 live session's queue to frames handed to a streaming provider, which can skip them (long exact-zero
 runs wedge the Nemotron realtime stream, NeMo-Speech.cpp #48). Offsets and sequence numbers still
 count them.
+
+## Mic-versus-system timing (skew)
+
+Justin's two-stream run showed the microphone's repeated words 0.7 to 1.5 s after the same words on the
+system stream, where the acoustic path is only a few milliseconds. Cause found in the combined lease
+(not measured on Windows): a side that delivered nothing for more than 200 ms was padded with silence,
+and when the device then delivered its backlog, all of that side's audio landed later by the stall. A
+unit test reproduces it (microphone stalled 600 ms then bursting: its click landed 1 s late, exactly the
+reported magnitude) and passes after the fix.
+
+Fixes: sample 0 of each side is now placed by when the device was opened (the later-opened one starts
+later on the shared clock), not by first arrival; a side is only padded as dead after 3 s (`MaxSkew`);
+the WASAPI silence fill waits 250 ms so a stalled capture thread does not double-count time.
+
+Measured on Linux with a click played into a sink and captured on both sides of the combined lease:
+0 ms skew with two PulseAudio sides and 20 ms (one period) with miniaudio as the microphone, steady over
+9 clicks in 20 s. Not measured: WASAPI loopback against a Windows microphone.
+
+To measure a real recording: `dotnet run --project src/PrimeDictate.Tools.ChannelSkew -- <recording-16k-stereo.wav>`
+(left = microphone, right = system audio). It correlates the two channels' loudness and prints the lag;
+it needs the microphone to have heard the speakers (speakers, not headphones). Below correlation 0.3 the
+number is meaningless.

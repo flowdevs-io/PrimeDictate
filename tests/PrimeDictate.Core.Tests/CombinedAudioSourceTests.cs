@@ -35,6 +35,21 @@ public class CombinedAudioSourceTests
             this.offset += samples;
         }
 
+        public void PushSamples(float[] mono)
+        {
+            var data = new float[mono.Length * this.Format.Channels];
+            for (var i = 0; i < mono.Length; i++)
+            {
+                for (var c = 0; c < this.Format.Channels; c++)
+                {
+                    data[(i * this.Format.Channels) + c] = mono[i];
+                }
+            }
+
+            this.frames.Writer.TryWrite(AudioFrame.CopyFrom(data, this.Format, this.sequence++, this.offset));
+            this.offset += mono.Length;
+        }
+
         public void PushSine(float amplitude, int samples)
         {
             var data = new float[samples * this.Format.Channels];
@@ -75,13 +90,20 @@ public class CombinedAudioSourceTests
         }
     }
 
-    private sealed class FakeSource(FakeLease lease) : IAudioSource
+    private sealed class FakeSource(FakeLease lease, int openDelayMs = 0) : IAudioSource
     {
         public ValueTask<IReadOnlyList<AudioInputDevice>> ListDevicesAsync(CancellationToken cancellationToken) =>
             ValueTask.FromResult<IReadOnlyList<AudioInputDevice>>([]);
 
-        public ValueTask<IAudioCaptureLease> OpenAsync(string? deviceId, CancellationToken cancellationToken) =>
-            ValueTask.FromResult<IAudioCaptureLease>(lease);
+        public async ValueTask<IAudioCaptureLease> OpenAsync(string? deviceId, CancellationToken cancellationToken)
+        {
+            if (openDelayMs > 0)
+            {
+                await Task.Delay(openDelayMs, cancellationToken);
+            }
+
+            return lease;
+        }
     }
 
     private static async Task<(IAudioCaptureLease Lease, FakeLease Mic, FakeLease System)> OpenAsync(int micRate, int systemRate, CombinedAudioOptions? options = null)
@@ -208,5 +230,70 @@ public class CombinedAudioSourceTests
         var secondHalf = frames.Where(f => f.SampleOffset >= 3_200).ToList();
         Assert.All(firstHalf, f => Assert.True(f.IsSyntheticSilence));
         Assert.All(secondHalf, f => Assert.False(f.IsSyntheticSilence));
+    }
+
+    private static int ClickIndex(IEnumerable<AudioFrame> frames, int channel)
+    {
+        var samples = frames.SelectMany(f => f.Samples.ToArray()).ToArray();
+        for (var i = channel; i < samples.Length; i += 2)
+        {
+            if (Math.Abs(samples[i]) > 0.5f)
+            {
+                return i / 2;
+            }
+        }
+
+        return -1;
+    }
+
+    private static float[] Click(int totalSamples, int at)
+    {
+        var data = new float[totalSamples];
+        if (at >= 0) { data[at] = 1f; }
+        return data;
+    }
+
+    [Fact]
+    public async Task A_device_that_delivers_late_in_a_burst_is_not_shifted_later()
+    {
+        var mic = new FakeLease(16_000, "mic");
+        var system = new FakeLease(16_000, "speakers");
+        var lease = await new CombinedAudioSource(new FakeSource(mic), new FakeSource(system), new CombinedAudioOptions { MaxSkew = TimeSpan.FromSeconds(3) }).OpenAsync(null, default);
+
+        // Both devices heard the same click 0.5 s in. The system side delivers in real time; the microphone
+        // is stalled for 600 ms (start-up, busy CPU) and then delivers everything it captured at once.
+        for (var i = 0; i < 10; i++)
+        {
+            system.PushSamples(Click(1_600, i == 5 ? 0 : -1));
+            await Task.Delay(100);
+        }
+
+        for (var i = 0; i < 10; i++)
+        {
+            mic.PushSamples(Click(1_600, i == 5 ? 0 : -1));
+        }
+
+        await lease.DisposeAsync();
+        var frames = await ReadAllAsync(lease);
+        Assert.Equal(ClickIndex(frames, 1), ClickIndex(frames, 0));
+        Assert.Equal(8_000, ClickIndex(frames, 1));
+    }
+
+    [Fact]
+    public async Task A_device_opened_later_starts_later_on_the_shared_clock()
+    {
+        var mic = new FakeLease(16_000, "mic");
+        var system = new FakeLease(16_000, "speakers");
+        var lease = await new CombinedAudioSource(new FakeSource(mic), new FakeSource(system, openDelayMs: 300)).OpenAsync(null, default);
+
+        // Each device hears a click 100 ms after it starts. The system device was opened 300 ms after the microphone.
+        mic.PushSamples(Click(8_000, 1_600));
+        system.PushSamples(Click(8_000, 1_600));
+        await lease.DisposeAsync();
+        var frames = await ReadAllAsync(lease);
+        var micClick = ClickIndex(frames, 0);
+        var systemClick = ClickIndex(frames, 1);
+        Assert.Equal(1_600, micClick);
+        Assert.InRange(systemClick - micClick, 4_000, 5_600); // 300 ms, allowing scheduler slack
     }
 }

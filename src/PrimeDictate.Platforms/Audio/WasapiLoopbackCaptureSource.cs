@@ -69,7 +69,10 @@ public sealed class WasapiLoopbackCaptureSource : ISystemAudioSource
 
     private sealed class LoopbackLease : IAudioCaptureLease
     {
-        private static readonly TimeSpan SilenceThreshold = TimeSpan.FromMilliseconds(50);
+        // Longer than the capture thread's usual scheduling stalls: if the thread is held up, WASAPI still has the
+        // audio and delivers it afterwards, so filling zeros for that time would count it twice and push all
+        // later system audio ahead of the microphone.
+        private static readonly TimeSpan SilenceThreshold = TimeSpan.FromMilliseconds(250);
 
         private readonly string? requestedId;
         private readonly Channel<AudioFrame> frames;

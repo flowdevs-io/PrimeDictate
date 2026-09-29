@@ -93,4 +93,35 @@ public sealed class CombinedMeetingTests : IDisposable
             Assert.True(right > 100 * Math.Max(left, 1e-3f));
         }
     }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(700)]
+    [InlineData(-1500)]
+    public void ChannelSkew_finds_the_lag_of_an_echoed_signal(int lagMs)
+    {
+        var rate = 16_000;
+        var random = new Random(3);
+        var system = new float[rate * 20];
+        for (var burst = 0; burst < 40; burst++)
+        {
+            var start = burst * rate / 2 + random.Next(0, 2_000);
+            for (var i = 0; i < random.Next(1_000, 4_000) && start + i < system.Length; i++)
+            {
+                system[start + i] = (float)(random.NextDouble() - 0.5);
+            }
+        }
+
+        var mic = new float[system.Length];
+        var lag = lagMs * rate / 1000;
+        for (var i = 0; i < mic.Length; i++)
+        {
+            var source = i - lag;
+            mic[i] = source >= 0 && source < system.Length ? system[source] * 0.3f : 0;
+        }
+
+        var result = ChannelSkew.Estimate(mic, system, rate);
+        Assert.InRange(result.MicrophoneLagMs, lagMs - 2, lagMs + 2);
+        Assert.True(result.Correlation > 0.8);
+    }
 }
