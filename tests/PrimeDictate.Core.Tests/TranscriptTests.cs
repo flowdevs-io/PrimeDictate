@@ -183,4 +183,31 @@ public class TranscriptTests
         Assert.Equal([["a", "b"], ["c", "d"], ["e"], ["f"]], turns.Select(t => t.Segments.Select(s => s.Id).ToArray()).ToArray());
         Assert.Equal("speaker-2", turns[^1].GuessedSpeakerId);
     }
+
+    [Fact]
+    public void Tiny_fragments_fold_into_the_same_speakers_earlier_line_and_hidden_lines_are_skipped()
+    {
+        var doc = NewDocument();
+        foreach (var id in new[] { "local", "speaker-1" })
+        {
+            doc = TranscriptDocumentReducer.Apply(doc, new SpeakerUpdated(doc.SessionId, new TranscriptSpeaker(id, id, null)), Now);
+        }
+
+        TranscriptSegment Line(string id, double start, double end, string speaker, string? edited = null) =>
+            Segment(id, id, start, end) with { EditedText = edited, Speakers = [new SpeakerAttribution(speaker, TimeSpan.FromSeconds(start), TimeSpan.FromSeconds(end), null)] };
+        foreach (var segment in new[]
+        {
+            Line("m1", 0, 3, "local"),
+            Line("s1", 3.5, 6, "speaker-1"),
+            Line("m2", 6.5, 6.66, "local"),           // "Taxi": 0.16 s
+            Line("m3", 7, 8, "local") // becomes a hidden echo below
+        })
+        {
+            doc = TranscriptDocumentReducer.Apply(doc, new SegmentFinalized(doc.SessionId, segment), Now);
+        }
+
+        doc = TranscriptDocumentReducer.EditSegment(doc, "m3", string.Empty, Now);
+        var turns = TranscriptTurns.Group(doc, TimeSpan.FromSeconds(5));
+        Assert.Equal([["m1", "m2"], ["s1"]], turns.Select(t => t.Segments.Select(s => s.Id).ToArray()).ToArray());
+    }
 }
