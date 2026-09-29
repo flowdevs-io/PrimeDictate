@@ -137,7 +137,7 @@ public sealed class DictationSettingsWindow : Window
         this.shownModels = models.Select(m => m.ModelId).ToList();
         this.modelBox.ItemsSource = models.Select(m => m.DisplayName).ToList();
         this.modelBox.SelectedIndex = Math.Max(0, this.shownModels.IndexOf(current ?? string.Empty));
-        this.status.Text = models.Count == 0 ? "No Whisper model is installed. Download one below." : string.Empty;
+        this.status.Text = models.Count == 0 ? "No speech model is installed. Download one below." : string.Empty;
     }
 
     private async Task LoadAsync()
@@ -203,7 +203,7 @@ public sealed class DictationSettingsWindow : Window
         if (this.modelBox.SelectedIndex is >= 0 and var mi && mi < models.Count)
         {
             s.SelectedModelId = models[mi].Id;
-            s.TranscriptionBackend = LegacyBackend.Whisper;
+            s.TranscriptionBackend = models[mi].Backend;
         }
 
         s.SelectedInputDeviceId = this.micBox.SelectedIndex is > 0 and var di && di - 1 < this.devices.Count ? this.devices[di - 1].Id : null;

@@ -108,11 +108,9 @@ public sealed class DictationSettings
         [HotkeyAction.ShowHistory] = this.HistoryHotkey.ToGesture(HotkeyGesture.DefaultHistory)
     };
 
-    /// <summary>The provider model id this setting selects, or null when the backend is not available in the new app yet.</summary>
+    /// <summary>The provider model id this setting selects (for example <c>parakeet-onnx:parakeet-tdt-0.6b-v3</c>), or null when none is selected.</summary>
     public string? ResolveModelId() =>
-        this.TranscriptionBackend == LegacyBackend.Whisper && !string.IsNullOrWhiteSpace(this.SelectedModelId)
-            ? $"whisper-onnx:{this.SelectedModelId.Trim()}"
-            : null;
+        string.IsNullOrWhiteSpace(this.SelectedModelId) ? null : $"{this.TranscriptionBackend.ModelIdPrefix()}:{this.SelectedModelId.Trim()}";
 }
 
 /// <summary>Backend names as the WPF settings file spells them.</summary>
@@ -204,4 +202,14 @@ public sealed class DictationSettingsStore(AppDataPaths paths)
         File.WriteAllText(temp, JsonSerializer.Serialize(settings, JsonOptions));
         File.Move(temp, this.Path, overwrite: true);
     }
+}
+
+public static class LegacyBackendExtensions
+{
+    public static string ModelIdPrefix(this LegacyBackend backend) => backend switch
+    {
+        LegacyBackend.Parakeet => "parakeet-onnx",
+        LegacyBackend.Moonshine => "moonshine-onnx",
+        _ => "whisper-onnx"
+    };
 }

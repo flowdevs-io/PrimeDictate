@@ -21,8 +21,8 @@ public sealed class ModelDownloadPanel : StackPanel
     {
         this.host = host;
         this.Spacing = 6;
-        this.choice.ItemsSource = WhisperModelCatalog.Options
-            .Select(o => $"{o.DisplayName} ({WhisperModelCatalog.FormatSize(o.ApproximateBytes)}){(o.Recommended ? " - recommended" : string.Empty)}")
+        this.choice.ItemsSource = SpeechModelCatalog.Options
+            .Select(o => $"{o.Backend}: {o.DisplayName} ({SpeechModelCatalog.FormatSize(o.ApproximateBytes)}){(o.Recommended ? " - recommended" : string.Empty)}")
             .ToList();
         this.choice.SelectedIndex = 0;
         this.start.Click += async (_, _) => await this.RunAsync(installed);
@@ -34,7 +34,7 @@ public sealed class ModelDownloadPanel : StackPanel
 
     private async Task RunAsync(Action installed)
     {
-        var option = WhisperModelCatalog.Options[Math.Max(0, this.choice.SelectedIndex)];
+        var option = SpeechModelCatalog.Options[Math.Max(0, this.choice.SelectedIndex)];
         this.running = new CancellationTokenSource();
         this.SetBusy(true);
         this.text.Text = $"Downloading {option.DisplayName} from GitHub...";

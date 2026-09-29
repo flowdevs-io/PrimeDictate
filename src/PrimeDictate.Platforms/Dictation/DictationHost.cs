@@ -20,8 +20,8 @@ public sealed class DictationHost : IAsyncDisposable
     private readonly IHotkeySource? hotkeys;
     private readonly IForegroundTargetGuard guard;
     private readonly object providerSync = new();
-    private SherpaWhisperProvider? provider;
-    private SherpaWhisperProvider? wakeProvider;
+    private SherpaOfflineProvider? provider;
+    private SherpaOfflineProvider? wakeProvider;
     private string? wakeProviderId;
     private string? providerId;
     private bool disposed;
@@ -106,11 +106,11 @@ public sealed class DictationHost : IAsyncDisposable
 
     public event Action? HistoryRequested;
 
-    public IReadOnlyList<InstalledWhisperModel> InstalledModels() => WhisperOnnxModelLocator.Discover(this.paths.ModelsDirectory);
+    public IReadOnlyList<InstalledSpeechModel> InstalledModels() => SpeechModelLocator.Discover(this.paths.ModelsDirectory);
 
     /// <summary>Downloads a catalog model into the shared managed folder (the same one the WPF app uses).</summary>
-    public Task<InstalledWhisperModel> DownloadModelAsync(WhisperModelOption option, IProgress<ModelDownloadProgress>? progress, CancellationToken cancellationToken) =>
-        new WhisperModelDownloader().DownloadAsync(option, this.paths.ModelsDirectory, progress, cancellationToken);
+    public Task<string> DownloadModelAsync(ModelDownloadOption option, IProgress<ModelDownloadProgress>? progress, CancellationToken cancellationToken) =>
+        new ModelDownloader().DownloadAsync(option, this.paths.ModelsDirectory, progress, cancellationToken);
 
     /// <summary>Starts the global hotkey hook in the background. Failure (missing permission, Wayland) is reported, not thrown.</summary>
     public void StartHotkeys()
@@ -189,7 +189,7 @@ public sealed class DictationHost : IAsyncDisposable
             await this.Wake.DisposeAsync().ConfigureAwait(false);
         }
 
-        SherpaWhisperProvider?[] old;
+        SherpaOfflineProvider?[] old;
         lock (this.providerSync)
         {
             old = [this.provider, this.wakeProvider];
@@ -246,10 +246,9 @@ public sealed class DictationHost : IAsyncDisposable
         var model = installed.FirstOrDefault(m => m.ModelId == wanted);
         if (model is null)
         {
-            if (wanted is null && this.Settings.TranscriptionBackend != LegacyBackend.Whisper)
+            if (wanted is not null)
             {
-                this.Notice?.Invoke($"The {this.Settings.TranscriptionBackend} backend is not in the new app yet. Pick a Whisper model in Settings.");
-                return null;
+                this.Notice?.Invoke($"The selected {this.Settings.TranscriptionBackend} model ({this.Settings.SelectedModelId}) is not installed. Download it in Settings, or pick another.");
             }
 
             model = installed.FirstOrDefault();
@@ -258,7 +257,10 @@ public sealed class DictationHost : IAsyncDisposable
                 return null;
             }
 
-            this.Notice?.Invoke($"No dictation model is selected; using {model.DisplayName}.");
+            if (wanted is null)
+            {
+                this.Notice?.Invoke($"No dictation model is selected; using {model.DisplayName}.");
+            }
         }
 
         lock (this.providerSync)
@@ -266,7 +268,7 @@ public sealed class DictationHost : IAsyncDisposable
             if (this.provider is null || this.providerId != model.ModelId)
             {
                 _ = this.provider?.DisposeAsync();
-                this.provider = new SherpaWhisperProvider(model);
+                this.provider = CreateProvider(model);
                 this.providerId = model.ModelId;
             }
 
@@ -304,6 +306,15 @@ public sealed class DictationHost : IAsyncDisposable
             this.Notice?.Invoke($"Could not save dictation stats: {ex.Message}");
         }
     }
+
+    private static SherpaOfflineProvider CreateProvider(InstalledSpeechModel model) => model.Backend switch
+    {
+        LegacyBackend.Parakeet => new SherpaParakeetProvider(model),
+        LegacyBackend.Moonshine => new SherpaMoonshineProvider(model),
+        _ => new SherpaWhisperProvider(WhisperOnnxModelLocator.TryResolve(model.Directory, out var whisper)
+            ? whisper
+            : throw new FileNotFoundException($"The Whisper model folder is incomplete: {model.Directory}"))
+    };
 
     private void ConfigureWake() =>
         this.Wake?.Configure(this.Settings.EnableWakeWord, this.Settings.WakeWordPhrase, this.Settings.SelectedInputDeviceId, this.Settings.InputGainMultiplier);
@@ -349,7 +360,7 @@ public sealed class DictationHost : IAsyncDisposable
     {
         var installed = this.InstalledModels();
         var small = new[] { "tiny.en", "base.en", "tiny", "base" }
-            .Select(id => installed.FirstOrDefault(m => string.Equals(m.Id, id, StringComparison.OrdinalIgnoreCase)))
+            .Select(id => installed.FirstOrDefault(m => m.Backend == LegacyBackend.Whisper && string.Equals(m.Id, id, StringComparison.OrdinalIgnoreCase)))
             .FirstOrDefault(m => m is not null);
         if (small is null)
         {
@@ -361,7 +372,7 @@ public sealed class DictationHost : IAsyncDisposable
             if (this.wakeProvider is null || this.wakeProviderId != small.ModelId)
             {
                 _ = this.wakeProvider?.DisposeAsync();
-                this.wakeProvider = new SherpaWhisperProvider(small);
+                this.wakeProvider = CreateProvider(small);
                 this.wakeProviderId = small.ModelId;
             }
 

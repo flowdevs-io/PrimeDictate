@@ -60,7 +60,7 @@ public sealed class DictationOnboardingWindow : Window
         var models = this.host.InstalledModels();
         this.Add(models.Count > 0, "Speech model", models.Count > 0
             ? $"{models.Count} installed."
-            : $"None installed yet. Download one below (Tiny English is the fastest to start with), or copy a Whisper ONNX model folder into {this.host.ModelsFolder}.");
+            : $"None installed yet. Download one below (Whisper Tiny English is the fastest to start with), or copy a model folder into {this.host.ModelsFolder}.");
         this.Add(this.host.HotkeyUnavailableReason is null, "Global hotkey", this.host.HotkeyUnavailableReason ?? "Available.");
         this.Add(this.host.FocusGuardAvailable, "Typing into the right window", this.host.FocusGuardAvailable
             ? "PrimeDictate checks that the window you started in is still in front before typing."
@@ -98,7 +98,7 @@ public sealed class DictationOnboardingWindow : Window
         if (this.modelBox.SelectedIndex is >= 0 and var i && i < models.Count)
         {
             settings.SelectedModelId = models[i].Id;
-            settings.TranscriptionBackend = LegacyBackend.Whisper;
+            settings.TranscriptionBackend = models[i].Backend;
         }
 
         this.host.ApplySettings(settings);

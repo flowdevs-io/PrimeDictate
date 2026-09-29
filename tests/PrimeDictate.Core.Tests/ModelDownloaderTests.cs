@@ -40,7 +40,7 @@ public sealed class ModelDownloaderTests : IDisposable
         }
     }
 
-    private static readonly WhisperModelOption Tiny = WhisperModelCatalog.Options.First(o => o.Id == "tiny.en");
+    private static readonly ModelDownloadOption Tiny = SpeechModelCatalog.Options.First(o => o.Id == "tiny.en");
 
     [Fact]
     public async Task A_valid_archive_is_installed_and_found_by_the_locator()
@@ -53,15 +53,15 @@ public sealed class ModelDownloaderTests : IDisposable
 
         var models = Path.Combine(this.root, "models");
         var reports = new List<string>();
-        var installed = await new WhisperModelDownloader(new HttpClient(new Handler(archive))).DownloadAsync(
+        var installed = await new ModelDownloader(new HttpClient(new Handler(archive))).DownloadAsync(
             Tiny, models, new Progress<ModelDownloadProgress>(p => reports.Add(p.Stage)));
-        Assert.Equal("whisper-onnx:tiny.en", installed.ModelId);
-        Assert.Contains(WhisperOnnxModelLocator.Discover(models), m => m.Id == "tiny.en");
+        Assert.EndsWith("sherpa-onnx-whisper-tiny.en", installed);
+        Assert.Contains(SpeechModelLocator.Discover(models), m => m.ModelId == "whisper-onnx:tiny.en");
         Assert.DoesNotContain(Directory.GetFileSystemEntries(Path.Combine(models, "whisper")), p => p.EndsWith(".download") || p.EndsWith(".extract"));
 
         // Already installed: no second download.
-        var again = await new WhisperModelDownloader(new HttpClient(new Handler([]))).DownloadAsync(Tiny, models);
-        Assert.Equal(installed.Directory, again.Directory);
+        var again = await new ModelDownloader(new HttpClient(new Handler([]))).DownloadAsync(Tiny, models);
+        Assert.Equal(installed, again);
     }
 
     [Fact]
@@ -75,8 +75,8 @@ public sealed class ModelDownloaderTests : IDisposable
 
         var models = Path.Combine(this.root, "models");
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            new WhisperModelDownloader(new HttpClient(new Handler(archive))).DownloadAsync(Tiny, models));
-        Assert.Empty(WhisperOnnxModelLocator.Discover(models));
+            new ModelDownloader(new HttpClient(new Handler(archive))).DownloadAsync(Tiny, models));
+        Assert.Empty(SpeechModelLocator.Discover(models));
         Assert.False(Directory.Exists(Path.Combine(models, "whisper", Tiny.InstallDirectoryName)));
     }
 
@@ -85,18 +85,19 @@ public sealed class ModelDownloaderTests : IDisposable
     {
         var models = Path.Combine(this.root, "models");
         await Assert.ThrowsAsync<HttpRequestException>(() =>
-            new WhisperModelDownloader(new HttpClient(new Handler([], HttpStatusCode.NotFound))).DownloadAsync(Tiny, models));
+            new ModelDownloader(new HttpClient(new Handler([], HttpStatusCode.NotFound))).DownloadAsync(Tiny, models));
         await Assert.ThrowsAnyAsync<Exception>(() =>
-            new WhisperModelDownloader(new HttpClient(new Handler([1, 2, 3]))).DownloadAsync(Tiny, models));
+            new ModelDownloader(new HttpClient(new Handler([1, 2, 3]))).DownloadAsync(Tiny, models));
         Assert.Empty(Directory.GetFileSystemEntries(Path.Combine(models, "whisper")));
     }
 
     [Fact]
     public void Catalog_ids_match_the_wpf_folders_so_installs_are_shared()
     {
-        Assert.Equal("sherpa-onnx-whisper-base.en", WhisperModelCatalog.Options.First(o => o.Id == "base.en").InstallDirectoryName);
+        Assert.Equal("sherpa-onnx-whisper-base.en", SpeechModelCatalog.Options.First(o => o.Id == "base.en").InstallDirectoryName);
         Assert.EndsWith("/asr-models/sherpa-onnx-whisper-base.en.tar.bz2", Tiny.DownloadUri.AbsoluteUri.Replace("tiny.en", "base.en"));
-        Assert.Equal(7, WhisperModelCatalog.Options.Count);
+        Assert.Equal(11, SpeechModelCatalog.Options.Count);
+        Assert.Equal("parakeet-onnx:parakeet-tdt-0.6b-v3", SpeechModelCatalog.Options.First(o => o.Backend == PrimeDictate.Core.Dictation.LegacyBackend.Parakeet).ModelId);
     }
 }
 
@@ -115,5 +116,60 @@ public sealed class RealArchiveLayoutTests
         Assert.True(PrimeDictate.Platforms.Speech.WhisperOnnxModelLocator.TryResolve(dir, out var model));
         Assert.Contains("int8", model.Encoder);
         Directory.Delete(Path.GetDirectoryName(dir)!, true);
+    }
+}
+
+public sealed class OtherFamilyTests : IDisposable
+{
+    private readonly string root = Path.Combine(Path.GetTempPath(), "pd-fam-" + Guid.NewGuid().ToString("N"));
+
+    public void Dispose()
+    {
+        if (Directory.Exists(this.root))
+        {
+            Directory.Delete(this.root, true);
+        }
+    }
+
+    private void Touch(string sub, string folder, params string[] files)
+    {
+        var dir = Path.Combine(this.root, sub, folder);
+        Directory.CreateDirectory(dir);
+        foreach (var f in files)
+        {
+            File.WriteAllText(Path.Combine(dir, f), "x");
+        }
+    }
+
+    [Fact]
+    public void Parakeet_and_both_moonshine_layouts_are_discovered()
+    {
+        this.Touch("parakeet", "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8", "encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt");
+        this.Touch("moonshine", "sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27", "encoder_model.ort", "decoder_model_merged.ort", "tokens.txt");
+        this.Touch("moonshine", "sherpa-onnx-moonshine-base-en-int8", "preprocess.onnx", "encode.int8.onnx", "uncached_decode.int8.onnx", "cached_decode.int8.onnx", "tokens.txt");
+        var ids = SpeechModelLocator.Discover(this.root).Select(m => m.ModelId).Order().ToArray();
+        Assert.Equal(["moonshine-onnx:moonshine-base-en", "moonshine-onnx:moonshine-tiny-v2-en", "parakeet-onnx:parakeet-tdt-0.6b-v3"], ids);
+        var v2 = SpeechModelLocator.ResolveMoonshine(Path.Combine(this.root, "moonshine", "sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27"))!;
+        Assert.NotNull(v2.MergedDecoder);
+        Assert.Null(SpeechModelLocator.ResolveMoonshine(Path.Combine(this.root, "moonshine", "sherpa-onnx-moonshine-base-en-int8"))!.MergedDecoder);
+    }
+
+    [Fact]
+    public void Incomplete_folders_are_not_listed()
+    {
+        this.Touch("parakeet", "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8", "encoder.int8.onnx", "tokens.txt");
+        this.Touch("moonshine", "sherpa-onnx-moonshine-base-en-int8", "tokens.txt");
+        Assert.Empty(SpeechModelLocator.Discover(this.root));
+    }
+
+    [Fact]
+    public void Setting_resolves_the_model_id_for_each_backend()
+    {
+        var s = new PrimeDictate.Core.Dictation.DictationSettings { SelectedModelId = "x", TranscriptionBackend = PrimeDictate.Core.Dictation.LegacyBackend.Moonshine };
+        Assert.Equal("moonshine-onnx:x", s.ResolveModelId());
+        s.TranscriptionBackend = PrimeDictate.Core.Dictation.LegacyBackend.Parakeet;
+        Assert.Equal("parakeet-onnx:x", s.ResolveModelId());
+        s.SelectedModelId = null;
+        Assert.Null(s.ResolveModelId());
     }
 }

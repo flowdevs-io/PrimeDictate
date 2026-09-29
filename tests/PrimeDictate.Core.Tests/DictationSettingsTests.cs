@@ -66,10 +66,10 @@ public sealed class DictationSettingsTests : IDisposable
     }
 
     [Fact]
-    public void Non_whisper_backends_have_no_model_yet_and_invalid_hotkeys_fall_back()
+    public void Backends_map_to_their_own_model_ids_and_invalid_hotkeys_fall_back()
     {
         var settings = new DictationSettings { TranscriptionBackend = LegacyBackend.Parakeet, SelectedModelId = "x" };
-        Assert.Null(settings.ResolveModelId());
+        Assert.Equal("parakeet-onnx:x", settings.ResolveModelId());
         settings.DictationHotkey = new HotkeyDto { KeyCode = "VcSpace" };
         Assert.Equal(HotkeyGesture.Default, settings.ToBindings()[HotkeyAction.ToggleDictation]);
     }
