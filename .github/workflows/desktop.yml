@@ -1,0 +1,34 @@
+name: Desktop (transcription workspace)
+
+# Builds the cross-platform Avalonia shell for Windows x64 so it can be downloaded and tried.
+# This workflow never signs, releases, or publishes anything; it only uploads a workflow artifact.
+on:
+  push:
+    branches: [claude/project-thread-gmksub]
+    paths: ["src/**", "tests/PrimeDictate.Core.Tests/**", ".github/workflows/desktop.yml", "global.json"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop-win-x64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: global.json
+      - name: Test Core
+        run: dotnet test tests/PrimeDictate.Core.Tests -c Release
+      - name: Publish desktop shell
+        run: dotnet publish src/PrimeDictate.Desktop -c Release -r win-x64 --self-contained -o artifacts/desktop-win-x64
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: primedictate-desktop-win-x64
+          path: artifacts/desktop-win-x64
+          if-no-files-found: error
