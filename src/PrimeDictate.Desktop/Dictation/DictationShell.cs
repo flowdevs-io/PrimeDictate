@@ -30,6 +30,7 @@ public sealed class DictationShell : IAsyncDisposable
     private DateTime errorUntilUtc;
     private DictationSettingsWindow? settingsWindow;
     private DictationHistoryWindow? historyWindow;
+    private DictationStatsWindow? statsWindow;
 
     public DictationShell(IClassicDesktopStyleApplicationLifetime lifetime, TranscriptionWorkspaceService workspace, Action showWorkspace, DictationHost? host = null)
     {
@@ -95,11 +96,13 @@ public sealed class DictationShell : IAsyncDisposable
         workspaceItem.Click += (_, _) => this.showWorkspace();
         var historyItem = new NativeMenuItem("Dictation history...");
         historyItem.Click += (_, _) => this.ShowHistory();
+        var statsItem = new NativeMenuItem("Dictation stats...");
+        statsItem.Click += (_, _) => this.ShowStats();
         var settingsItem = new NativeMenuItem("Dictation settings...");
         settingsItem.Click += (_, _) => this.ShowSettings();
         var quitItem = new NativeMenuItem("Quit PrimeDictate");
         quitItem.Click += (_, _) => this.lifetime.Shutdown();
-        this.tray.Menu = [this.toggleItem, workspaceItem, historyItem, settingsItem, new NativeMenuItemSeparator(), quitItem];
+        this.tray.Menu = [this.toggleItem, workspaceItem, historyItem, statsItem, settingsItem, new NativeMenuItemSeparator(), quitItem];
         this.tray.Clicked += (_, _) => this.showWorkspace();
         this.tray.Icon = TrayIconRenderer.Create(this.CurrentTrayState());
         this.tray.ToolTipText = "PrimeDictate: ready";
@@ -168,6 +171,18 @@ public sealed class DictationShell : IAsyncDisposable
 
         this.historyWindow = new DictationHistoryWindow(this.host);
         this.historyWindow.Show();
+    }
+
+    private void ShowStats()
+    {
+        if (this.statsWindow is { IsVisible: true })
+        {
+            this.statsWindow.Activate();
+            return;
+        }
+
+        this.statsWindow = new DictationStatsWindow(this.host);
+        this.statsWindow.Show();
     }
 
     private void ShowSettings()

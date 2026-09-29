@@ -40,6 +40,9 @@ public sealed class DictationSettings
 
     public bool PlayAudioCues { get; set; } = true;
 
+    /// <summary>Typing speed used for the time-saved figure. Valid range 20 to 120.</summary>
+    public int BaselineTypingSpeedWpm { get; set; } = DictationStatsStore.DefaultBaselineWpm;
+
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public OverlayStyle OverlayMode { get; set; } = OverlayStyle.CompactMicrophone;
 

@@ -57,7 +57,7 @@ public sealed class ModelDownloaderTests : IDisposable
             Tiny, models, new Progress<ModelDownloadProgress>(p => reports.Add(p.Stage)));
         Assert.Equal("whisper-onnx:tiny.en", installed.ModelId);
         Assert.Contains(WhisperOnnxModelLocator.Discover(models), m => m.Id == "tiny.en");
-        Assert.Empty(Directory.GetFileSystemEntries(Path.Combine(models, "whisper")).Where(p => p.EndsWith(".download") || p.EndsWith(".extract")));
+        Assert.DoesNotContain(Directory.GetFileSystemEntries(Path.Combine(models, "whisper")), p => p.EndsWith(".download") || p.EndsWith(".extract"));
 
         // Already installed: no second download.
         var again = await new WhisperModelDownloader(new HttpClient(new Handler([]))).DownloadAsync(Tiny, models);

@@ -16,6 +16,7 @@ public sealed class DictationHost : IAsyncDisposable
     private readonly AppDataPaths paths;
     private readonly DictationSettingsStore store;
     private readonly DictationHistoryStore history;
+    private readonly DictationStatsStore stats;
     private readonly IHotkeySource? hotkeys;
     private readonly IForegroundTargetGuard guard;
     private readonly object providerSync = new();
@@ -37,6 +38,7 @@ public sealed class DictationHost : IAsyncDisposable
         this.paths = paths;
         this.store = new DictationSettingsStore(paths);
         this.history = new DictationHistoryStore(paths);
+        this.stats = new DictationStatsStore(paths);
         this.hotkeys = hotkeys;
         this.guard = guard ?? PlatformInput.CreateForegroundGuard();
         var load = this.store.Load();
@@ -272,17 +274,34 @@ public sealed class DictationHost : IAsyncDisposable
         }
     }
 
+    /// <summary>Lifetime totals (same <c>stats.json</c> as the WPF app). Built from history the first time.</summary>
+    public DictationStatsState Stats() => this.stats.LoadOrCreate(() => this.history.List(limit: DictationHistoryStore.MaxEntries));
+
     private void OnCommitted(DictationCommit commit)
     {
+        DictationHistoryEntry entry;
         try
         {
-            var entry = DictationHistoryEntry.From(commit);
+            entry = DictationHistoryEntry.From(commit);
             this.history.Add(entry);
             this.HistoryChanged?.Invoke(entry);
         }
         catch (Exception ex)
         {
             this.Notice?.Invoke($"Could not save dictation history: {ex.Message}");
+            return;
+        }
+
+        try
+        {
+            foreach (var achievement in this.stats.Record(entry).NewAchievements)
+            {
+                this.Notice?.Invoke($"{achievement.Title}: {achievement.Message}");
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            this.Notice?.Invoke($"Could not save dictation stats: {ex.Message}");
         }
     }
 
