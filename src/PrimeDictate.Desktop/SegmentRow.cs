@@ -94,7 +94,8 @@ public sealed class SegmentRow(string id) : INotifyPropertyChanged
         this.Speaker = name.Length > 0
             ? (provisional || known is null ? name + "?" : name)
             : provisional && speakers.Count > 0 ? "speaker pending" : string.Empty;
-        this.Time = FormatTime(first.Start);
+        var last = segments.OrderBy(s => s.End).Last();
+        this.Time = last.End > first.Start + TimeSpan.FromSeconds(0.5) ? $"{FormatTime(first.Start)}–{FormatTime(last.End)}" : FormatTime(first.Start);
         this.Provisional = provisional;
         if (!this.IsEditing)
         {

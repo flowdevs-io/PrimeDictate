@@ -114,7 +114,7 @@ public sealed class LiveSourceTests : IDisposable
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class FakeStream(bool diarize) : IStreamingRecognitionSession
+    private sealed class FakeStream(bool diarize, string text) : IStreamingRecognitionSession
     {
         private readonly Channel<StreamingUpdate> updates = Channel.CreateUnbounded<StreamingUpdate>();
         private long voicedStart = -1;
@@ -157,7 +157,7 @@ public sealed class LiveSourceTests : IDisposable
                 var segment = new RecognizedSegment(
                     TimeSpan.FromSeconds(this.voicedStart / 16_000d),
                     TimeSpan.FromSeconds(this.voicedEnd / 16_000d),
-                    this.Diarize ? "remote talk" : "hello from mic",
+                    text,
                     null,
                     null,
                     this.Diarize ? "speaker-1" : null,
@@ -185,7 +185,7 @@ public sealed class LiveSourceTests : IDisposable
         }
     }
 
-    private sealed class FakeStreamProvider(int failOnCall = 0) : ITranscriptionProvider
+    private sealed class FakeStreamProvider(int failOnCall = 0, string micText = "hello from mic", string systemText = "remote talk") : ITranscriptionProvider
     {
         private int calls;
 
@@ -206,7 +206,7 @@ public sealed class LiveSourceTests : IDisposable
                 throw new InvalidOperationException("worker busy");
             }
 
-            var stream = new FakeStream(diarize);
+            var stream = new FakeStream(diarize, diarize ? systemText : micText);
             this.Streams.Add(stream);
             return ValueTask.FromResult<IStreamingRecognitionSession>(stream);
         }
@@ -346,6 +346,30 @@ public sealed class LiveSourceTests : IDisposable
         Assert.Equal("You", doc.Speakers.Single(s => s.Id == "local").Name);
         Assert.Equal("Speaker 1", doc.Speakers.Single(s => s.Id == "speaker-1").Name);
         Assert.Contains(doc.Notes, n => n.Contains("two separate streams"));
+    }
+
+    [Fact]
+    public async Task Microphone_lines_that_repeat_the_system_audio_are_hidden_but_kept()
+    {
+        // The microphone hears the speakers: same words out of both streams, at slightly different times.
+        var (doc, _) = await this.RunMeetingAsync(new FakeStreamProvider(micText: "let it do its thing", systemText: "yeah it's still setting up let it do its thing"));
+
+        var mic = Assert.Single(doc.ActiveSegments, l => l.Speakers[0].SpeakerId == "local");
+        Assert.Equal("let it do its thing", mic.RawText);   // recognized text is kept
+        Assert.Equal(string.Empty, mic.DisplayText);        // but it is hidden
+        Assert.Contains(doc.ActiveSegments, l => l.Speakers[0].SpeakerId == "speaker-1" && l.DisplayText.Length > 0);
+        Assert.Contains(doc.Notes, n => n.Contains("hears the speakers"));
+        var text = PrimeDictate.Core.Export.TranscriptExporter.Export(doc, new PrimeDictate.Core.Export.ExportOptions(PrimeDictate.Core.Export.ExportFormat.Text));
+        Assert.DoesNotContain("let it do its thing\n", text.Replace("yeah it's still setting up let it do its thing", string.Empty));
+    }
+
+    [Fact]
+    public async Task Different_words_on_the_two_streams_are_both_kept()
+    {
+        var (doc, _) = await this.RunMeetingAsync(new FakeStreamProvider());
+
+        Assert.All(doc.ActiveSegments, l => Assert.NotEmpty(l.DisplayText));
+        Assert.Equal(2, doc.ActiveSegments.Count());
     }
 
     [Fact]

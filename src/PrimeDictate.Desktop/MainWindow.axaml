@@ -77,7 +77,7 @@
             <ListBox x:Name="TranscriptList">
               <ListBox.ItemTemplate>
                 <DataTemplate x:DataType="d:SegmentRow">
-                  <Grid ColumnDefinitions="4,64,Auto,*" Opacity="{Binding Opacity}">
+                  <Grid ColumnDefinitions="4,110,Auto,*" Opacity="{Binding Opacity}">
                     <Border Grid.Column="0" Background="{Binding SpeakerBrush}" CornerRadius="2" Margin="0,4,6,4" />
                     <TextBlock Grid.Column="1" Text="{Binding Time}" Opacity="0.6" VerticalAlignment="Top" Margin="0,8,0,0" />
                     <TextBlock Grid.Column="2" MinWidth="90" Text="{Binding Speaker}" IsVisible="{Binding HasSpeaker}" FontWeight="SemiBold" VerticalAlignment="Top" Margin="0,8,8,0" />
