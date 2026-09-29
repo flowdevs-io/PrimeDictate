@@ -170,7 +170,7 @@ public static class NemotronResponseParser
                 group[0].Start,
                 group[^1].End,
                 string.Join(' ', group.Select(g => g.Text)),
-                group.Select(g => new WordTiming(g.Text, g.Start, g.End, g.Confidence, TimingProvenance.Model)).ToList(),
+                group.Select(g => new WordTiming(g.Text, g.Start, g.End, g.Confidence, TimingProvenance.Model, g.Speaker is null ? null : $"speaker-{g.Speaker}")).ToList(),
                 group.Where(g => g.Confidence is not null).Select(g => g.Confidence!.Value).DefaultIfEmpty(double.NaN).Average() is var avg && !double.IsNaN(avg) ? avg : null,
                 speaker is null ? null : $"speaker-{speaker}",
                 TimingProvenance.Model));

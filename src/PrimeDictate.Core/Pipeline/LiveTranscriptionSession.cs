@@ -684,7 +684,9 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
 
                 var revision = pipe.Revisions.GetValueOrDefault(id) + 1;
                 pipe.Revisions[id] = revision;
-                var recognized = pipe.ForcedSpeaker is null ? update.Segment : update.Segment with { SpeakerLabel = pipe.ForcedSpeaker };
+                var recognized = pipe.ForcedSpeaker is null
+                    ? update.Segment
+                    : update.Segment with { SpeakerLabel = pipe.ForcedSpeaker, Words = update.Segment.Words?.Select(w => w with { SpeakerId = pipe.ForcedSpeaker }).ToList() };
                 var mapped = SegmentMapper.Map([recognized], "x", 0, TimeSpan.FromDays(365), 1, revision, update.IsFinal ? SegmentState.Final : SegmentState.Provisional)
                     .Select(m => m with { Id = id }).ToList();
                 host.EnsureSpeakers(mapped);
