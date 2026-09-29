@@ -28,7 +28,7 @@ public static class TranscriptDocumentReducer
                 Duration = completed.Duration,
                 UpdatedAt = now
             },
-            SessionFailed => document with { Status = TranscriptSessionStatus.Failed, UpdatedAt = now },
+            SessionFailed failed => document with { Status = TranscriptSessionStatus.Failed, FailureReason = $"{failed.ErrorCode}: {failed.Message}", UpdatedAt = now },
             ProgressChanged => document,
             _ => throw new NotSupportedException($"Unknown event {@event.GetType().Name}.")
         };
@@ -64,6 +64,32 @@ public static class TranscriptDocumentReducer
         {
             DisplayName = string.IsNullOrWhiteSpace(displayName) ? null : displayName.Trim()
         };
+        return document with { Speakers = speakers, UpdatedAt = now };
+    }
+
+    /// <summary>Shows <paramref name="speakerId"/> as <paramref name="intoId"/>. Only the mapping changes.</summary>
+    public static TranscriptDocument MergeSpeaker(TranscriptDocument document, string speakerId, string intoId, DateTimeOffset now)
+    {
+        var target = document.ResolveSpeakerId(intoId);
+        if (document.Speakers.All(s => s.Id != speakerId) || document.Speakers.All(s => s.Id != target))
+        {
+            throw new KeyNotFoundException("Both speakers must exist.");
+        }
+
+        if (target == speakerId)
+        {
+            // Into itself, or into a speaker that is already shown as this one: nothing to do, and no cycle.
+            return document;
+        }
+
+        var speakers = document.Speakers.Select(s => s.Id == speakerId ? s with { MergedIntoId = target } : s).ToList();
+        return document with { Speakers = speakers, UpdatedAt = now };
+    }
+
+    /// <summary>Undoes a merge. Speakers that were merged into this one stay merged into it.</summary>
+    public static TranscriptDocument UnmergeSpeaker(TranscriptDocument document, string speakerId, DateTimeOffset now)
+    {
+        var speakers = document.Speakers.Select(s => s.Id == speakerId ? s with { MergedIntoId = null } : s).ToList();
         return document with { Speakers = speakers, UpdatedAt = now };
     }
 

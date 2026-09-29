@@ -100,6 +100,44 @@ public sealed class StorageTests : IDisposable
     }
 
     [Fact]
+    public async Task Speaker_merges_only_change_the_mapping_and_persist_with_failure_reason_and_notes()
+    {
+        await using var store = await this.OpenStoreAsync();
+        var doc = NewDocument();
+        foreach (var n in new[] { 1, 2, 3 })
+        {
+            doc = TranscriptDocumentReducer.Apply(doc, new SpeakerUpdated(doc.SessionId, new TranscriptSpeaker($"speaker-{n}", $"Speaker {n}", null)), Now);
+        }
+
+        TranscriptSegment Spoken(string id, string text, double start, string speaker) =>
+            Segment(id, text, start, start + 1) with { Speakers = [new SpeakerAttribution(speaker, TimeSpan.FromSeconds(start), TimeSpan.FromSeconds(start + 1), null)] };
+        doc = TranscriptDocumentReducer.Apply(doc, new SegmentFinalized(doc.SessionId, Spoken("a", "one", 0, "speaker-1")), Now);
+        doc = TranscriptDocumentReducer.Apply(doc, new SegmentFinalized(doc.SessionId, Spoken("b", "two", 2, "speaker-3")), Now);
+        doc = TranscriptDocumentReducer.RenameSpeaker(doc, "speaker-1", "Justin", Now);
+        doc = TranscriptDocumentReducer.MergeSpeaker(doc, "speaker-3", "speaker-1", Now);
+        doc = TranscriptDocumentReducer.MergeSpeaker(doc, "speaker-2", "speaker-3", Now);
+        doc = TranscriptDocumentReducer.MergeSpeaker(doc, "speaker-1", "speaker-2", Now); // would be a cycle: no-op
+        doc = TranscriptDocumentReducer.Apply(doc, new SessionFailed(doc.SessionId, "live-failed", "NemotronException: lost", true), Now);
+        doc = doc with { Notes = ["00:01:02: restarted"] };
+
+        Assert.Equal("speaker-1", doc.ResolveSpeakerId("speaker-2"));
+        Assert.Equal(["speaker-1"], doc.VisibleSpeakers.Select(x => x.Id));
+        // Segments keep their original speaker ids.
+        Assert.Equal("speaker-3", doc.Segments.Single(x => x.Id == "b").Speakers[0].SpeakerId);
+        Assert.Contains("Justin", PrimeDictate.Core.Export.TranscriptExporter.Export(doc, new PrimeDictate.Core.Export.ExportOptions(PrimeDictate.Core.Export.ExportFormat.Text)).Split('\n').Single(l => l.Contains("two")));
+
+        await store.SaveCheckpointAsync(doc, CancellationToken.None);
+        var loaded = (await store.LoadAsync(doc.SessionId, CancellationToken.None))!;
+        Assert.Equal("speaker-1", loaded.ResolveSpeakerId("speaker-3"));
+        Assert.Equal("live-failed: NemotronException: lost", loaded.FailureReason);
+        Assert.Equal(["00:01:02: restarted"], loaded.Notes);
+
+        loaded = TranscriptDocumentReducer.UnmergeSpeaker(loaded, "speaker-3", Now);
+        Assert.Equal("speaker-3", loaded.ResolveSpeakerId("speaker-3"));
+        Assert.Equal("speaker-1", loaded.ResolveSpeakerId("speaker-2")); // merges point at the group root, so splitting 3 out leaves 2 where it was
+    }
+
+    [Fact]
     public async Task Delete_removes_owned_audio_and_never_the_users_original()
     {
         await using var store = await this.OpenStoreAsync();

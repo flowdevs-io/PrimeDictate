@@ -43,6 +43,16 @@ public sealed class SessionDocumentHost
     public void RenameSpeaker(string speakerId, string? name) =>
         this.Update(d => TranscriptDocumentReducer.RenameSpeaker(d, speakerId, name, this.clock()));
 
+    public void MergeSpeaker(string speakerId, string intoId) =>
+        this.Update(d => TranscriptDocumentReducer.MergeSpeaker(d, speakerId, intoId, this.clock()));
+
+    public void UnmergeSpeaker(string speakerId) =>
+        this.Update(d => TranscriptDocumentReducer.UnmergeSpeaker(d, speakerId, this.clock()));
+
+    /// <summary>Records something that happened during the session, so it can be read later with the transcript.</summary>
+    public void AddNote(string note) =>
+        this.Update(d => d with { Notes = [.. d.Notes, note], UpdatedAt = this.clock() });
+
     /// <summary>
     /// Registers any speaker ids used by <paramref name="segments"/> that the document does not know
     /// yet, named "Speaker 1", "Speaker 2" in order of first appearance. Existing names are kept.

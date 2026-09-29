@@ -96,6 +96,12 @@ public sealed record TranscriptSegment
 /// <summary>Anonymous speaker found by diarization. Renaming changes only <see cref="DisplayName"/>.</summary>
 public sealed record TranscriptSpeaker(string Id, string DefaultLabel, string? DisplayName)
 {
+    /// <summary>
+    /// When set, this speaker is shown as another one. Segments keep their original speaker id; merging only
+    /// changes how they are grouped, named and colored, and can be undone.
+    /// </summary>
+    public string? MergedIntoId { get; init; }
+
     public string Name => string.IsNullOrWhiteSpace(this.DisplayName) ? this.DefaultLabel : this.DisplayName;
 }
 
@@ -167,6 +173,34 @@ public sealed record TranscriptDocument
     public int ActiveResultVersion { get; init; } = 1;
 
     public IReadOnlyList<TranscriptSpeaker> Speakers { get; init; } = [];
+
+    /// <summary>Why the session is in the Failed state. Null otherwise.</summary>
+    public string? FailureReason { get; init; }
+
+    /// <summary>Things that happened during the session the reader should know, such as a recognizer restart.</summary>
+    public IReadOnlyList<string> Notes { get; init; } = [];
+
+    /// <summary>Speakers that are not merged into another one.</summary>
+    public IEnumerable<TranscriptSpeaker> VisibleSpeakers => this.Speakers.Where(s => s.MergedIntoId is null);
+
+    /// <summary>The speaker a segment's speaker id is shown as, following merges.</summary>
+    public string ResolveSpeakerId(string id) => ResolveSpeakerId(this.Speakers, id);
+
+    public static string ResolveSpeakerId(IReadOnlyList<TranscriptSpeaker> speakers, string id)
+    {
+        for (var hops = 0; hops <= speakers.Count; hops++)
+        {
+            var next = speakers.FirstOrDefault(s => s.Id == id)?.MergedIntoId;
+            if (next is null)
+            {
+                return id;
+            }
+
+            id = next;
+        }
+
+        return id;
+    }
 
     public IReadOnlyList<TranscriptSegment> Segments { get; init; } = [];
 

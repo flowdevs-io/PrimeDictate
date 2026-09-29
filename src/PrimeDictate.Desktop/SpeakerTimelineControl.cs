@@ -84,7 +84,7 @@ public sealed class SpeakerTimelineControl : Control
             return;
         }
 
-        var lanes = document.Speakers.Select((s, i) => new Lane(s.Id, s.Name, i)).ToList();
+        var lanes = document.Speakers.Select((s, i) => new Lane(s.Id, s.Name, i)).Where((_, i) => document.Speakers[i].MergedIntoId is null).ToList();
         var bars = new List<Bar>();
         double end = 0;
         foreach (var segment in document.ActiveSegments)
@@ -92,7 +92,8 @@ public sealed class SpeakerTimelineControl : Control
             var provisional = segment.State != SegmentState.Final;
             foreach (var attribution in segment.Speakers.Count > 0 ? segment.Speakers : [])
             {
-                var lane = lanes.FindIndex(l => l.SpeakerId == attribution.SpeakerId);
+                var shownAs = document.ResolveSpeakerId(attribution.SpeakerId);
+                var lane = lanes.FindIndex(l => l.SpeakerId == shownAs);
                 if (lane < 0)
                 {
                     continue;

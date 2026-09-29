@@ -65,7 +65,7 @@ public sealed class SegmentRow(string id) : INotifyPropertyChanged
 
     public void Update(TranscriptSegment segment, IReadOnlyList<TranscriptSpeaker> speakers)
     {
-        var id = segment.Speakers.Count > 0 ? segment.Speakers[0].SpeakerId : null;
+        var id = segment.Speakers.Count > 0 ? TranscriptDocument.ResolveSpeakerId(speakers, segment.Speakers[0].SpeakerId) : null;
         var name = id is null ? string.Empty : speakers.FirstOrDefault(s => s.Id == id)?.Name ?? id;
         var index = id is null ? -1 : speakers.ToList().FindIndex(s => s.Id == id);
         var brush = index < 0 ? Brushes.Transparent : SpeakerPalette.BrushFor(index);

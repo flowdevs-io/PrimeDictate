@@ -241,7 +241,7 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         var duration = this.Elapsed;
         if (this.failure is not null)
         {
-            host.Apply(new SessionFailed(host.Document.SessionId, "capture-failed", this.failure.GetType().Name, Recoverable: true));
+            host.Apply(new SessionFailed(host.Document.SessionId, "live-failed", $"{this.failure.GetType().Name}: {this.failure.Message}", Recoverable: true));
         }
         else
         {
@@ -508,7 +508,11 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         await using var stream = await this.provider.StartStreamingAsync(this.options.Session.Language, diarize, ct).ConfigureAwait(false);
         if (stream is IStreamingNotices notices)
         {
-            notices.Notice += message => this.Error?.Invoke(message);
+            notices.Notice += message =>
+            {
+                host.AddNote($"{TimeSpan.FromTicks(this.Elapsed.Ticks):hh\\:mm\\:ss}: {message}");
+                this.Error?.Invoke(message);
+            };
         }
 
 

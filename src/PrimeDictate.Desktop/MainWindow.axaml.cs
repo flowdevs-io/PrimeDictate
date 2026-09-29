@@ -300,8 +300,9 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void RefreshSpeakers(TranscriptDocument? document)
     {
-        var speakers = document?.Speakers ?? [];
-        this.SpeakersPanel.IsVisible = speakers.Count > 0;
+        var all = document?.Speakers ?? [];
+        var speakers = all.Where(s => s.MergedIntoId is null).ToList();
+        this.SpeakersPanel.IsVisible = all.Count > 0;
         if (!speakers.Select(s => s.Id).SequenceEqual(this.speakerBoxes.Keys))
         {
             this.speakerBoxes.Clear();
@@ -318,31 +319,74 @@ public sealed partial class MainWindow : Window
                         this.TranscriptList.Focus();
                     }
                 };
+                var more = new Button { Content = "Merge…", Tag = speaker.Id, Padding = new Thickness(6, 2), Margin = new Thickness(4, 0, 0, 0) };
+                ToolTip.SetTip(more, "Show another speaker as this one (or split one back out). Nothing in the transcript is rewritten.");
+                more.Click += (_, _) => this.OpenMergeMenu(more);
                 this.speakerBoxes[speaker.Id] = box;
-                this.SpeakerBoxes.Children.Add(box);
+                this.SpeakerBoxes.Children.Add(new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Children = { box, more } });
             }
 
             return;
         }
 
         // While recording, outline the box of whoever spoke most recently, in their timeline color.
-        var latest = this.live is null ? null : document?.ActiveSegments.LastOrDefault(s => s.Speakers.Count > 0)?.Speakers[0].SpeakerId;
-        for (var i = 0; i < speakers.Count; i++)
-        {
-            var active = speakers[i].Id == latest;
-            var chip = this.speakerBoxes[speakers[i].Id];
-            chip.BorderBrush = active ? SpeakerPalette.BrushFor(i) : null;
-            chip.BorderThickness = new Avalonia.Thickness(active ? 2 : 1);
-        }
-
+        var latest = this.live is null || document is null ? null : document.ActiveSegments.LastOrDefault(s => s.Speakers.Count > 0) is { } last ? document.ResolveSpeakerId(last.Speakers[0].SpeakerId) : null;
         foreach (var speaker in speakers)
         {
-            var box = this.speakerBoxes[speaker.Id];
-            if (!box.IsFocused)
+            var active = speaker.Id == latest;
+            var chip = this.speakerBoxes[speaker.Id];
+            chip.BorderBrush = active ? SpeakerPalette.BrushFor(all.ToList().FindIndex(s => s.Id == speaker.Id)) : null;
+            chip.BorderThickness = new Avalonia.Thickness(active ? 2 : 1);
+            if (!chip.IsFocused)
             {
-                box.Text = speaker.DisplayName ?? string.Empty;
+                chip.Text = speaker.DisplayName ?? string.Empty;
             }
         }
+    }
+
+    /// <summary>Merging only changes the speaker mapping, like renaming, so it is safe while recording and undoable.</summary>
+    private void OpenMergeMenu(Button button)
+    {
+        if (this.host is null || button.Tag is not string id)
+        {
+            return;
+        }
+
+        var document = this.host.Document;
+        var items = new List<MenuItem>();
+        foreach (var other in document.VisibleSpeakers.Where(s => s.Id != id))
+        {
+            var item = new MenuItem { Header = $"Show {other.Name} as this speaker" };
+            var otherId = other.Id;
+            item.Click += (_, _) => this.ChangeSpeakers(h => h.MergeSpeaker(otherId, id));
+            items.Add(item);
+        }
+
+        foreach (var merged in document.Speakers.Where(s => s.MergedIntoId == id))
+        {
+            var item = new MenuItem { Header = $"Split {merged.Name} back out" };
+            var mergedId = merged.Id;
+            item.Click += (_, _) => this.ChangeSpeakers(h => h.UnmergeSpeaker(mergedId));
+            items.Add(item);
+        }
+
+        if (items.Count == 0)
+        {
+            items.Add(new MenuItem { Header = "No other speakers yet", IsEnabled = false });
+        }
+
+        new ContextMenu { ItemsSource = items }.Open(button);
+    }
+
+    private void ChangeSpeakers(Action<SessionDocumentHost> change)
+    {
+        if (this.host is null)
+        {
+            return;
+        }
+
+        change(this.host);
+        _ = this.host.CheckpointAsync().AsTask();
     }
 
     private void CommitSpeakerName(TextBox box)
