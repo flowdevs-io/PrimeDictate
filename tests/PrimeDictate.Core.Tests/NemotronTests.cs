@@ -131,7 +131,7 @@ public sealed class NemotronTests : IDisposable
 
     private static (HttpListener Listener, HttpClient Client) StartFake()
     {
-        var port = new Random().Next(20000, 60000);
+        var port = FreePort.Next();
         var listener = new HttpListener();
         listener.Prefixes.Add($"http://127.0.0.1:{port}/");
         listener.Start();
@@ -232,7 +232,7 @@ public sealed class NemotronTests : IDisposable
     /// <summary>A stand-in for the worker's realtime socket using the message shapes captured from the real one.</summary>
     private static FakeRealtime StartRealtime(bool requireDiarizerSetting)
     {
-        var port = new Random().Next(20000, 60000);
+        var port = FreePort.Next();
         var listener = new HttpListener();
         listener.Prefixes.Add($"http://127.0.0.1:{port}/");
         listener.Start();
@@ -370,12 +370,33 @@ public sealed class NemotronTests : IDisposable
         var options = new LiveSessionOptions(
             new PrimeDictate.Core.Sessions.TranscriptionSessionOptions("nemotron:test", null, "cpu", null, null, PrimeDictate.Core.Sessions.AudioRetention.KeepAudio, PrimeDictate.Core.Sessions.DownmixMode.Average, null, null, null),
             "t", store.GetSessionMediaDirectory, TimeSpan.FromSeconds(60));
-        await using var session = new LiveTranscriptionSession(new LiveSourceTests.FakeSource(1, audio), provider, new PrimeDictate.Core.Coordination.MicrophoneCoordinator(), new PrimeDictate.Core.Coordination.ModelLeaseScheduler(), store, options);
+        // Hold the rest of the audio until the partial text has been seen, so the test does not depend on how fast
+        // the fake source, the socket and the reducer run relative to each other.
+        var restOfAudio = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var session = new LiveTranscriptionSession(new LiveSourceTests.FakeSource(1, audio, holdAfterFrames: 3, release: restOfAudio.Task), provider, new PrimeDictate.Core.Coordination.MicrophoneCoordinator(), new PrimeDictate.Core.Coordination.ModelLeaseScheduler(), store, options);
         await session.StartAsync(default);
 
         var seen = new List<string>();
-        session.Host!.Changed += d => seen.AddRange(d.ActiveSegments.Select(s => $"{s.State}:{s.DisplayText}"));
-        await Task.Delay(1500);
+        var sawPartial = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        session.Host!.Changed += d =>
+        {
+            lock (seen)
+            {
+                seen.AddRange(d.ActiveSegments.Select(s => $"{s.State}:{s.DisplayText}"));
+                if (seen.Contains("Provisional:hello"))
+                {
+                    sawPartial.TrySetResult();
+                }
+            }
+        };
+        await sawPartial.Task.WaitAsync(TimeSpan.FromSeconds(20));
+        restOfAudio.SetResult();
+        var finalsSeen = DateTime.UtcNow.AddSeconds(20);
+        while (session.Host.Document.ActiveSegments.Count(s => s.State == SegmentState.Final) < 2 && DateTime.UtcNow < finalsSeen)
+        {
+            await Task.Delay(20);
+        }
+
         await session.StopAsync(default);
 
         var doc = session.Host.Document;
@@ -394,7 +415,7 @@ public sealed class NemotronTests : IDisposable
     /// <summary>Counts audio bytes per connection; connection 1 optionally never answers (the wedge in NeMo-Speech.cpp#48).</summary>
     private static (HttpListener Listener, Uri Base, List<long> AudioBytes) StartCountingServer(bool wedgeFirst)
     {
-        var port = new Random().Next(20000, 60000);
+        var port = FreePort.Next();
         var listener = new HttpListener();
         listener.Prefixes.Add($"http://127.0.0.1:{port}/");
         listener.Start();

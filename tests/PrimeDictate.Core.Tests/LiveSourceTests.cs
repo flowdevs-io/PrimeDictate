@@ -24,15 +24,16 @@ public sealed class LiveSourceTests : IDisposable
         }
     }
 
-    internal sealed class FakeSource(int channels, float[] interleaved) : IAudioSource
+    /// <param name="holdAfterFrames">With <paramref name="release"/>: stop delivering after this many frames until the task completes.</param>
+    internal sealed class FakeSource(int channels, float[] interleaved, int holdAfterFrames = 0, Task? release = null) : IAudioSource
     {
         public ValueTask<IReadOnlyList<AudioInputDevice>> ListDevicesAsync(CancellationToken cancellationToken) =>
             ValueTask.FromResult<IReadOnlyList<AudioInputDevice>>([]);
 
         public ValueTask<IAudioCaptureLease> OpenAsync(string? deviceId, CancellationToken cancellationToken) =>
-            ValueTask.FromResult<IAudioCaptureLease>(new Lease(channels, interleaved));
+            ValueTask.FromResult<IAudioCaptureLease>(new Lease(channels, interleaved, holdAfterFrames, release));
 
-        private sealed class Lease(int channels, float[] data) : IAudioCaptureLease
+        private sealed class Lease(int channels, float[] data, int holdAfterFrames, Task? release) : IAudioCaptureLease
         {
             private readonly Channel<AudioFrame> queue = Channel.CreateUnbounded<AudioFrame>();
 
@@ -48,6 +49,11 @@ public sealed class LiveSourceTests : IDisposable
                 long seq = 0, offset = 0;
                 for (var i = 0; i < data.Length; i += step)
                 {
+                    if (release is not null && seq == holdAfterFrames)
+                    {
+                        await release.WaitAsync(cancellationToken);
+                    }
+
                     var part = data.AsMemory(i, Math.Min(step, data.Length - i));
                     yield return AudioFrame.CopyFrom(part.Span, this.Format, seq++, offset);
                     offset += part.Length / channels;

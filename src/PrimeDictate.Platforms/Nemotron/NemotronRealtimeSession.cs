@@ -534,7 +534,9 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
         int index;
         lock (this.sync)
         {
-            offset = this.pendingCommitStarts.Count > 0 ? this.pendingCommitStarts.Dequeue() : 0;
+            // Only peek: the commit stays pending until its finals are written, otherwise CompleteAsync could see
+            // "nothing pending" and close the update stream before this method has emitted them.
+            offset = this.pendingCommitStarts.Count > 0 ? this.pendingCommitStarts.Peek() : 0;
             index = this.completedCount++;
             this.utteranceIndex = this.completedCount;
             this.partial = string.Empty;
@@ -567,6 +569,11 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
 
         lock (this.sync)
         {
+            if (this.pendingCommitStarts.Count > 0)
+            {
+                this.pendingCommitStarts.Dequeue();
+            }
+
             if (this.pendingCommitStarts.Count == 0)
             {
                 this.allCompleted.TrySetResult();
