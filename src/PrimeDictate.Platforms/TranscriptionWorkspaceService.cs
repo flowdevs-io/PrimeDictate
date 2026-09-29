@@ -8,9 +8,13 @@ using PrimeDictate.Core.Storage;
 using PrimeDictate.Core.Transcripts;
 using PrimeDictate.Platforms.Audio;
 using PrimeDictate.Platforms.Media;
+using PrimeDictate.Platforms.Nemotron;
 using PrimeDictate.Platforms.Speech;
 
 namespace PrimeDictate.Platforms;
+
+/// <summary>A speech model the user can pick. Providers load lazily the first time they are needed.</summary>
+public sealed record SpeechModelChoice(string ModelId, string DisplayName, string? Language, bool DetectsSpeakers, string? Note);
 
 /// <summary>
 /// Wires the transcription pipeline to real components for a desktop shell: SQLite session store,
@@ -24,7 +28,12 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     private readonly ModelLeaseScheduler scheduler = new();
     private readonly MicrophoneCoordinator microphone = new();
     private readonly IAudioDecoder decoder;
-    private readonly Dictionary<string, SherpaWhisperProvider> providers = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, InstalledWhisperModel> whisperModels = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ITranscriptionProvider> providers = new(StringComparer.Ordinal);
+    private readonly SemaphoreSlim providerGate = new(1, 1);
+    private NemotronWorker? nemotronWorker;
+    private string? nemotronWorkerKey;
+    private NemotronSetup? nemotron;
     private readonly FileTranscriptionRunner runner;
     private readonly IAudioSource? audioSource;
     private readonly ISystemAudioSource? systemAudioSource;
@@ -102,7 +111,59 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         }
     }
 
-    public IReadOnlyList<InstalledWhisperModel> InstalledModels() => WhisperOnnxModelLocator.Discover(this.paths.ModelsDirectory);
+    private sealed record NemotronSetup(string WorkerPath, PinnedNemotronModel Asr, NemotronModelFiles Files);
+
+    /// <summary>Everything the user can pick: installed Whisper ONNX models, plus Nemotron when its worker and pinned model files are present.</summary>
+    public IReadOnlyList<SpeechModelChoice> AvailableModels()
+    {
+        this.whisperModels.Clear();
+        var choices = new List<SpeechModelChoice>();
+        foreach (var model in WhisperOnnxModelLocator.Discover(this.paths.ModelsDirectory))
+        {
+            this.whisperModels[model.ModelId] = model;
+            choices.Add(new SpeechModelChoice(model.ModelId, model.DisplayName, model.IsEnglishOnly ? "en" : null, false, null));
+        }
+
+        this.nemotron = FindNemotron();
+        if (this.nemotron is { } n)
+        {
+            var speakers = n.Files.DiarizerPath is not null;
+            choices.Add(new SpeechModelChoice(
+                $"nemotron:{n.Asr.Id}",
+                "Nemotron 3.5 (CPU)" + (speakers ? ", speakers" : string.Empty),
+                null,
+                speakers,
+                speakers ? null : "Speaker detection needs the Nemotron-3-Diarization file next to the speech model."));
+        }
+
+        return choices;
+    }
+
+    private NemotronSetup? FindNemotron()
+    {
+        var folder = Path.Combine(this.paths.ModelsDirectory, "nemotron");
+        var exeName = OperatingSystem.IsWindows() ? "nemo-speech.exe" : "nemo-speech";
+        var worker = Environment.GetEnvironmentVariable("PRIMEDICTATE_NEMO_SPEECH");
+        if (string.IsNullOrWhiteSpace(worker) || !File.Exists(worker))
+        {
+            worker = new[] { Path.Combine(folder, exeName), Path.Combine(AppContext.BaseDirectory, exeName) }.FirstOrDefault(File.Exists);
+        }
+
+        if (worker is null || !Directory.Exists(folder))
+        {
+            return null;
+        }
+
+        foreach (var asr in new[] { NemotronPins.Multilingual, NemotronPins.EnglishOnly })
+        {
+            if (NemotronModelFiles.TryFind(folder, asr) is { } files)
+            {
+                return new NemotronSetup(worker, asr, files);
+            }
+        }
+
+        return null;
+    }
 
     public ValueTask<IReadOnlyList<TranscriptSessionSummary>> ListSessionsAsync(CancellationToken cancellationToken) =>
         this.store.ListAsync(0, 200, cancellationToken);
@@ -116,24 +177,55 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     public async Task<MediaProbeResult> ProbeAsync(string path, CancellationToken cancellationToken) =>
         await this.decoder.ProbeAsync(path, cancellationToken).ConfigureAwait(false);
 
-    private static TranscriptionSessionOptions Options(InstalledWhisperModel model, string? deviceId, AudioRetention retention) =>
-        new(model.ModelId, null, "cpu", model.IsEnglishOnly ? "en" : null, null, retention, DownmixMode.Average, null, null, deviceId);
+    private static TranscriptionSessionOptions Options(SpeechModelChoice model, string? deviceId, AudioRetention retention) =>
+        new(model.ModelId, null, "cpu", model.Language, null, retention, DownmixMode.Average, null, null, deviceId);
 
-    private SherpaWhisperProvider Provider(InstalledWhisperModel model)
+    private async Task<ITranscriptionProvider> ProviderAsync(SpeechModelChoice model, CancellationToken cancellationToken)
     {
-        if (!this.providers.TryGetValue(model.ModelId, out var provider))
+        await this.providerGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            provider = new SherpaWhisperProvider(model);
-            this.providers[model.ModelId] = provider;
-        }
+            if (this.providers.TryGetValue(model.ModelId, out var existing))
+            {
+                return existing;
+            }
 
-        return provider;
+            ITranscriptionProvider provider;
+            if (this.whisperModels.TryGetValue(model.ModelId, out var whisper))
+            {
+                provider = new SherpaWhisperProvider(whisper);
+            }
+            else if (this.nemotron is { } setup && model.ModelId.StartsWith("nemotron:", StringComparison.Ordinal))
+            {
+                // One worker at a time: it holds a multi-hundred-MB model in memory.
+                if (this.nemotronWorker is not null && this.nemotronWorkerKey != model.ModelId)
+                {
+                    await this.nemotronWorker.DisposeAsync().ConfigureAwait(false);
+                    this.nemotronWorker = null;
+                }
+
+                this.nemotronWorker ??= await NemotronWorker.StartAsync(setup.WorkerPath, setup.Files, TimeSpan.FromSeconds(90), cancellationToken).ConfigureAwait(false);
+                this.nemotronWorkerKey = model.ModelId;
+                provider = new NemotronProvider(this.nemotronWorker, model.ModelId, model.DetectsSpeakers);
+            }
+            else
+            {
+                throw new InvalidOperationException($"Model {model.ModelId} is not installed.");
+            }
+
+            this.providers[model.ModelId] = provider;
+            return provider;
+        }
+        finally
+        {
+            this.providerGate.Release();
+        }
     }
 
     /// <summary>Imports a file, creates its session, and transcribes it. Returns the host as soon as the session exists.</summary>
     public async Task<(SessionDocumentHost Host, Task Completion)> ImportAsync(
         string path,
-        InstalledWhisperModel model,
+        SpeechModelChoice model,
         AudioRetention retention,
         IProgress<ProgressChanged>? progress,
         CancellationToken cancellationToken)
@@ -152,7 +244,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     }
 
     /// <summary>Reruns recognition on an existing session with a chosen model. Earlier results and edits stay.</summary>
-    public Task RerunAsync(SessionDocumentHost host, InstalledWhisperModel model, IProgress<ProgressChanged>? progress, CancellationToken cancellationToken)
+    public Task RerunAsync(SessionDocumentHost host, SpeechModelChoice model, IProgress<ProgressChanged>? progress, CancellationToken cancellationToken)
     {
         var doc = host.Document;
         var source = doc.Audio.FirstOrDefault(a => a.Kind == AudioReferenceKind.ExternalReference) ?? doc.Audio.FirstOrDefault()
@@ -161,13 +253,13 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         return this.RunAsync(host, request, model, progress, cancellationToken);
     }
 
-    private Task RunAsync(SessionDocumentHost host, FileJobRequest request, InstalledWhisperModel model, IProgress<ProgressChanged>? progress, CancellationToken cancellationToken) =>
-        Task.Run(() => this.runner.RunAsync(host, request, this.decoder, this.Provider(model), progress, cancellationToken), CancellationToken.None);
+    private Task RunAsync(SessionDocumentHost host, FileJobRequest request, SpeechModelChoice model, IProgress<ProgressChanged>? progress, CancellationToken cancellationToken) =>
+        Task.Run(async () => await this.runner.RunAsync(host, request, this.decoder, await this.ProviderAsync(model, cancellationToken).ConfigureAwait(false), progress, cancellationToken).ConfigureAwait(false), CancellationToken.None);
 
     /// <param name="deviceId">Microphone device; for <see cref="TranscriptSourceType.SystemAudio"/> it is the output device (null is the default output).</param>
     /// <param name="autoGain">Lift quiet system audio before recognition (never changes the saved recording).</param>
     /// <param name="systemDeviceId">Output device for <see cref="TranscriptSourceType.Meeting"/>; null is the default output.</param>
-    public async Task<LiveTranscriptionSession> StartLiveAsync(InstalledWhisperModel model, string? deviceId, AudioRetention retention, string title, CancellationToken cancellationToken, TranscriptSourceType source = TranscriptSourceType.Microphone, string? systemDeviceId = null, bool autoGain = true)
+    public async Task<LiveTranscriptionSession> StartLiveAsync(SpeechModelChoice model, string? deviceId, AudioRetention retention, string title, CancellationToken cancellationToken, TranscriptSourceType source = TranscriptSourceType.Microphone, string? systemDeviceId = null, bool autoGain = true)
     {
         var captureSource = this.SourceFor(source, systemDeviceId);
 
@@ -178,7 +270,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
 
         var session = new LiveTranscriptionSession(
             captureSource,
-            this.Provider(model),
+            await this.ProviderAsync(model, cancellationToken).ConfigureAwait(false),
             this.microphone,
             this.scheduler,
             this.store,
@@ -245,6 +337,11 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         foreach (var provider in this.providers.Values)
         {
             await provider.DisposeAsync().ConfigureAwait(false);
+        }
+
+        if (this.nemotronWorker is not null)
+        {
+            await this.nemotronWorker.DisposeAsync().ConfigureAwait(false);
         }
 
         await this.store.DisposeAsync().ConfigureAwait(false);

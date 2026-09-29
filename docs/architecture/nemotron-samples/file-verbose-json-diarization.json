@@ -1,0 +1,267 @@
+{
+    "duration": 12,
+    "language": "",
+    "task": "transcribe",
+    "text": "From a plain text file back into organized by which speaker speaks what and how doing the segment I think that was the stupidest way they could have organised the whole thing if you asked me or",
+    "words": [
+        {
+            "confidence": 1,
+            "end": 1.52,
+            "speaker": 1,
+            "start": 1.44,
+            "word": "From"
+        },
+        {
+            "confidence": 1,
+            "end": 1.68,
+            "speaker": 1,
+            "start": 1.6,
+            "word": "a"
+        },
+        {
+            "confidence": 1,
+            "end": 1.92,
+            "speaker": 1,
+            "start": 1.68,
+            "word": "plain"
+        },
+        {
+            "confidence": 1,
+            "end": 2.08,
+            "speaker": 1,
+            "start": 2,
+            "word": "text"
+        },
+        {
+            "confidence": 1,
+            "end": 2.56,
+            "speaker": 2,
+            "start": 2.24,
+            "word": "file"
+        },
+        {
+            "confidence": 1,
+            "end": 3.6,
+            "speaker": 1,
+            "start": 3.52,
+            "word": "back"
+        },
+        {
+            "confidence": 1,
+            "end": 3.92,
+            "speaker": 1,
+            "start": 3.68,
+            "word": "into"
+        },
+        {
+            "confidence": 1,
+            "end": 4.48,
+            "speaker": 1,
+            "start": 4,
+            "word": "organized"
+        },
+        {
+            "confidence": 1,
+            "end": 4.64,
+            "speaker": 1,
+            "start": 4.56,
+            "word": "by"
+        },
+        {
+            "confidence": 1,
+            "end": 5.04,
+            "speaker": 1,
+            "start": 4.96,
+            "word": "which"
+        },
+        {
+            "confidence": 1,
+            "end": 5.36,
+            "speaker": 1,
+            "start": 5.12,
+            "word": "speaker"
+        },
+        {
+            "confidence": 1,
+            "end": 5.6,
+            "speaker": 1,
+            "start": 5.44,
+            "word": "speaks"
+        },
+        {
+            "confidence": 1,
+            "end": 5.84,
+            "speaker": 1,
+            "start": 5.76,
+            "word": "what"
+        },
+        {
+            "confidence": 1,
+            "end": 6.16,
+            "speaker": 1,
+            "start": 6.08,
+            "word": "and"
+        },
+        {
+            "confidence": 1,
+            "end": 6.48,
+            "speaker": 1,
+            "start": 6.4,
+            "word": "how"
+        },
+        {
+            "confidence": 1,
+            "end": 6.88,
+            "speaker": 1,
+            "start": 6.72,
+            "word": "doing"
+        },
+        {
+            "confidence": 1,
+            "end": 6.96,
+            "speaker": 1,
+            "start": 6.88,
+            "word": "the"
+        },
+        {
+            "confidence": 1,
+            "end": 7.28,
+            "speaker": 1,
+            "start": 7.04,
+            "word": "segment"
+        },
+        {
+            "confidence": 1,
+            "end": 7.76,
+            "speaker": 1,
+            "start": 7.68,
+            "word": "I"
+        },
+        {
+            "confidence": 1,
+            "end": 7.84,
+            "speaker": 1,
+            "start": 7.76,
+            "word": "think"
+        },
+        {
+            "confidence": 1,
+            "end": 7.92,
+            "speaker": 1,
+            "start": 7.84,
+            "word": "that"
+        },
+        {
+            "confidence": 1,
+            "end": 8.08,
+            "speaker": 1,
+            "start": 8,
+            "word": "was"
+        },
+        {
+            "confidence": 1,
+            "end": 8.4,
+            "speaker": 1,
+            "start": 8.32,
+            "word": "the"
+        },
+        {
+            "confidence": 1,
+            "end": 8.72,
+            "speaker": 1,
+            "start": 8.4,
+            "word": "stupidest"
+        },
+        {
+            "confidence": 1,
+            "end": 8.8,
+            "speaker": 1,
+            "start": 8.72,
+            "word": "way"
+        },
+        {
+            "confidence": 1,
+            "end": 8.96,
+            "speaker": 1,
+            "start": 8.88,
+            "word": "they"
+        },
+        {
+            "confidence": 1,
+            "end": 9.04,
+            "speaker": 1,
+            "start": 8.96,
+            "word": "could"
+        },
+        {
+            "confidence": 1,
+            "end": 9.2,
+            "speaker": 1,
+            "start": 9.12,
+            "word": "have"
+        },
+        {
+            "confidence": 1,
+            "end": 9.84,
+            "speaker": 1,
+            "start": 9.44,
+            "word": "organised"
+        },
+        {
+            "confidence": 1,
+            "end": 10,
+            "speaker": 1,
+            "start": 9.92,
+            "word": "the"
+        },
+        {
+            "confidence": 1,
+            "end": 10.08,
+            "speaker": 1,
+            "start": 10,
+            "word": "whole"
+        },
+        {
+            "confidence": 1,
+            "end": 10.16,
+            "speaker": 1,
+            "start": 10.08,
+            "word": "thing"
+        },
+        {
+            "confidence": 1,
+            "end": 10.32,
+            "speaker": 1,
+            "start": 10.24,
+            "word": "if"
+        },
+        {
+            "confidence": 1,
+            "end": 10.4,
+            "speaker": 1,
+            "start": 10.32,
+            "word": "you"
+        },
+        {
+            "confidence": 1,
+            "end": 10.64,
+            "speaker": 1,
+            "start": 10.48,
+            "word": "asked"
+        },
+        {
+            "confidence": 1,
+            "end": 10.72,
+            "speaker": 1,
+            "start": 10.64,
+            "word": "me"
+        },
+        {
+            "confidence": 1,
+            "end": 12,
+            "speaker": 1,
+            "start": 11.92,
+            "word": "or"
+        }
+    ]
+}

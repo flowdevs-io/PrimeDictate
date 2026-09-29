@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Avalonia.Media;
 using PrimeDictate.Core.Transcripts;
 
 namespace PrimeDictate.Desktop;
@@ -42,6 +43,9 @@ public sealed class SegmentRow(string id) : INotifyPropertyChanged
         }
     }
 
+    /// <summary>Color chip matching the speaker's timeline lane; transparent without speakers.</summary>
+    public IBrush SpeakerBrush { get; private set; } = Brushes.Transparent;
+
     public bool HasSpeaker => this.speaker.Length > 0;
 
     /// <summary>True while a live utterance may still change.</summary>
@@ -63,7 +67,19 @@ public sealed class SegmentRow(string id) : INotifyPropertyChanged
     {
         var id = segment.Speakers.Count > 0 ? segment.Speakers[0].SpeakerId : null;
         var name = id is null ? string.Empty : speakers.FirstOrDefault(s => s.Id == id)?.Name ?? id;
-        this.Speaker = name.Length > 0 && segment.State != SegmentState.Final ? name + "?" : name;
+        var index = id is null ? -1 : speakers.ToList().FindIndex(s => s.Id == id);
+        var brush = index < 0 ? Brushes.Transparent : SpeakerPalette.BrushFor(index);
+        if (!ReferenceEquals(brush, this.SpeakerBrush) && index >= 0)
+        {
+            this.SpeakerBrush = brush;
+            this.PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(this.SpeakerBrush)));
+        }
+
+        // Live labels arrive only when an utterance completes, so an unlabeled live line in a session that has
+        // speakers reads "speaker pending" rather than a guess.
+        this.Speaker = name.Length > 0
+            ? (segment.State != SegmentState.Final ? name + "?" : name)
+            : segment.State != SegmentState.Final && speakers.Count > 0 ? "speaker pending" : string.Empty;
         this.Time = FormatTime(segment.Start);
         this.Provisional = segment.State != SegmentState.Final;
         if (!this.IsEditing)

@@ -125,6 +125,49 @@ Findings from running the binary and reading the pinned source (`server/http/htt
   The model card separates supported locales from adaptation-ready ones, so the picker must use the
   card's supported list, not the runtime's.
 
+## N-local. Nemotron spike run on Windows (CPU)
+
+Run on 2026-09-29 on the maintainer's PC: AMD Ryzen 7 9800X3D (8C/16T), 61 GB RAM, Windows 11 Pro
+10.0.26200. Runtime built at the pinned commit `0f706e43` with
+`scripts\windows\build.ps1 -Backend cpu -Http -AsrOnly` (MSVC from VS 18, Ninja, vcpkg bootstrapped
+under `%LOCALAPPDATA%\NeMoSpeech`). `nemo-speech --version` reports 0.1.0. Models were fetched
+directly from the pinned Hugging Face revisions; all three files matched the sizes and SHA-256 values
+in the table above.
+
+**Backend that ran: CPU only** (`[asr] ... backend=CPU`; `/ready` reports `device: auto`). CUDA was
+not attempted: the RTX 5070 (Blackwell) needs CUDA 12.8 or newer and 12.3 is installed.
+
+**Vulkan failed on both GPUs.** With the Vulkan SDK 1.4.357.0 installed, the same runtime commit
+built (`build.ps1 -Backend vulkan -Http -AsrOnly`, 409 build steps). `serve --device vulkan:0` (RTX 5070)
+and `vulkan:1` (AMD Radeon iGPU) both print `backend=Vulkan0/1`, then the process aborts during model
+load with `ggml-cpu.c:1270: GGML_ASSERT(ne3 == ne13) failed`, with or without the diarization model.
+`--device cpu` from the same Vulkan binary loads and transcribes jfk correctly, so the fault is in
+the Vulkan path (an op falling back to the CPU backend with an unexpected shape), not the build. Upstream
+report needed; until then treat GPU acceleration on Windows as unavailable for this pinned commit.
+
+The worker was started with local paths only, `--no-ui`, `127.0.0.1:18080`, and the key from
+`NEMO_SPEECH_HTTP_API_KEY`.
+
+| Check | Result |
+|-------|--------|
+| Cold start to `/ready` | 7.1 s (ASR + diarization); 3.1 s for the English-only model |
+| `/v1/models` | ASR id is `.nemotron-3.5-asr-streaming-0.6b.q8_0.gguf` (note the leading dot) plus a `diarization` entry; `device: auto` |
+| File, `jfk.wav` (11 s), `verbose_json` | Exact wording ("...ask what you can do for your country."), 22 words with start, end and confidence, last word "country." at 10.24 to 10.4 s; 1.7 s wall |
+| File with speakers, AMI EN2002d 60 s | Speaker tags 1, 2, 3 (63, 48 and 15 words), matching the fixture README's three main speakers; 33.3 s wall (RTF about 0.55 with diarization) |
+| Live socket, jfk at real time | Order: `session.created`, `session.updated`, many `delta`, then `completed` (transcript plus words) and `input_audio_buffer.committed`. First partial about 0.3 s after the word's onset; final about 1 s after `commit`. Last word is present in the final. |
+| Empty deltas | Most `delta` events carry `""` (one per processed frame). Clients must drop them. |
+| Word times after commit | Restart at 0 for the next utterance (confirmed with a second 1 s send). |
+| Live vs offline text | The live final had no trailing period ("...your country"); the file endpoint added it. Treat final punctuation as unreliable. |
+| Delta revisions | None observed in these clips; every delta was a suffix. Revision behavior is still unconfirmed. |
+| Pause | Socket stayed open through 60 s of silence, and audio resumed on the same socket after a commit (also with a 6 s gap). It also survived 330 s (past the 300 s read timeout): the client received nothing, sent 2 s of audio and got deltas and a `completed` within about 1.2 s on the same socket, so server pings keep it alive and Pause does not need a reconnect. |
+| Model identity | Restarting with `nemotron-speech-streaming-en-0.6b` changed the `/v1/models` id; its jfk text was "And so, my fellow Americans..." |
+| Upload limit | `--max-upload-mb 1` with a 1.9 MB wav returns HTTP 413 with a generic body (`"HTTP request failed"`), no size in the message |
+| Peak memory | 2.56 GB working set for the ASR + diarization worker |
+
+Caveat: one early script variant saw no events after resuming from a pause. It did not reproduce
+with a corrected script across three configurations (first 11 s or 1 s, gap 6 s, second 1 s or 5 s), so it is treated as
+a test-script error; a resumed send of the full 11 s clip was not re-run.
+
 ### Nemotron blockers
 
 - **Model files.** `huggingface.co` is denied by this environment's network policy, so neither

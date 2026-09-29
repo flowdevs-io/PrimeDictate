@@ -8,6 +8,31 @@ namespace PrimeDictate.Core.Audio;
 /// Streaming writer for the session's owned working audio: 16 kHz mono PCM16 WAV. The header is
 /// rewritten on every <see cref="Flush"/> so a crash leaves a playable file up to the last flush.
 /// </summary>
+public static class WavEncoder
+{
+    /// <summary>Encodes mono float samples as an in-memory 16-bit PCM WAV, for uploads to local workers.</summary>
+    public static byte[] EncodePcm16Mono(ReadOnlySpan<float> samples, int sampleRate = 16_000)
+    {
+        var data = new byte[samples.Length * 2];
+        AudioConversion.FloatToPcm16(samples, data);
+        var wav = new byte[44 + data.Length];
+        "RIFF"u8.CopyTo(wav);
+        BinaryPrimitives.WriteUInt32LittleEndian(wav.AsSpan(4), (uint)(36 + data.Length));
+        "WAVEfmt "u8.CopyTo(wav.AsSpan(8));
+        BinaryPrimitives.WriteUInt32LittleEndian(wav.AsSpan(16), 16);
+        BinaryPrimitives.WriteUInt16LittleEndian(wav.AsSpan(20), 1);
+        BinaryPrimitives.WriteUInt16LittleEndian(wav.AsSpan(22), 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(wav.AsSpan(24), (uint)sampleRate);
+        BinaryPrimitives.WriteUInt32LittleEndian(wav.AsSpan(28), (uint)(sampleRate * 2));
+        BinaryPrimitives.WriteUInt16LittleEndian(wav.AsSpan(32), 2);
+        BinaryPrimitives.WriteUInt16LittleEndian(wav.AsSpan(34), 16);
+        "data"u8.CopyTo(wav.AsSpan(36));
+        BinaryPrimitives.WriteUInt32LittleEndian(wav.AsSpan(40), (uint)data.Length);
+        data.CopyTo(wav.AsSpan(44));
+        return wav;
+    }
+}
+
 public sealed class WavFileWriter : IDisposable
 {
     private const int HeaderSize = 44;

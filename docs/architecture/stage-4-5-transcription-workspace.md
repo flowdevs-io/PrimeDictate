@@ -27,3 +27,17 @@ The Avalonia shell (`src/PrimeDictate.Desktop`) now has a working Transcription 
 - ffmpeg is not bundled.
 - Recording level and elapsed time are shown as text, not a meter widget.
 - No settings screen: the first installed model is preselected, audio is kept, and the default microphone is used.
+
+## Stage 6 (first part): Nemotron worker and speakers on file import
+
+Built against the real protocol samples in `docs/architecture/nemotron-samples/`. **Not run against the real worker from this environment** (no model download here); tests use those captured responses and a fake local HTTP server.
+
+- `NemotronModelFiles` accepts only the pinned GGUF file names and exact byte sizes, so the worker never receives a model name and can never start a download.
+- `NemotronWorker` starts `nemo-speech serve` with `--no-ui`, `127.0.0.1`, a random port, `--device cpu`, and a random key in the environment (not the command line). Vulkan aborts at the pinned commit, so CPU is the only backend offered.
+- `NemotronProvider` sends each window (at most 30 s, under the 1 MB upload limit) to the file endpoint with `verbose_json`. It asks for diarization only when the worker was started with the diarizer, because the worker answers HTTP 400 for file requests and breaks the realtime stream without one.
+- Words become segments per speaker turn with model word timings. Detected speakers are registered as "Speaker 1", "Speaker 2" in order of appearance and can be renamed in the workspace.
+- The model picker lists Nemotron when `nemo-speech` (in `models/nemotron`, next to the app, or `PRIMEDICTATE_NEMO_SPEECH`) and a pinned speech model are present in `%LocalAppData%\PrimeDictate\models\nemotron`. Add `Nemotron-3-Diarization.q8_0.gguf` there for speakers.
+
+Limits:
+- Speaker numbers are consistent within one 30 s window. The worker does not give speaker identity across windows, so a long file can relabel the same person. Renaming maps one id at a time.
+- Live speakers need native streaming over the realtime socket (word times restart at 0 after each commit, and speaker labels appear only on final events). Buffered Live with Nemotron transcribes but does not label speakers yet.

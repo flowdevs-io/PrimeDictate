@@ -27,11 +27,13 @@ public sealed partial class MainWindow : Window
     private readonly TranscriptionWorkspaceService workspace;
     private readonly ObservableCollection<SegmentRow> rows = [];
     private readonly Dictionary<string, SegmentRow> rowsById = new(StringComparer.Ordinal);
-    private IReadOnlyList<InstalledWhisperModel> models = [];
+    private IReadOnlyList<SpeechModelChoice> models = [];
     private SessionDocumentHost? host;
     private CancellationTokenSource? jobCancel;
     private LiveTranscriptionSession? live;
     private int refreshQueued;
+    private bool stickToBottom = true;
+    private bool scrollingProgrammatically;
 
     public MainWindow()
     {
@@ -53,6 +55,30 @@ public sealed partial class MainWindow : Window
         this.ExportButton.Click += async (_, _) => await this.ExportAsync();
         this.DeleteButton.Click += async (_, _) => await this.DeleteAsync();
         this.SessionList.SelectionChanged += async (_, _) => await this.OpenSelectedAsync();
+        this.Timeline.SegmentClicked += this.OnTimelineSegmentClicked;
+        this.Timeline.FollowChanged += this.UpdateJumpButton;
+        this.JumpToLiveButton.Click += (_, _) =>
+        {
+            this.Timeline.FollowLive();
+            this.stickToBottom = true;
+            this.ScrollTranscriptToEnd();
+        };
+        this.TranscriptList.AttachedToVisualTree += (_, _) =>
+        {
+            if (this.TranscriptList.Scroll is ScrollViewer viewer)
+            {
+                viewer.ScrollChanged += (_, _) =>
+                {
+                    // The user scrolling up stops the automatic scroll; reaching the bottom again resumes it.
+                    if (!this.scrollingProgrammatically)
+                    {
+                        this.stickToBottom = viewer.Offset.Y + viewer.Viewport.Height >= viewer.Extent.Height - 8;
+                        this.UpdateJumpButton();
+                    }
+                };
+            }
+        };
+        this.TranscriptList.SelectionChanged += (_, _) => this.Timeline.SelectedSegmentId = (this.TranscriptList.SelectedItem as SegmentRow)?.Id;
         this.SearchBox.TextChanged += (_, _) => this.Refresh();
         this.TranscriptList.AddHandler(GotFocusEvent, this.OnRowFocus, RoutingStrategies.Bubble);
         this.TranscriptList.AddHandler(LostFocusEvent, this.OnRowBlur, RoutingStrategies.Bubble);
@@ -82,7 +108,7 @@ public sealed partial class MainWindow : Window
         try
         {
             await this.workspace.InitializeAsync(CancellationToken.None);
-            this.models = this.workspace.InstalledModels();
+            this.models = this.workspace.AvailableModels();
             this.ModelBox.ItemsSource = this.models.Select(m => m.DisplayName).ToList();
             this.ModelBox.SelectedIndex = this.models.Count > 0 ? 0 : -1;
             await this.ReloadSessionsAsync();
@@ -119,7 +145,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private InstalledWhisperModel? SelectedModel => this.ModelBox.SelectedIndex is >= 0 and var i && i < this.models.Count ? this.models[i] : null;
+    private SpeechModelChoice? SelectedModel => this.ModelBox.SelectedIndex is >= 0 and var i && i < this.models.Count ? this.models[i] : null;
 
     private async Task ReloadSessionsAsync(Guid? select = null)
     {
@@ -225,6 +251,14 @@ public sealed partial class MainWindow : Window
         }
 
         this.RefreshSpeakers(document);
+        this.Timeline.SetDocument(document, this.live is not null);
+        this.Timeline.Height = document is { Speakers.Count: > 0 } ? this.Timeline.DesiredContentHeight : 0;
+        if (this.live is not null && this.stickToBottom)
+        {
+            this.ScrollTranscriptToEnd();
+        }
+
+        this.UpdateJumpButton();
         var has = document is not null && document.ActiveSegments.Any();
         this.EmptyText.IsVisible = this.rows.Count == 0;
         this.CopyButton.IsEnabled = has;
@@ -278,6 +312,16 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        // While recording, outline the box of whoever spoke most recently, in their timeline color.
+        var latest = this.live is null ? null : document?.ActiveSegments.LastOrDefault(s => s.Speakers.Count > 0)?.Speakers[0].SpeakerId;
+        for (var i = 0; i < speakers.Count; i++)
+        {
+            var active = speakers[i].Id == latest;
+            var chip = this.speakerBoxes[speakers[i].Id];
+            chip.BorderBrush = active ? SpeakerPalette.BrushFor(i) : null;
+            chip.BorderThickness = new Avalonia.Thickness(active ? 2 : 1);
+        }
+
         foreach (var speaker in speakers)
         {
             var box = this.speakerBoxes[speaker.Id];
@@ -301,6 +345,40 @@ public sealed partial class MainWindow : Window
         {
             this.host.RenameSpeaker(id, name);
             _ = this.host.CheckpointAsync().AsTask();
+        }
+    }
+
+    private void ScrollTranscriptToEnd()
+    {
+        if (this.rows.Count == 0)
+        {
+            return;
+        }
+
+        var last = this.rows[^1];
+        Dispatcher.UIThread.Post(() =>
+        {
+            this.scrollingProgrammatically = true;
+            try
+            {
+                this.TranscriptList.ScrollIntoView(last);
+            }
+            finally
+            {
+                this.scrollingProgrammatically = false;
+            }
+        });
+    }
+
+    private void UpdateJumpButton() =>
+        this.JumpToLiveButton.IsVisible = this.live is not null && (!this.Timeline.IsFollowing || !this.stickToBottom);
+
+    private void OnTimelineSegmentClicked(string segmentId)
+    {
+        if (this.rowsById.TryGetValue(segmentId, out var row) && this.rows.Contains(row))
+        {
+            this.TranscriptList.SelectedItem = row;
+            this.TranscriptList.ScrollIntoView(row);
         }
     }
 
@@ -496,6 +574,8 @@ public sealed partial class MainWindow : Window
             this.PauseButton.IsVisible = true;
             this.PauseButton.Content = "Pause";
             this.DiscardButton.IsVisible = true;
+            this.stickToBottom = true;
+            this.Timeline.FollowLive();
             this.Attach(this.live.Host!);
             await this.ReloadSessionsAsync(this.live.Host!.Document.SessionId);
             this.Say("Recording. Text appears as you speak; gray lines can still change.");

@@ -39,6 +39,7 @@ public static class SegmentMapper
                 Confidence = r.Confidence,
                 TimingProvenance = r.Provenance,
                 ResultVersion = resultVersion,
+                Speakers = r.SpeakerLabel is { Length: > 0 } label ? [new SpeakerAttribution(label, start, end < start ? start : end, null)] : [],
                 Words = r.Words?.Select(w => w with { Start = offset + w.Start, End = offset + w.End }).ToList()
             };
         }

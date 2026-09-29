@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\PrimeDictate.Core\PrimeDictate.Core.csproj" />
+    <ProjectReference Include="..\..\src\PrimeDictate.Platforms\PrimeDictate.Platforms.csproj" />
   </ItemGroup>
 
 </Project>
