@@ -59,6 +59,7 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
     private bool discard;
     private int stopped;
     private long backlogSamples;
+    private long samplesSinceFlush;
 
     public LiveTranscriptionSession(
         IAudioSource audioSource,
@@ -416,6 +417,13 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         }
 
         this.writer!.Write(fileSamples ?? samples);
+        // Keep the WAV header valid on disk, so a crash or kill leaves audio that can be played and repaired.
+        if ((this.samplesSinceFlush += samples.Length) >= AudioFormat.SpeechTimeline.SampleRate)
+        {
+            this.samplesSinceFlush = 0;
+            this.writer.Flush();
+        }
+
         lock (this.timeline!)
         {
             if (this.timeline.IsCapturing)

@@ -49,6 +49,46 @@ public sealed class WavFileWriter : IDisposable
         this.dataBytes += bytes.Length;
     }
 
+    /// <summary>
+    /// Repairs a working WAV whose writer never finished (crash or kill): sets the RIFF and data sizes
+    /// from the file length. Returns false if the file is not a 44-byte-header PCM16 file written by
+    /// this class, or is already correct.
+    /// </summary>
+    public static bool RepairHeader(string path)
+    {
+        using var file = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        if (file.Length < HeaderSize)
+        {
+            return false;
+        }
+
+        Span<byte> h = stackalloc byte[HeaderSize];
+        file.ReadExactly(h);
+        if (!h[..4].SequenceEqual("RIFF"u8) || !h[36..40].SequenceEqual("data"u8) || BinaryPrimitives.ReadUInt16LittleEndian(h[34..]) != 16)
+        {
+            return false;
+        }
+
+        var frameBytes = BinaryPrimitives.ReadUInt16LittleEndian(h[32..]);
+        if (frameBytes == 0)
+        {
+            return false;
+        }
+
+        var data = (file.Length - HeaderSize) / frameBytes * frameBytes;
+        if (BinaryPrimitives.ReadUInt32LittleEndian(h[40..]) == (uint)data)
+        {
+            return false;
+        }
+
+        BinaryPrimitives.WriteUInt32LittleEndian(h[4..], (uint)Math.Min(uint.MaxValue, 36 + data));
+        BinaryPrimitives.WriteUInt32LittleEndian(h[40..], (uint)Math.Min(uint.MaxValue, data));
+        file.Seek(0, SeekOrigin.Begin);
+        file.Write(h);
+        file.SetLength(HeaderSize + data);
+        return true;
+    }
+
     public void Flush()
     {
         this.WriteHeader();

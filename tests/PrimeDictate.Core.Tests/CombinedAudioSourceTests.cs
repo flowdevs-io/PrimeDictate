@@ -7,13 +7,13 @@ namespace PrimeDictate.Core.Tests;
 
 public class CombinedAudioSourceTests
 {
-    internal sealed class FakeLease(int rate, string name) : IAudioCaptureLease
+    internal sealed class FakeLease(int rate, string name, int channels = 1) : IAudioCaptureLease
     {
         private readonly Channel<AudioFrame> frames = Channel.CreateUnbounded<AudioFrame>();
         private long sequence;
         private long offset;
 
-        public AudioFormat Format { get; } = new(rate, 1, AudioSampleFormat.Float32);
+        public AudioFormat Format { get; } = new(rate, channels, AudioSampleFormat.Float32);
 
         public string DeviceId => name;
 
@@ -29,7 +29,7 @@ public class CombinedAudioSourceTests
                 this.offset += skipSamples;
             }
 
-            var data = new float[samples];
+            var data = new float[samples * this.Format.Channels];
             Array.Fill(data, value);
             this.frames.Writer.TryWrite(AudioFrame.CopyFrom(data, this.Format, this.sequence++, this.offset));
             this.offset += samples;

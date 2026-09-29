@@ -78,7 +78,28 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
         await this.store.InitializeAsync(cancellationToken).ConfigureAwait(false);
-        await this.store.MarkInterruptedSessionsAsync(cancellationToken).ConfigureAwait(false);
+        var interrupted = await this.store.MarkInterruptedSessionsAsync(cancellationToken).ConfigureAwait(false);
+        foreach (var summary in interrupted)
+        {
+            // A killed recording leaves a WAV whose header was never finalized; make it playable again.
+            var directory = this.store.GetSessionMediaDirectory(summary.SessionId);
+            if (!Directory.Exists(directory))
+            {
+                continue;
+            }
+
+            foreach (var wav in Directory.EnumerateFiles(directory, "recording-16k-*.wav"))
+            {
+                try
+                {
+                    WavFileWriter.RepairHeader(wav);
+                }
+                catch (IOException)
+                {
+                    // Locked or unreadable: leave it as it is.
+                }
+            }
+        }
     }
 
     public IReadOnlyList<InstalledWhisperModel> InstalledModels() => WhisperOnnxModelLocator.Discover(this.paths.ModelsDirectory);

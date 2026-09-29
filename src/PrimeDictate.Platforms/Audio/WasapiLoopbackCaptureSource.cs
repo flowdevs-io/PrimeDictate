@@ -239,7 +239,24 @@ public sealed class WasapiLoopbackCaptureSource : ISystemAudioSource
             wave.BitsPerSample == 32 &&
             (wave is WaveFormatExtensible ext ? ext.ToStandardWaveFormat().Encoding : wave.Encoding) == WaveFormatEncoding.IeeeFloat;
 
+        // These run on the capture thread and a timer thread, where an escaping exception would take down the
+        // whole process. Fail the lease instead, so the session reports an error and keeps what it recorded.
+        private void Fail(Exception ex) =>
+            this.frames.Writer.TryComplete(new AudioSourceException(AudioSourceErrorKind.Unknown, "System audio capture failed: " + ex.Message, ex));
+
         private void OnData(object? sender, WaveInEventArgs e)
+        {
+            try
+            {
+                this.HandleData(sender, e);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or COMException or ObjectDisposedException)
+            {
+                this.Fail(ex);
+            }
+        }
+
+        private void HandleData(object? sender, WaveInEventArgs e)
         {
             if (e.BytesRecorded == 0)
             {
@@ -268,6 +285,18 @@ public sealed class WasapiLoopbackCaptureSource : ISystemAudioSource
         // Loopback sends nothing during silence. Insert zeros for the stretch since the last packet so the
         // sample clock keeps running and stays aligned with the microphone.
         private void FillSilence(object? state)
+        {
+            try
+            {
+                this.FillSilenceCore();
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or OutOfMemoryException or ObjectDisposedException)
+            {
+                this.Fail(ex);
+            }
+        }
+
+        private void FillSilenceCore()
         {
             lock (this.sync)
             {
