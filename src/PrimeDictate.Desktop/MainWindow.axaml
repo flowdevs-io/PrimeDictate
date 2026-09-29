@@ -52,7 +52,10 @@
           <TextBlock Text="Speakers" VerticalAlignment="Center" />
           <StackPanel x:Name="SpeakerBoxes" Orientation="Horizontal" Spacing="6" />
         </StackPanel>
-        <d:SpeakerTimelineControl x:Name="Timeline" DockPanel.Dock="Top" Height="0" Margin="0,0,0,8" ClipToBounds="True" />
+        <Panel DockPanel.Dock="Top" Margin="0,0,0,8">
+          <d:SpeakerTimelineControl x:Name="Timeline" Height="0" ClipToBounds="True" />
+          <Button x:Name="JumpToLiveButton" Content="Jump to live" IsVisible="False" HorizontalAlignment="Right" VerticalAlignment="Top" Padding="8,2" />
+        </Panel>
         <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
           <Button x:Name="CopyButton" Content="Copy" IsEnabled="False" />
           <ComboBox x:Name="FormatBox" SelectedIndex="0" MinWidth="130">

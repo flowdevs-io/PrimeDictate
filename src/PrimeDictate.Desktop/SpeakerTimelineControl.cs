@@ -19,6 +19,9 @@ public sealed class SpeakerTimelineControl : Control
     private const double AxisHeight = 20;
     private const double LaneHeight = 26;
     private const double LaneGap = 4;
+    private const int MaxVisibleLanes = 5;
+
+    private double laneOffset;
 
     private IReadOnlyList<Lane> lanes = [];
     private IReadOnlyList<Bar> bars = [];
@@ -32,6 +35,21 @@ public sealed class SpeakerTimelineControl : Control
     private sealed record Lane(string SpeakerId, string Name, int Index);
 
     private sealed record Bar(string SegmentId, int Lane, double Start, double End, bool Provisional);
+
+    /// <summary>True while the view follows the newest audio.</summary>
+    public bool IsFollowing => this.follow;
+
+    /// <summary>Raised when following starts or stops (the user panned away or jumped back to live).</summary>
+    public event Action? FollowChanged;
+
+    /// <summary>Snaps back to the newest audio and resumes following.</summary>
+    public void FollowLive()
+    {
+        this.follow = true;
+        this.ClampView();
+        this.FollowChanged?.Invoke();
+        this.InvalidateVisual();
+    }
 
     /// <summary>Raised with a segment id when a bar is clicked.</summary>
     public event Action<string>? SegmentClicked;
@@ -50,7 +68,9 @@ public sealed class SpeakerTimelineControl : Control
     }
 
     /// <summary>Height the control needs for the current number of lanes.</summary>
-    public double DesiredContentHeight => AxisHeight + (this.lanes.Count * (LaneHeight + LaneGap)) + 6;
+    public double DesiredContentHeight => AxisHeight + (Math.Min(this.lanes.Count, MaxVisibleLanes) * (LaneHeight + LaneGap)) + 6;
+
+    private double MaxLaneOffset => Math.Max(0, (this.lanes.Count - MaxVisibleLanes) * (LaneHeight + LaneGap));
 
     public void SetDocument(TranscriptDocument? document, bool isLive)
     {
@@ -85,8 +105,11 @@ public sealed class SpeakerTimelineControl : Control
             }
         }
 
+        var grew = lanes.Count > this.lanes.Count;
         this.lanes = lanes;
         this.bars = bars;
+        // A newly detected speaker appears at the bottom; keep it in view while following live.
+        this.laneOffset = grew && this.follow ? this.MaxLaneOffset : Math.Min(this.laneOffset, this.MaxLaneOffset);
         this.totalSeconds = Math.Max(end, document.Duration?.TotalSeconds ?? 0);
         this.ClampView();
         this.InvalidateVisual();
@@ -118,6 +141,15 @@ public sealed class SpeakerTimelineControl : Control
             return;
         }
 
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+        {
+            // Shift+wheel scrolls the speaker rows when there are more than fit.
+            this.laneOffset = Math.Clamp(this.laneOffset - (e.Delta.Y * (LaneHeight + LaneGap)), 0, this.MaxLaneOffset);
+            this.InvalidateVisual();
+            e.Handled = true;
+            return;
+        }
+
         if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
         {
             var factor = e.Delta.Y > 0 ? 0.8 : 1.25;
@@ -132,11 +164,17 @@ public sealed class SpeakerTimelineControl : Control
         }
 
         // Panning away from the newest audio stops following; panning back to the end resumes it.
+        var wasFollowing = this.follow;
         this.follow = false;
         this.ClampView();
         if (this.viewStart + this.viewSeconds >= this.totalSeconds)
         {
             this.follow = this.live;
+        }
+
+        if (wasFollowing != this.follow)
+        {
+            this.FollowChanged?.Invoke();
         }
 
         this.InvalidateVisual();
@@ -148,7 +186,7 @@ public sealed class SpeakerTimelineControl : Control
         base.OnPointerPressed(e);
         var p = e.GetPosition(this);
         var t = this.XToTime(p.X);
-        var lane = (int)((p.Y - AxisHeight) / (LaneHeight + LaneGap));
+        var lane = (int)Math.Floor((p.Y - AxisHeight + this.laneOffset) / (LaneHeight + LaneGap));
         var hit = this.bars.Where(b => b.Lane == lane && t >= b.Start && t <= b.End).OrderBy(b => b.End - b.Start).FirstOrDefault();
         if (hit is not null)
         {
@@ -184,9 +222,15 @@ public sealed class SpeakerTimelineControl : Control
             DrawText(context, FormatAxis(t), typeface, 10, foreground, new Point(x + 3, 1));
         }
 
+        using var clip = context.PushClip(new Rect(0, AxisHeight, width, Math.Max(0, this.DesiredContentHeight - AxisHeight)));
         for (var i = 0; i < this.lanes.Count; i++)
         {
-            var top = AxisHeight + (i * (LaneHeight + LaneGap));
+            var top = AxisHeight + (i * (LaneHeight + LaneGap)) - this.laneOffset;
+            if (top < AxisHeight - LaneHeight || top > this.DesiredContentHeight)
+            {
+                continue;
+            }
+
             var color = SpeakerPalette.For(this.lanes[i].Index);
             context.DrawRectangle(faint, null, new Rect(LabelWidth, top, width - LabelWidth, LaneHeight), 3, 3);
             context.DrawRectangle(new SolidColorBrush(color), null, new Rect(2, top + 7, 10, 10), 2, 2);
@@ -203,7 +247,7 @@ public sealed class SpeakerTimelineControl : Control
             }
 
             var color = SpeakerPalette.For(this.lanes[bar.Lane].Index);
-            var top = AxisHeight + (bar.Lane * (LaneHeight + LaneGap)) + 2;
+            var top = AxisHeight + (bar.Lane * (LaneHeight + LaneGap)) + 2 - this.laneOffset;
             var selected = bar.SegmentId == this.selectedSegmentId;
             var fill = new SolidColorBrush(color, bar.Provisional ? 0.35 : 0.9);
             var pen = selected
