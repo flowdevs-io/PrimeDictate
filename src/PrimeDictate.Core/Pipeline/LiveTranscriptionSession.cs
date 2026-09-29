@@ -17,6 +17,8 @@ public sealed record LiveSessionOptions(
     TimeSpan PreviewInterval,
     UtteranceDetectorOptions? Detector = null,
     TranscriptSourceType Source = TranscriptSourceType.Microphone,
+    /// <summary>Normalizes quiet audio before recognition (system audio and meetings only). The saved recording is never changed.</summary>
+    bool AutoGain = true,
     /// <summary>
     /// Meeting sessions on a streaming provider run one stream per channel (microphone = You, system audio = remote
     /// people, with speaker detection) so overlapping speech is not blended into one signal. False mixes to mono.
@@ -68,6 +70,9 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
     private bool discard;
     private int stopped;
     private long backlogSamples;
+    private long samplesSinceFlush;
+    private AutoGain? gainLeft;
+    private AutoGain? gainRight;
     private long streamedSamples;
     private bool frameSynthetic;
 
@@ -338,6 +343,14 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         var lease = this.capture!;
         var resampler = new StreamingResampler(lease.Format.SampleRate, AudioFormat.SpeechTimeline.SampleRate);
         var rightResampler = this.keepStereo ? new StreamingResampler(lease.Format.SampleRate, AudioFormat.SpeechTimeline.SampleRate) : null;
+        if (this.options.AutoGain && this.options.Source != TranscriptSourceType.Microphone)
+        {
+            // Left is the microphone in a meeting: a low ceiling, since room noise must not be amplified into speech.
+            var systemGain = new AutoGainOptions();
+            this.gainLeft = new AutoGain(this.options.Source == TranscriptSourceType.Meeting ? systemGain with { MaxGain = 4f } : systemGain);
+            this.gainRight = this.keepStereo ? new AutoGain(systemGain) : null;
+        }
+
         long expectedSequence = 0;
         try
         {
@@ -370,7 +383,7 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
                 }
 
                 var mono = AudioConversion.DownmixToMono(frame.Samples.Span, frame.Format.Channels);
-                await this.PublishAsync(resampler.Process(mono)).ConfigureAwait(false);
+                await this.PublishMonoAsync(resampler.Process(mono)).ConfigureAwait(false);
             }
 
             this.frameSynthetic = false;
@@ -380,7 +393,7 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
             }
             else
             {
-                await this.PublishAsync(resampler.Flush()).ConfigureAwait(false);
+                await this.PublishMonoAsync(resampler.Flush()).ConfigureAwait(false);
             }
         }
         catch (AudioSourceException ex)
@@ -406,6 +419,9 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         }
     }
 
+    private Task PublishMonoAsync(float[] samples) =>
+        this.gainLeft is null ? this.PublishAsync(samples) : this.PublishAsync(this.gainLeft.Process(samples), samples);
+
     private Task PublishStereoAsync(float[] left, float[] right)
     {
         var count = Math.Min(left.Length, right.Length);
@@ -418,7 +434,22 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
             mono[i] = (left[i] + right[i]) * 0.5f;
         }
 
-        return this.PublishAsync(mono, interleaved, left.AsSpan(0, count).ToArray(), right.AsSpan(0, count).ToArray());
+        var recognitionLeft = left.AsSpan(0, count).ToArray();
+        var recognitionRight = right.AsSpan(0, count).ToArray();
+        if (this.gainLeft is not null && this.gainRight is not null)
+        {
+            // Per channel, so a quiet remote side is lifted without lifting the microphone. The sum keeps
+            // one speaker at full level, and the limiter handles both talking at once. The per-channel
+            // streams of a two-stream meeting get the same lifted signals.
+            recognitionLeft = this.gainLeft.Process(recognitionLeft);
+            recognitionRight = this.gainRight.Process(recognitionRight);
+            for (var i = 0; i < count; i++)
+            {
+                mono[i] = AutoGain.Limit(recognitionLeft[i] + recognitionRight[i]);
+            }
+        }
+
+        return this.PublishAsync(mono, interleaved, recognitionLeft, recognitionRight);
     }
 
     private async Task PublishAsync(float[] samples, float[]? fileSamples = null, float[]? left = null, float[]? right = null)
@@ -429,6 +460,13 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         }
 
         this.writer!.Write(fileSamples ?? samples);
+        // Keep the WAV header valid on disk, so a crash or kill leaves audio that can be played and repaired.
+        if ((this.samplesSinceFlush += samples.Length) >= AudioFormat.SpeechTimeline.SampleRate)
+        {
+            this.samplesSinceFlush = 0;
+            this.writer.Flush();
+        }
+
         lock (this.timeline!)
         {
             if (this.timeline.IsCapturing)
@@ -438,7 +476,7 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         }
 
         var peak = 0f;
-        foreach (var s in samples)
+        foreach (var s in fileSamples ?? samples)
         {
             peak = Math.Max(peak, Math.Abs(s));
         }
