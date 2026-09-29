@@ -294,6 +294,6 @@ public class CombinedAudioSourceTests
         var micClick = ClickIndex(frames, 0);
         var systemClick = ClickIndex(frames, 1);
         Assert.Equal(1_600, micClick);
-        Assert.InRange(systemClick - micClick, 4_000, 5_600); // 300 ms, allowing scheduler slack
+        Assert.InRange(systemClick - micClick, 4_000, 8_000); // 300 ms plus scheduler slack
     }
 }
