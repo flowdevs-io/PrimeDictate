@@ -250,20 +250,22 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
         await this.lifetime.CancelAsync().ConfigureAwait(false);
         await this.cancel.CancelAsync().ConfigureAwait(false);
         this.updates.Writer.TryComplete();
-        this.socket.Dispose();
+        // Let the readers stop on the cancellation before the socket goes away.
         foreach (var task in new[] { this.receiver, this.watchdog })
         {
             if (task is not null)
             {
                 try
                 {
-                    await task.ConfigureAwait(false);
+                    await task.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
                 }
-                catch (OperationCanceledException)
+                catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException or TimeoutException)
                 {
                 }
             }
         }
+
+        this.socket.Dispose();
 
         this.cancel.Dispose();
         this.lifetime.Dispose();
@@ -405,11 +407,18 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
         {
             var old = this.socket;
             await this.cancel.CancelAsync().ConfigureAwait(false);
-            old.Dispose();
             if (this.receiver is not null)
             {
-                await this.receiver.ConfigureAwait(false);
+                try
+                {
+                    await this.receiver.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException or TimeoutException)
+                {
+                }
             }
+
+            old.Dispose();
 
             this.cancel.Dispose();
             this.cancel = new CancellationTokenSource();
@@ -495,8 +504,9 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
 
             this.CompleteIfCurrent(socket, null);
         }
-        catch (OperationCanceledException)
+        catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException)
         {
+            // Dispose and restart cancel and then dispose the socket; the read can observe either first.
             this.CompleteIfCurrent(socket, null);
         }
         catch (WebSocketException ex)
