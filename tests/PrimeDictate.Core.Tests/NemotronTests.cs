@@ -69,6 +69,28 @@ public sealed class NemotronTests : IDisposable
     }
 
     [Fact]
+    public void The_run_seen_in_a_real_meeting_loses_its_one_word_speaker_but_keeps_longer_runs()
+    {
+        // Ids seen in one 19 s commit: 1 x16, 2 x3, 3 x1, 2 x3, 1 x16, 3 x16, 1 x5, at about 0.4 s a word.
+        var pattern = new[] { (1, 16), (2, 3), (3, 1), (2, 3), (1, 16), (3, 16), (1, 5) };
+        var words = new List<(string, double, int)>();
+        var t = 0.0;
+        foreach (var (speaker, count) in pattern)
+        {
+            for (var i = 0; i < count; i++, t += 0.4)
+            {
+                words.Add(("w", t, speaker));
+            }
+        }
+
+        var segments = NemotronResponseParser.ParseVerboseJson(WordsJson(words.ToArray()), TimeSpan.FromSeconds(25), withSpeakers: true);
+
+        // The single "3" between two runs of 2 joins them; the 1.7 s run of 2 is long enough to stay.
+        Assert.Equal(["speaker-1", "speaker-2", "speaker-1", "speaker-3", "speaker-1"], segments.Select(s => s.SpeakerLabel));
+        Assert.Equal(7, segments[1].Words!.Count);
+    }
+
+    [Fact]
     public void A_real_turn_change_of_several_words_is_kept()
     {
         var json = WordsJson(("one", 0, 1), ("two", 0.4, 1), ("three", 0.8, 1), ("four", 1.2, 1), ("five", 1.6, 2), ("six", 2.0, 2), ("seven", 2.4, 2), ("eight", 2.8, 2), ("nine", 3.2, 2));
