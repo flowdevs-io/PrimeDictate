@@ -49,16 +49,6 @@ public enum AudioDeviceKind
     SystemAudio = 1
 }
 
-/// <summary>What a live session records.</summary>
-public enum AudioCaptureMode
-{
-    Microphone = 0,
-    SystemAudio = 1,
-
-    /// <summary>Microphone and system audio together on one clock (see <see cref="PrimeDictate.Core.Audio.CombinedAudioSource"/>).</summary>
-    MicrophoneAndSystemAudio = 2
-}
-
 public sealed record AudioInputDevice(string Id, string Name, bool IsDefault, AudioDeviceKind Kind = AudioDeviceKind.Microphone);
 
 /// <summary>

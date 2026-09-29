@@ -14,7 +14,8 @@ public sealed record LiveSessionOptions(
     Func<Guid, string> MediaDirectoryFor,
     /// <summary>How often a still-growing utterance is re-recognized for the provisional preview.</summary>
     TimeSpan PreviewInterval,
-    UtteranceDetectorOptions? Detector = null)
+    UtteranceDetectorOptions? Detector = null,
+    TranscriptSourceType Source = TranscriptSourceType.Microphone)
 {
     public static readonly TimeSpan DefaultPreviewInterval = TimeSpan.FromSeconds(1.5);
 }
@@ -50,6 +51,7 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
     private IAsyncDisposable? micLease;
     private IAudioCaptureLease? capture;
     private WavFileWriter? writer;
+    private bool keepStereo;
     private RecordedAudioTimeline? timeline;
     private Task? captureTask;
     private Task? inferenceTask;
@@ -101,7 +103,7 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         {
             SessionId = Guid.NewGuid(),
             Title = this.options.Title,
-            SourceType = TranscriptSourceType.Microphone,
+            SourceType = this.options.Source,
             CreatedAt = now,
             UpdatedAt = now,
             Status = TranscriptSessionStatus.Created
@@ -109,12 +111,21 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         this.Host = new SessionDocumentHost(document, this.store, this.clock);
 
         // Suspends wake word and idle dictation, and refuses if dictation is mid-utterance.
-        this.micLease = await this.coordinator.AcquireAsync("Transcription", cancellationToken).ConfigureAwait(false);
+        // System-audio-only capture never touches the microphone, so it must not pause the wake word
+        // or dictation. Take the microphone lease only for sources that use the microphone.
+        if (this.options.Source != TranscriptSourceType.SystemAudio)
+        {
+            this.micLease = await this.coordinator.AcquireAsync("Transcription", cancellationToken).ConfigureAwait(false);
+        }
+
         try
         {
             this.capture = await this.audioSource.OpenAsync(this.options.Session.InputDeviceId, cancellationToken).ConfigureAwait(false);
-            var path = Path.Combine(this.options.MediaDirectoryFor(document.SessionId), "recording-16k-mono.wav");
-            this.writer = new WavFileWriter(path);
+            // A meeting keeps both channels (left local, right remote) so playback and speaker detection
+            // can use the local-versus-remote split. Recognition always gets the mono mix.
+            this.keepStereo = this.options.Source == TranscriptSourceType.Meeting && this.capture.Format.Channels == 2;
+            var path = Path.Combine(this.options.MediaDirectoryFor(document.SessionId), this.keepStereo ? "recording-16k-stereo.wav" : "recording-16k-mono.wav");
+            this.writer = new WavFileWriter(path, 16_000, this.keepStereo ? 2 : 1);
             this.timeline = new RecordedAudioTimeline(AudioFormat.SpeechTimeline);
             var run = new RecognitionRunInfo(
                 1,
@@ -131,7 +142,13 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
             this.Host.Modify(d => d with
             {
                 Audio = [new AudioReference(AudioReferenceKind.Owned, path, null)],
-                Media = new MediaMetadata(null, "microphone", null, this.capture.Format.SampleRate, this.capture.Format.Channels, null, null, null)
+                Media = new MediaMetadata(null, this.options.Source switch
+                {
+                    TranscriptSourceType.SystemAudio => "system-audio",
+                    TranscriptSourceType.Meeting => "meeting",
+                    _ => "microphone"
+                }, null, this.capture.Format.SampleRate, this.capture.Format.Channels, null,
+                this.keepStereo ? "left=microphone, right=system audio" : null, null)
             });
             this.Host.SetStatus(TranscriptSessionStatus.Running);
             this.Host.Apply(new SessionStarted(document.SessionId, run));
@@ -309,6 +326,7 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
     {
         var lease = this.capture!;
         var resampler = new StreamingResampler(lease.Format.SampleRate, AudioFormat.SpeechTimeline.SampleRate);
+        var rightResampler = this.keepStereo ? new StreamingResampler(lease.Format.SampleRate, AudioFormat.SpeechTimeline.SampleRate) : null;
         long expectedSequence = 0;
         try
         {
@@ -331,11 +349,26 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
                 }
 
                 expectedSequence = frame.SequenceNumber + 1;
+                if (rightResampler is not null)
+                {
+                    var left = resampler.Process(AudioConversion.SelectChannel(frame.Samples.Span, 2, 0));
+                    var right = rightResampler.Process(AudioConversion.SelectChannel(frame.Samples.Span, 2, 1));
+                    await this.PublishStereoAsync(left, right).ConfigureAwait(false);
+                    continue;
+                }
+
                 var mono = AudioConversion.DownmixToMono(frame.Samples.Span, frame.Format.Channels);
                 await this.PublishAsync(resampler.Process(mono)).ConfigureAwait(false);
             }
 
-            await this.PublishAsync(resampler.Flush()).ConfigureAwait(false);
+            if (rightResampler is not null)
+            {
+                await this.PublishStereoAsync(resampler.Flush(), rightResampler.Flush()).ConfigureAwait(false);
+            }
+            else
+            {
+                await this.PublishAsync(resampler.Flush()).ConfigureAwait(false);
+            }
         }
         catch (AudioSourceException ex)
         {
@@ -360,14 +393,29 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         }
     }
 
-    private async Task PublishAsync(float[] samples)
+    private Task PublishStereoAsync(float[] left, float[] right)
+    {
+        var count = Math.Min(left.Length, right.Length);
+        var interleaved = new float[count * 2];
+        var mono = new float[count];
+        for (var i = 0; i < count; i++)
+        {
+            interleaved[2 * i] = left[i];
+            interleaved[(2 * i) + 1] = right[i];
+            mono[i] = (left[i] + right[i]) * 0.5f;
+        }
+
+        return this.PublishAsync(mono, interleaved);
+    }
+
+    private async Task PublishAsync(float[] samples, float[]? fileSamples = null)
     {
         if (samples.Length == 0)
         {
             return;
         }
 
-        this.writer!.Write(samples);
+        this.writer!.Write(fileSamples ?? samples);
         lock (this.timeline!)
         {
             if (this.timeline.IsCapturing)

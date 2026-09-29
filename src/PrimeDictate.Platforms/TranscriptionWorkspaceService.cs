@@ -143,11 +143,11 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     private Task RunAsync(SessionDocumentHost host, FileJobRequest request, InstalledWhisperModel model, IProgress<ProgressChanged>? progress, CancellationToken cancellationToken) =>
         Task.Run(() => this.runner.RunAsync(host, request, this.decoder, this.Provider(model), progress, cancellationToken), CancellationToken.None);
 
-    /// <param name="deviceId">Microphone device; for <see cref="AudioCaptureMode.SystemAudio"/> it is the output device (null is the default output).</param>
-    /// <param name="systemDeviceId">Output device for <see cref="AudioCaptureMode.MicrophoneAndSystemAudio"/>; null is the default output.</param>
-    public async Task<LiveTranscriptionSession> StartLiveAsync(InstalledWhisperModel model, string? deviceId, AudioRetention retention, string title, CancellationToken cancellationToken, AudioCaptureMode mode = AudioCaptureMode.Microphone, string? systemDeviceId = null)
+    /// <param name="deviceId">Microphone device; for <see cref="TranscriptSourceType.SystemAudio"/> it is the output device (null is the default output).</param>
+    /// <param name="systemDeviceId">Output device for <see cref="TranscriptSourceType.Meeting"/>; null is the default output.</param>
+    public async Task<LiveTranscriptionSession> StartLiveAsync(InstalledWhisperModel model, string? deviceId, AudioRetention retention, string title, CancellationToken cancellationToken, TranscriptSourceType source = TranscriptSourceType.Microphone, string? systemDeviceId = null)
     {
-        var source = this.SourceFor(mode, systemDeviceId);
+        var captureSource = this.SourceFor(source, systemDeviceId);
 
         if (this.live is not null)
         {
@@ -155,29 +155,29 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         }
 
         var session = new LiveTranscriptionSession(
-            source,
+            captureSource,
             this.Provider(model),
             this.microphone,
             this.scheduler,
             this.store,
-            new LiveSessionOptions(Options(model, deviceId, retention), title, this.store.GetSessionMediaDirectory, LiveSessionOptions.DefaultPreviewInterval));
+            new LiveSessionOptions(Options(model, deviceId, retention), title, this.store.GetSessionMediaDirectory, LiveSessionOptions.DefaultPreviewInterval, null, source));
         await session.StartAsync(cancellationToken).ConfigureAwait(false);
         this.live = session;
         return session;
     }
 
-    private IAudioSource SourceFor(AudioCaptureMode mode, string? systemDeviceId)
+    private IAudioSource SourceFor(TranscriptSourceType mode, string? systemDeviceId)
     {
-        var microphone = mode != AudioCaptureMode.SystemAudio
+        var microphone = mode != TranscriptSourceType.SystemAudio
             ? this.audioSource ?? throw new AudioSourceException(AudioSourceErrorKind.Unknown, this.MicrophoneUnavailableReason ?? "No microphone is available.")
             : null;
-        var system = mode != AudioCaptureMode.Microphone
+        var system = mode != TranscriptSourceType.Microphone
             ? this.systemAudioSource ?? throw new AudioSourceException(AudioSourceErrorKind.NotSupported, this.SystemAudioUnavailableReason ?? "System audio capture is not available.")
             : null;
         return mode switch
         {
-            AudioCaptureMode.Microphone => microphone!,
-            AudioCaptureMode.SystemAudio => system!,
+            TranscriptSourceType.Microphone => microphone!,
+            TranscriptSourceType.SystemAudio => system!,
             _ => new CombinedAudioSource(microphone!, system!) { SystemDeviceId = systemDeviceId }
         };
     }

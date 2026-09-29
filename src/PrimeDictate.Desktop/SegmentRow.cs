@@ -9,6 +9,7 @@ public sealed class SegmentRow(string id) : INotifyPropertyChanged
     private string text = string.Empty;
     private string time = string.Empty;
     private bool provisional;
+    private string speaker = string.Empty;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -28,6 +29,21 @@ public sealed class SegmentRow(string id) : INotifyPropertyChanged
         set => this.Set(ref this.time, value, nameof(this.Time));
     }
 
+    /// <summary>Speaker name, empty when the session has no speaker detection. Live labels end in "?" until final.</summary>
+    public string Speaker
+    {
+        get => this.speaker;
+        set
+        {
+            if (this.Set(ref this.speaker, value, nameof(this.Speaker)))
+            {
+                this.PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(this.HasSpeaker)));
+            }
+        }
+    }
+
+    public bool HasSpeaker => this.speaker.Length > 0;
+
     /// <summary>True while a live utterance may still change.</summary>
     public bool Provisional
     {
@@ -43,8 +59,11 @@ public sealed class SegmentRow(string id) : INotifyPropertyChanged
 
     public double Opacity => this.provisional ? 0.6 : 1.0;
 
-    public void Update(TranscriptSegment segment)
+    public void Update(TranscriptSegment segment, IReadOnlyList<TranscriptSpeaker> speakers)
     {
+        var id = segment.Speakers.Count > 0 ? segment.Speakers[0].SpeakerId : null;
+        var name = id is null ? string.Empty : speakers.FirstOrDefault(s => s.Id == id)?.Name ?? id;
+        this.Speaker = name.Length > 0 && segment.State != SegmentState.Final ? name + "?" : name;
         this.Time = FormatTime(segment.Start);
         this.Provisional = segment.State != SegmentState.Final;
         if (!this.IsEditing)

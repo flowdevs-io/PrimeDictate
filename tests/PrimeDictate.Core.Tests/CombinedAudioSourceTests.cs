@@ -7,7 +7,7 @@ namespace PrimeDictate.Core.Tests;
 
 public class CombinedAudioSourceTests
 {
-    private sealed class FakeLease(int rate, string name) : IAudioCaptureLease
+    internal sealed class FakeLease(int rate, string name) : IAudioCaptureLease
     {
         private readonly Channel<AudioFrame> frames = Channel.CreateUnbounded<AudioFrame>();
         private long sequence;

@@ -8,7 +8,7 @@ UI, is never always-on, never persists across sessions, and stays local.
 
 | Piece | Where | Notes |
 |---|---|---|
-| Contracts | `Core/Providers/AudioContracts.cs` | `ISystemAudioSource`, `AudioDeviceKind`, `AudioCaptureMode`, `AudioSourceErrorKind.NotSupported`. Devices of a system source are **output** endpoints. |
+| Contracts | `Core/Providers/AudioContracts.cs` | `ISystemAudioSource`, `AudioDeviceKind`, `AudioSourceErrorKind.NotSupported`. Devices of a system source are **output** endpoints. |
 | Mic + system on one clock | `Core/Audio/CombinedAudioSource.cs` | One `IAudioCaptureLease`; existing session code needs no change. |
 | Windows | `Platforms/Audio/WasapiLoopbackCaptureSource.cs` | NAudio `WasapiLoopbackCapture`, shared mode. **Compiles; never run.** |
 | Linux | `Platforms/Audio/PulseMonitorCaptureSource.cs` | libpulse-simple records a sink's `.monitor`. Covers PipeWire through pipewire-pulse. **Run against a virtual sink.** |
@@ -80,12 +80,10 @@ pavucontrol as "PrimeDictate system audio".
   shows up as an ordinary input for the existing microphone source. The stub's message says this.
 - Permission denial should map to `AudioSourceErrorKind.PermissionDenied`.
 
-## For the session controller and UI owner
+## Session wiring
 
-- `LiveTranscriptionSession` labels the document `SourceType.Microphone` and media `"microphone"`
-  for every live session; add a system/meeting source type when the transcript model is ready.
-- The session still acquires the microphone lease in `MicrophoneCoordinator` even for system-only
-  capture. Harmless but pauses wake word needlessly.
-- Only the combined lease keeps channels apart; the session downmixes and writes a 16 kHz mono WAV.
-  For diarization use of "local vs remote", write the stereo file (or keep per-channel energy) too.
-- Output-device picker and per-app capture are not built; `ListSystemAudioDevicesAsync` exists.
+The picker maps to `TranscriptSourceType` (Microphone, SystemAudio, Meeting) and
+`StartLiveAsync(..., source, systemDeviceId)` builds the matching source: Meeting uses the combined
+lease. `LiveTranscriptionSession` (main thread's change) keeps a stereo file for meetings and reads
+channel 0 as the microphone and channel 1 as system audio. `CombinedMeetingTests` proves that order
+end to end. Not built: an output-device picker, per-app capture, and following default-output changes.
