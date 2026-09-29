@@ -53,14 +53,20 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
     private string partial = string.Empty;
     private TaskCompletionSource allCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    private NemotronRealtimeSession(Uri baseAddress, string apiKey, bool diarize, TimeSpan stallTimeout)
+    private readonly string? language;
+
+    private NemotronRealtimeSession(Uri baseAddress, string apiKey, bool diarize, TimeSpan stallTimeout, string? language)
     {
+        this.language = language;
         this.baseAddress = baseAddress;
         this.apiKey = apiKey;
         this.diarize = diarize;
         this.stallTimeout = stallTimeout;
         this.socket = new ClientWebSocket();
     }
+
+    /// <summary>Set when the worker did not accept the language setting and the stream runs with auto-detection.</summary>
+    public string? StartupNotice { get; private set; }
 
     /// <summary>Raised when the session recovered from a stalled worker connection. Speaker numbers may restart.</summary>
     public event Action<string>? Notice;
@@ -71,10 +77,26 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
     /// <param name="stallTimeout">
     /// How long speech may go in without any text coming back before the connection is replaced. Default 6 s.
     /// </param>
-    public static async ValueTask<NemotronRealtimeSession> ConnectAsync(Uri baseAddress, string apiKey, bool diarize, CancellationToken cancellationToken, TimeSpan? stallTimeout = null)
+    public static async ValueTask<NemotronRealtimeSession> ConnectAsync(Uri baseAddress, string apiKey, bool diarize, CancellationToken cancellationToken, TimeSpan? stallTimeout = null, string? language = null)
     {
-        var session = new NemotronRealtimeSession(baseAddress, apiKey, diarize, stallTimeout ?? TimeSpan.FromSeconds(6));
-        await session.OpenAsync(cancellationToken).ConfigureAwait(false);
+        var wanted = string.IsNullOrWhiteSpace(language) || language == "auto" ? null : language;
+        var session = new NemotronRealtimeSession(baseAddress, apiKey, diarize, stallTimeout ?? TimeSpan.FromSeconds(6), wanted);
+        try
+        {
+            await session.OpenAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (NemotronException) when (wanted is not null)
+        {
+            session.socket.Dispose();
+            // Some worker builds may not know the language setting. Never lose the recording over it: retry
+            // without it, and say so.
+            session = new NemotronRealtimeSession(baseAddress, apiKey, diarize, stallTimeout ?? TimeSpan.FromSeconds(6), null)
+            {
+                StartupNotice = $"The speech worker did not accept the language '{wanted}', so it is detecting the language itself. Wrong-language words may appear."
+            };
+            await session.OpenAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         session.watchdog = Task.Run(() => session.WatchdogAsync(session.lifetime.Token), CancellationToken.None);
         return session;
     }
@@ -108,6 +130,11 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
         }
 
         var settings = new Dictionary<string, object> { ["sample_rate"] = 16_000, ["word_timestamps"] = true };
+        if (this.language is not null)
+        {
+            settings["language"] = this.language;
+        }
+
         if (this.diarize)
         {
             settings["speaker_diarization"] = true;

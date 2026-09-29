@@ -26,7 +26,19 @@ public sealed partial class MainWindow : Window
 
     private readonly TranscriptionWorkspaceService workspace;
     private readonly ObservableCollection<SegmentRow> rows = [];
+    // rowsByLead keeps a row's identity while its turn grows; rowsById finds the row that shows any segment.
+    private readonly Dictionary<string, SegmentRow> rowsByLead = new(StringComparer.Ordinal);
     private readonly Dictionary<string, SegmentRow> rowsById = new(StringComparer.Ordinal);
+
+    /// <summary>Lines from the same speaker closer together than this read as one turn, like the demo's transcript.</summary>
+    private static readonly TimeSpan TurnGap = TimeSpan.FromSeconds(5);
+
+    private static readonly List<(string Name, string Code)> Languages =
+    [
+        ("English (US)", "en-US"), ("English (UK)", "en-GB"), ("Spanish", "es-ES"), ("French", "fr-FR"), ("German", "de-DE"),
+        ("Italian", "it-IT"), ("Portuguese (Brazil)", "pt-BR"), ("Japanese", "ja-JP"), ("Chinese", "zh-CN"), ("Auto-detect", "auto")
+    ];
+
     private IReadOnlyList<SpeechModelChoice> models = [];
     private SessionDocumentHost? host;
     private CancellationTokenSource? jobCancel;
@@ -43,6 +55,15 @@ public sealed partial class MainWindow : Window
         this.workspace = new TranscriptionWorkspaceService(string.IsNullOrWhiteSpace(dataDir) ? null : new AppDataPaths(dataDir));
         this.TranscriptList.ItemsSource = this.rows;
         this.workspace.Notice += this.Say;
+        this.LanguageBox.ItemsSource = Languages.Select(l => l.Name).ToList();
+        this.LanguageBox.SelectedIndex = Math.Max(0, Languages.FindIndex(l => string.Equals(l.Code, this.workspace.Language, StringComparison.OrdinalIgnoreCase)));
+        this.LanguageBox.SelectionChanged += (_, _) =>
+        {
+            if (this.LanguageBox.SelectedIndex is >= 0 and var i && i < Languages.Count)
+            {
+                this.workspace.Language = Languages[i].Code;
+            }
+        };
 
         this.ImportButton.Click += async (_, _) => await this.RunSafelyAsync(() => this.PickFileAsync());
         this.RecordButton.Click += async (_, _) => await this.RunSafelyAsync(() => this.StartRecordingAsync());
@@ -111,6 +132,22 @@ public sealed partial class MainWindow : Window
         {
             this.Say("That did not work: " + ex.Message);
         }
+    }
+
+    /// <summary>Which model and backend the shown run used, kept on screen (unlike the status line, which the next message replaces).</summary>
+    private void RefreshBackendBadge(TranscriptDocument? document)
+    {
+        var run = document?.Runs.LastOrDefault(r => r.ResultVersion == document.ActiveResultVersion);
+        this.BackendBadge.IsVisible = run is not null;
+        if (run is null)
+        {
+            return;
+        }
+
+        var model = run.AsrModelId.StartsWith("nemotron:", StringComparison.Ordinal) ? "Nemotron" : "Whisper";
+        var fellBack = !string.Equals(run.RequestedBackend, run.EffectiveBackend, StringComparison.OrdinalIgnoreCase) && run.RequestedBackend != "cpu";
+        this.BackendText.Text = $"{model} on {run.EffectiveBackend}" + (fellBack ? $" (wanted {run.RequestedBackend})" : string.Empty);
+        this.BackendBadge.Opacity = fellBack ? 1 : 0.8;
     }
 
     private void Say(string message) => Dispatcher.UIThread.Post(() => this.StatusText.Text = message);
@@ -188,6 +225,7 @@ public sealed partial class MainWindow : Window
 
         this.host = newHost;
         this.rows.Clear();
+        this.rowsByLead.Clear();
         this.rowsById.Clear();
         if (newHost is not null)
         {
@@ -215,17 +253,24 @@ public sealed partial class MainWindow : Window
         var document = this.host?.Document;
         var search = this.SearchBox.Text?.Trim();
         var visible = new List<SegmentRow>();
+        this.rowsById.Clear();
         if (document is not null)
         {
-            foreach (var segment in document.ActiveSegments)
+            foreach (var turn in TranscriptTurns.Group(document, TurnGap))
             {
-                if (!this.rowsById.TryGetValue(segment.Id, out var row))
+                var lead = turn.Segments[0].Id;
+                if (!this.rowsByLead.TryGetValue(lead, out var row))
                 {
-                    row = new SegmentRow(segment.Id);
+                    row = new SegmentRow(lead);
+                    this.rowsByLead[lead] = row;
+                }
+
+                row.UpdateTurn(turn.Segments, document.Speakers, turn.GuessedSpeakerId);
+                foreach (var segment in turn.Segments)
+                {
                     this.rowsById[segment.Id] = row;
                 }
 
-                row.Update(segment, document.Speakers);
                 if (string.IsNullOrEmpty(search) || row.Text.Contains(search, StringComparison.OrdinalIgnoreCase))
                 {
                     visible.Add(row);
@@ -257,6 +302,7 @@ public sealed partial class MainWindow : Window
             }
         }
 
+        this.RefreshBackendBadge(document);
         this.RefreshSpeakers(document);
         this.Timeline.SetDocument(document, this.live is not null);
         this.Timeline.Height = document is { Speakers.Count: > 0 } ? this.Timeline.DesiredContentHeight : 0;
@@ -446,11 +492,23 @@ public sealed partial class MainWindow : Window
         if (e.Source is TextBox { Tag: string id } box && this.rowsById.TryGetValue(id, out var row))
         {
             row.IsEditing = false;
-            var current = this.host?.Document.Segments.FirstOrDefault(s => s.Id == id && s.ResultVersion == this.host.Document.ActiveResultVersion);
-            if (current is not null && box.Text is { } text && text != current.DisplayText)
+            var document = this.host?.Document;
+            var shown = document?.Segments.Where(s => s.ResultVersion == document.ActiveResultVersion && row.SegmentIds.Contains(s.Id)).OrderBy(s => s.Start).ToList();
+            if (shown is { Count: > 0 } && box.Text is { } text)
             {
-                this.host!.Edit(id, text);
-                _ = this.host.CheckpointAsync().AsTask();
+                var current = string.Join(' ', shown.Select(s => s.DisplayText).Where(t => t.Length > 0));
+                if (text != current)
+                {
+                    // A turn made of several lines is edited as one block: the text goes on its first line and the
+                    // others are emptied (raw recognition text is kept, and exports skip empty lines).
+                    this.host!.Edit(shown[0].Id, text);
+                    foreach (var rest in shown.Skip(1))
+                    {
+                        this.host.Edit(rest.Id, string.Empty);
+                    }
+
+                    _ = this.host.CheckpointAsync().AsTask();
+                }
             }
         }
     }

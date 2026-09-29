@@ -38,6 +38,7 @@
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,8">
           <TextBlock Text="Model" VerticalAlignment="Center" />
           <ComboBox x:Name="ModelBox" MinWidth="220" />
+          <ComboBox x:Name="LanguageBox" MinWidth="150" ToolTip.Tip="Spoken language. Auto-detect can put words in the wrong script on noisy audio." />
           <Button x:Name="PauseButton" Content="Pause" IsVisible="False" />
           <Button x:Name="StopButton" Content="Stop" IsVisible="False" />
           <Button x:Name="DiscardButton" Content="Discard" IsVisible="False" />
@@ -47,6 +48,9 @@
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,8">
           <TextBox x:Name="SearchBox" PlaceholderText="Search transcript" MinWidth="260" />
           <TextBlock x:Name="LevelText" VerticalAlignment="Center" Opacity="0.7" />
+          <Border x:Name="BackendBadge" IsVisible="False" CornerRadius="10" Padding="8,2" VerticalAlignment="Center" BorderThickness="1" BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
+            <TextBlock x:Name="BackendText" FontSize="12" />
+          </Border>
         </StackPanel>
         <StackPanel x:Name="SpeakersPanel" DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,8" IsVisible="False">
           <TextBlock Text="Speakers" VerticalAlignment="Center" />

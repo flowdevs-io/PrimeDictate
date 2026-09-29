@@ -147,4 +147,40 @@ public class TranscriptTests
             Assert.Throws<InvalidOperationException>(() => TranscriptionSessionStateMachine.Transition(from, to));
         }
     }
+
+    [Fact]
+    public void Turns_join_close_lines_from_one_speaker_and_guess_for_live_lines()
+    {
+        var doc = NewDocument();
+        foreach (var n in new[] { 1, 2, 3 })
+        {
+            doc = TranscriptDocumentReducer.Apply(doc, new SpeakerUpdated(doc.SessionId, new TranscriptSpeaker($"speaker-{n}", $"Speaker {n}", null)), Now);
+        }
+
+        TranscriptSegment Line(string id, double start, double end, string? speaker, SegmentState state = SegmentState.Final) =>
+            Segment(id, id, start, end, state: state) with { Speakers = speaker is null ? [] : [new SpeakerAttribution(speaker, TimeSpan.FromSeconds(start), TimeSpan.FromSeconds(end), null)] };
+        foreach (var segment in new[]
+        {
+            Line("a", 0, 5, "speaker-1"),
+            Line("b", 6, 9, "speaker-1"),      // 1 s later, same speaker: same turn
+            Line("c", 10, 12, "speaker-2"),     // different speaker: new turn
+            Line("d", 13, 14, "speaker-3"),     // merged into speaker-1 below, but not next to it
+            Line("e", 30, 33, "speaker-3"),     // same speaker but 16 s later: new turn
+            Line("f", 34, 35, null, SegmentState.Provisional) // live, follows e closely: guessed
+        })
+        {
+            doc = TranscriptDocumentReducer.Apply(doc, segment.State == SegmentState.Final ? new SegmentFinalized(doc.SessionId, segment) : new SegmentUpserted(doc.SessionId, segment), Now);
+        }
+
+        var turns = TranscriptTurns.Group(doc, TimeSpan.FromSeconds(5));
+        Assert.Equal([["a", "b"], ["c"], ["d"], ["e"], ["f"]], turns.Select(t => t.Segments.Select(s => s.Id).ToArray()).ToArray());
+        Assert.Equal("speaker-3", turns[^1].GuessedSpeakerId);
+        Assert.All(turns.Take(4), t => Assert.Null(t.GuessedSpeakerId));
+
+        // Merging speaker 3 into speaker 2 joins c and d (close together); e stays separate because of the gap.
+        doc = TranscriptDocumentReducer.MergeSpeaker(doc, "speaker-3", "speaker-2", Now);
+        turns = TranscriptTurns.Group(doc, TimeSpan.FromSeconds(5));
+        Assert.Equal([["a", "b"], ["c", "d"], ["e"], ["f"]], turns.Select(t => t.Segments.Select(s => s.Id).ToArray()).ToArray());
+        Assert.Equal("speaker-2", turns[^1].GuessedSpeakerId);
+    }
 }

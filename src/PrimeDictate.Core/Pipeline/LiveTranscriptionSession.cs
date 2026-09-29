@@ -136,9 +136,9 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
             var run = new RecognitionRunInfo(
                 1,
                 this.provider.ModelId,
-                this.options.Session.AsrModelRevision,
-                null,
-                null,
+                this.options.Session.AsrModelRevision ?? this.provider.ModelInfo.AsrRevision,
+                this.provider.ModelInfo.DiarizerModelId,
+                this.provider.ModelInfo.DiarizerRevision,
                 this.options.Session.Language,
                 this.provider.Runtime.RuntimeName,
                 this.provider.Runtime.RuntimeVersion,
@@ -461,8 +461,9 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         var ct = this.stopSignal.Token;
         var detectorOptions = this.options.Detector ?? new UtteranceDetectorOptions
         {
-            // Each commit is a chance for speaker identity to reset, so end utterances on real pauses only.
-            EndSilence = TimeSpan.FromMilliseconds(1200),
+            // Each commit is a chance for speaker identity to reset and every commit splits the text into a new
+            // segment, so end utterances on real pauses only. 1.8 s rides over short breaths in a sentence.
+            EndSilence = TimeSpan.FromMilliseconds(1800),
             MaxUtterance = TimeSpan.FromSeconds(30)
         };
         var detector = new UtteranceDetector(detectorOptions);
@@ -473,6 +474,12 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         await using var stream = await this.provider.StartStreamingAsync(this.options.Session.Language, diarize, ct).ConfigureAwait(false);
         if (stream is IStreamingNotices notices)
         {
+            if (notices.StartupNotice is { } startup)
+            {
+                host.AddNote(startup);
+                this.Error?.Invoke(startup);
+            }
+
             notices.Notice += message =>
             {
                 host.AddNote($"{TimeSpan.FromTicks(this.Elapsed.Ticks):hh\\:mm\\:ss}: {message}");

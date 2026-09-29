@@ -60,6 +60,9 @@ public sealed record StreamingUpdate(string UtteranceId, RecognizedSegment Segme
 public interface IStreamingNotices
 {
     event Action<string>? Notice;
+
+    /// <summary>Something worth telling the user that happened while the stream was being set up. Null if nothing.</summary>
+    string? StartupNotice { get; }
 }
 
 public interface IStreamingRecognitionSession : IAsyncDisposable
@@ -83,9 +86,15 @@ public interface IStreamingRecognitionSession : IAsyncDisposable
 /// A loaded speech model. Instances are not assumed thread-safe; callers obtain one through a
 /// model lease from the resource coordinator.
 /// </summary>
+/// <summary>What a provider can say about the models it loaded, for the run record. Unknown parts stay null.</summary>
+public sealed record ProviderModelInfo(string? AsrRevision, string? DiarizerModelId, string? DiarizerRevision);
+
 public interface ITranscriptionProvider : IAsyncDisposable
 {
     string ModelId { get; }
+
+    /// <summary>Model revisions and the diarizer actually in use, recorded with each run.</summary>
+    ProviderModelInfo ModelInfo => new(null, null, null);
 
     TranscriptionProviderCapabilities Capabilities { get; }
 

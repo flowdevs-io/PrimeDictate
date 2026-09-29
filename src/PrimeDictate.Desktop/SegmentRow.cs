@@ -63,9 +63,22 @@ public sealed class SegmentRow(string id) : INotifyPropertyChanged
 
     public double Opacity => this.provisional ? 0.6 : 1.0;
 
-    public void Update(TranscriptSegment segment, IReadOnlyList<TranscriptSpeaker> speakers)
+    /// <summary>The segments this row shows. A turn is consecutive lines from one speaker; the first id is the row's own.</summary>
+    public IReadOnlyList<string> SegmentIds { get; private set; } = [id];
+
+    public void Update(TranscriptSegment segment, IReadOnlyList<TranscriptSpeaker> speakers) =>
+        this.UpdateTurn([segment], speakers, null);
+
+    /// <param name="guessedSpeakerId">
+    /// For a live line that has no speaker yet: the speaker of the line just before it, shown with a question mark
+    /// because a new commit may turn out to be someone else.
+    /// </param>
+    public void UpdateTurn(IReadOnlyList<TranscriptSegment> segments, IReadOnlyList<TranscriptSpeaker> speakers, string? guessedSpeakerId)
     {
-        var id = segment.Speakers.Count > 0 ? TranscriptDocument.ResolveSpeakerId(speakers, segment.Speakers[0].SpeakerId) : null;
+        var first = segments[0];
+        this.SegmentIds = segments.Select(s => s.Id).ToList();
+        var known = first.Speakers.Count > 0 ? TranscriptDocument.ResolveSpeakerId(speakers, first.Speakers[0].SpeakerId) : null;
+        var id = known ?? guessedSpeakerId;
         var name = id is null ? string.Empty : speakers.FirstOrDefault(s => s.Id == id)?.Name ?? id;
         var index = id is null ? -1 : speakers.ToList().FindIndex(s => s.Id == id);
         var brush = index < 0 ? Brushes.Transparent : SpeakerPalette.BrushFor(index);
@@ -75,16 +88,17 @@ public sealed class SegmentRow(string id) : INotifyPropertyChanged
             this.PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(this.SpeakerBrush)));
         }
 
-        // Live labels arrive only when an utterance completes, so an unlabeled live line in a session that has
-        // speakers reads "speaker pending" rather than a guess.
+        var provisional = segments.Any(s => s.State != SegmentState.Final);
+        // Live labels arrive only when an utterance completes, so a live line either carries a guess ("Name?")
+        // or, when there is nothing to guess from, reads "speaker pending".
         this.Speaker = name.Length > 0
-            ? (segment.State != SegmentState.Final ? name + "?" : name)
-            : segment.State != SegmentState.Final && speakers.Count > 0 ? "speaker pending" : string.Empty;
-        this.Time = FormatTime(segment.Start);
-        this.Provisional = segment.State != SegmentState.Final;
+            ? (provisional || known is null ? name + "?" : name)
+            : provisional && speakers.Count > 0 ? "speaker pending" : string.Empty;
+        this.Time = FormatTime(first.Start);
+        this.Provisional = provisional;
         if (!this.IsEditing)
         {
-            this.Text = segment.DisplayText;
+            this.Text = string.Join(' ', segments.Select(s => s.DisplayText).Where(t => t.Length > 0));
         }
     }
 
