@@ -42,6 +42,7 @@ public sealed partial class MainWindow : Window
         var dataDir = Environment.GetEnvironmentVariable("PRIMEDICTATE_DATA_DIR");
         this.workspace = new TranscriptionWorkspaceService(string.IsNullOrWhiteSpace(dataDir) ? null : new AppDataPaths(dataDir));
         this.TranscriptList.ItemsSource = this.rows;
+        this.workspace.Notice += this.Say;
 
         this.ImportButton.Click += async (_, _) => await this.RunSafelyAsync(() => this.PickFileAsync());
         this.RecordButton.Click += async (_, _) => await this.RunSafelyAsync(() => this.StartRecordingAsync());

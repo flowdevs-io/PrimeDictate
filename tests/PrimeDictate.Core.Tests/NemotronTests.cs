@@ -599,4 +599,94 @@ public sealed class NemotronTests : IDisposable
             Assert.True(bytes.Count >= 2 && bytes[1] > 0, "audio should flow on the replacement connection");
         }
     }
+
+    private static string? FakeWorker(string dir, bool cudaFails)
+    {
+        if (!OperatingSystem.IsLinux() || !File.Exists("/usr/bin/python3"))
+        {
+            return null;
+        }
+
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "nemo-speech");
+        File.WriteAllText(path, $$"""
+            #!/bin/sh
+            dev=cpu; port=0
+            while [ $# -gt 0 ]; do case "$1" in --device) dev="$2";; --port) port="$2";; esac; shift; done
+            case "$dev" in
+              cuda*) {{(cudaFails ? "echo 'CUDA error' >&2; exit 5" : "echo '[asr] loaded backend=CUDA0'")}};;
+              *) echo '[asr] loaded backend=CPU';;
+            esac
+            exec /usr/bin/python3 -c "
+            import http.server
+            class H(http.server.BaseHTTPRequestHandler):
+                def do_GET(self):
+                    self.send_response(200); self.end_headers(); self.wfile.write(b'{}')
+                def log_message(self, *a): pass
+            http.server.HTTPServer(('127.0.0.1', $port), H).serve_forever()
+            "
+            """.Replace("\r", string.Empty));
+        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        return path;
+    }
+
+    [Fact]
+    public void Worker_arguments_carry_the_device_and_refuse_vulkan()
+    {
+        var files = new NemotronModelFiles("/m/asr.gguf", null);
+        var args = NemotronWorker.BuildArguments(1, files, "cuda:0");
+        Assert.Equal("cuda:0", args[args.ToList().IndexOf("--device") + 1]);
+        Assert.Throws<ArgumentException>(() => NemotronWorker.BuildArguments(1, files, "vulkan:0"));
+        Assert.Equal("cuda:0", NemotronWorker.NormalizeBackend("CUDA0"));
+        Assert.Equal("cpu", NemotronWorker.NormalizeBackend("CPU"));
+        Assert.Equal("unknown", NemotronWorker.NormalizeBackend(null));
+    }
+
+    [Fact]
+    public async Task Worker_reports_the_backend_it_actually_used_and_falls_back_visibly()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "pd-nemo-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var cpu = FakeWorker(Path.Combine(root, "cpu"), cudaFails: false);
+            if (cpu is null)
+            {
+                return; // needs a POSIX shell and python3 to stand in for the worker
+            }
+
+            var goodCuda = FakeWorker(Path.Combine(root, "cuda-ok"), cudaFails: false)!;
+            var badCuda = FakeWorker(Path.Combine(root, "cuda-bad"), cudaFails: true)!;
+            var files = new NemotronModelFiles("/m/asr.gguf", null);
+            var notices = new List<string>();
+
+            await using (var gpu = await NemotronWorker.StartPreferredAsync(cpu, goodCuda, files, "auto", _ => [], notices.Add, default, TimeSpan.FromSeconds(20)))
+            {
+                Assert.Equal("cuda:0", gpu.EffectiveBackend);
+                Assert.Null(gpu.FallbackReason);
+            }
+
+            await using (var fell = await NemotronWorker.StartPreferredAsync(cpu, badCuda, files, "cuda:0", _ => [], notices.Add, default, TimeSpan.FromSeconds(20)))
+            {
+                Assert.Equal("cpu", fell.EffectiveBackend);
+                Assert.Equal("cuda:0", fell.RequestedBackend);
+                Assert.Contains("could not start on the GPU", fell.FallbackReason);
+            }
+
+            await using (var forced = await NemotronWorker.StartPreferredAsync(cpu, goodCuda, files, "cpu", _ => [], notices.Add, default, TimeSpan.FromSeconds(20)))
+            {
+                Assert.Equal("cpu", forced.EffectiveBackend);
+                Assert.Null(forced.FallbackReason);
+            }
+
+            Assert.Contains(notices, n => n.Contains("running on cuda:0"));
+            Assert.Contains(notices, n => n.Contains("using the CPU instead"));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
 }
