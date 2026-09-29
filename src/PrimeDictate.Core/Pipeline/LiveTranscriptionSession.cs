@@ -11,7 +11,7 @@ namespace PrimeDictate.Core.Pipeline;
 public sealed record LiveSessionOptions(
     TranscriptionSessionOptions Session,
     string Title,
-    string SessionMediaDirectory,
+    Func<Guid, string> MediaDirectoryFor,
     /// <summary>How often a still-growing utterance is re-recognized for the provisional preview.</summary>
     TimeSpan PreviewInterval,
     UtteranceDetectorOptions? Detector = null)
@@ -113,7 +113,7 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         try
         {
             this.capture = await this.audioSource.OpenAsync(this.options.Session.InputDeviceId, cancellationToken).ConfigureAwait(false);
-            var path = Path.Combine(this.options.SessionMediaDirectory, "recording-16k-mono.wav");
+            var path = Path.Combine(this.options.MediaDirectoryFor(document.SessionId), "recording-16k-mono.wav");
             this.writer = new WavFileWriter(path);
             this.timeline = new RecordedAudioTimeline(AudioFormat.SpeechTimeline);
             var run = new RecognitionRunInfo(
