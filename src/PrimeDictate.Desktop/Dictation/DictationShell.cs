@@ -27,6 +27,7 @@ public sealed class DictationShell : IAsyncDisposable
     private readonly NativeMenuItem toggleItem = new("Start dictation");
     private readonly IAudioCuePlayer cues = new ProcessAudioCuePlayer();
     private DictationState lastState = DictationState.Idle;
+    private DateTime errorUntilUtc;
     private DictationSettingsWindow? settingsWindow;
     private DictationHistoryWindow? historyWindow;
 
@@ -64,6 +65,11 @@ public sealed class DictationShell : IAsyncDisposable
             this.OnNotice(unavailable);
         }
 
+        if (this.host.IsFirstRun)
+        {
+            new DictationOnboardingWindow(this.host, this.ShowSettings).Show();
+        }
+
         this.host.StartHotkeys();
         this.host.StartWakeWord();
         this.overlay.SetState(DictationState.Idle);
@@ -95,10 +101,19 @@ public sealed class DictationShell : IAsyncDisposable
         quitItem.Click += (_, _) => this.lifetime.Shutdown();
         this.tray.Menu = [this.toggleItem, workspaceItem, historyItem, settingsItem, new NativeMenuItemSeparator(), quitItem];
         this.tray.Clicked += (_, _) => this.showWorkspace();
-        this.tray.Icon = MakeIcon(DictationState.Idle);
+        this.tray.Icon = TrayIconRenderer.Create(this.CurrentTrayState());
         this.tray.ToolTipText = "PrimeDictate: ready";
         TrayIcon.SetIcons(app, [this.tray]);
     }
+
+    private TrayVisualState CurrentTrayState() =>
+        this.errorUntilUtc > DateTime.UtcNow ? TrayVisualState.Error
+        : this.lastState == DictationState.Listening ? TrayVisualState.Recording
+        : this.lastState == DictationState.Processing ? TrayVisualState.Processing
+        : this.host.Wake?.IsRunning == true ? TrayVisualState.AlwaysListening
+        : TrayVisualState.Ready;
+
+    private void RefreshTrayIcon() => this.tray.Icon = TrayIconRenderer.Create(this.CurrentTrayState());
 
     private void OnState(DictationState state)
     {
@@ -116,7 +131,7 @@ public sealed class DictationShell : IAsyncDisposable
 
         this.lastState = state;
         this.overlay.SetState(state);
-        this.tray.Icon = MakeIcon(state);
+        this.RefreshTrayIcon();
         this.tray.ToolTipText = state switch
         {
             DictationState.Listening => "PrimeDictate: listening",
@@ -134,6 +149,9 @@ public sealed class DictationShell : IAsyncDisposable
             case DictationDeliveryStatus.SkippedNoFocusGuard:
             case DictationDeliveryStatus.FailedToInject:
                 this.overlay.SetNotice($"Not typed: {commit.Error}\n\"{commit.Transcript}\"");
+                this.errorUntilUtc = DateTime.UtcNow + TimeSpan.FromSeconds(8);
+                this.RefreshTrayIcon();
+                DispatcherTimer.RunOnce(this.RefreshTrayIcon, TimeSpan.FromSeconds(8.5));
                 break;
         }
     }
@@ -163,42 +181,5 @@ public sealed class DictationShell : IAsyncDisposable
         this.settingsWindow = new DictationSettingsWindow(this.host, this.workspace.MicrophoneSource);
         this.settingsWindow.Closed += (_, _) => this.overlay.Configure(this.host.Settings.OverlayMode, this.host.Settings.IsOverlaySticky);
         this.settingsWindow.Show();
-    }
-
-    /// <summary>A flat colored dot per state, drawn in memory so the tray needs no icon asset.</summary>
-    internal static WindowIcon MakeIcon(DictationState state)
-    {
-        const int size = 32;
-        var (r, g, b) = state switch
-        {
-            DictationState.Listening => (0xE5, 0x48, 0x4D),
-            DictationState.Processing => (0xF5, 0xA6, 0x23),
-            _ => (0x2E, 0xA0, 0x6B)
-        };
-        var bitmap = new WriteableBitmap(new PixelSize(size, size), new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Premul);
-        using (var fb = bitmap.Lock())
-        {
-            var pixels = new byte[size * size * 4];
-            for (var y = 0; y < size; y++)
-            {
-                for (var x = 0; x < size; x++)
-                {
-                    var dx = x - 15.5;
-                    var dy = y - 15.5;
-                    if ((dx * dx) + (dy * dy) <= 14 * 14)
-                    {
-                        var i = ((y * size) + x) * 4;
-                        pixels[i] = (byte)b;
-                        pixels[i + 1] = (byte)g;
-                        pixels[i + 2] = (byte)r;
-                        pixels[i + 3] = 255;
-                    }
-                }
-            }
-
-            System.Runtime.InteropServices.Marshal.Copy(pixels, 0, fb.Address, pixels.Length);
-        }
-
-        return new WindowIcon(bitmap);
     }
 }

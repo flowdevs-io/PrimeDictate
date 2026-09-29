@@ -84,6 +84,11 @@ public sealed class DictationHost : IAsyncDisposable
 
     public string? StartupNotice { get; }
 
+    /// <summary>True until either app has saved settings, so a WPF user upgrading is not shown setup again.</summary>
+    public bool IsFirstRun => !File.Exists(this.store.Path) && !File.Exists(this.store.WpfSettingsPath);
+
+    public string ModelsFolder => System.IO.Path.Combine(this.paths.ModelsDirectory, "whisper");
+
     public DictationHistoryStore History => this.history;
 
     /// <summary>Raised after a commit has been written to history.</summary>

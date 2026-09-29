@@ -22,6 +22,13 @@ Branch `claude/dictation-parity-4k0tl9`, following `stage-7-parity-plan.md`. "Ra
 | Wake word (matching and idle-mic listener, yields the mic to dictation and to transcription sessions via `MicrophoneCoordinator`) | `WakeWord.cs`, `DictationHost.cs` | Ran: unit tests with a fake microphone. Not tried with a real microphone or model |
 | Particle overlay (150 particles on a vector field, scrolling mirrored waveform) | `OverlayVisualizer.cs` (physics, tested), `VisualizerControl.cs` (drawing) | Physics ran; drawing not looked at |
 
+| Ollama rewrite (loopback only unless the user allows a remote endpoint; failures type the raw text) | `OllamaRewriter.cs` | Ran: unit tests with a fake HTTP handler |
+| Dictation history (SQLite, search, delete, clear; imports WPF `history.json` once, read-only) and window | `DictationHistory.cs`, `DictationHistoryWindow.cs` | Store ran: unit tests. Window not looked at |
+| Audio cues (synthesized WAV; Windows `PlaySound`, macOS `afplay`, Linux `paplay`/`aplay`) | `AudioCues.cs`, `ProcessAudioCuePlayer.cs` | WAV generation ran; playback not heard on any OS |
+| Tray icon: the WPF "voice wire" icon redrawn in Avalonia, five states | `TrayIconRenderer.cs` | Rendered under Xvfb and viewed (`--render-tray-icons <dir>`); not seen in a real tray |
+| `--show` / `--workspace` (accepted; the window is the default start) and new `--background` (tray only, Windows and macOS) | `App.axaml.cs` | Not run on Windows |
+| First-run check (mic, model, hotkey, typing guard, model choice) | `DictationOnboardingWindow.cs` | Starts under Xvfb without errors; not looked at |
+
 ## Rules kept from AGENTS.md
 
 Final-only typing, no clipboard, no live retyping into the target, Enter only after a guarded successful commit, hook thread only raises an event and work is offloaded, one gate serializes toggle/commit/discard.
@@ -35,9 +42,9 @@ Final-only typing, no clipboard, no live retyping into the target, Enter only af
 ## Not done yet
 
 - Voice shell commands: matching is ported, running is not. Off until an explicit opt-in with a visible warning exists. Never in transcription mode.
+- Stats and achievements, launch at login, updater, model download (the new app reads the same models folder but cannot fetch models yet), installers.
 - Wake word uses a Tiny/Base Whisper model when installed, else the dictation model (as WPF does). Moonshine/Whisper.net wake models are not ported.
-- Voice shell commands, Ollama post-processing, dictation history, stats, audio cues.
 - The WPF app's focused-edit-control insertion (`WindowsFocusedTextControl`) and direct injection into the original target.
-- Compact-mode ripple animation and the copy/pin buttons of the WPF overlay, macOS `NSPanel`, Linux X11 hints, saved overlay position. The procedural tray icon (`AppIconProvider`) and `--show`/`--workspace` are WPF-only so far; the new tray uses a plain state-colored dot.
+- Compact-mode ripple animation and the copy/pin buttons of the WPF overlay, macOS `NSPanel`, Linux X11 hints, saved overlay position.
 - Parakeet and Moonshine backends: a WPF setting that selects one gets a notice and no model.
 - First-run onboarding, launch at login, updater, packaging.

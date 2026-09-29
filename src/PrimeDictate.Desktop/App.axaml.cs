@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using Avalonia.Media.Imaging;
 using PrimeDictate.Desktop.Dictation;
 
 namespace PrimeDictate.Desktop;
@@ -14,8 +15,25 @@ public sealed class App : Application
     {
         if (this.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
+            var launch = desktop.Args ?? [];
+            if (launch.SkipWhile(a => a != "--render-tray-icons").Skip(1).FirstOrDefault() is { } iconDir)
+            {
+                RenderTrayIcons(iconDir);
+                Avalonia.Threading.Dispatcher.UIThread.Post(() => desktop.Shutdown());
+                base.OnFrameworkInitializationCompleted();
+                return;
+            }
+
             var window = new MainWindow();
-            desktop.MainWindow = window;
+
+            // The window is the default start, so --show and --workspace (the WPF app's flags) are accepted and mean the same.
+            // --background starts in the tray only, where the tray exists (Windows, macOS).
+            var background = launch.Contains("--background") && !launch.Contains("--show") && !launch.Contains("--workspace") && CanHideToTray;
+            if (!background)
+            {
+                desktop.MainWindow = window;
+            }
+
             if (!IsSmokeRun(desktop.Args))
             {
                 this.StartDictation(desktop, window);
@@ -38,6 +56,18 @@ public sealed class App : Application
         base.OnFrameworkInitializationCompleted();
     }
 
+    private static bool CanHideToTray => OperatingSystem.IsWindows() || OperatingSystem.IsMacOS();
+
+    private static void RenderTrayIcons(string directory)
+    {
+        Directory.CreateDirectory(directory);
+        foreach (var state in Enum.GetValues<TrayVisualState>())
+        {
+            using var bitmap = TrayIconRenderer.Render(state);
+            bitmap.Save(Path.Combine(directory, $"tray-{state}.png"), new PngBitmapEncoderOptions());
+        }
+    }
+
     private static bool IsSmokeRun(string[]? args) => args is { Length: > 0 } && args.Contains("--smoke-screenshot");
 
     private void StartDictation(IClassicDesktopStyleApplicationLifetime desktop, MainWindow window)
@@ -48,7 +78,7 @@ public sealed class App : Application
 
         // Dictation lives in the tray, so on Windows and macOS closing the window hides it. Linux desktops
         // without a tray host would leave no way back, so there closing quits.
-        if (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS())
+        if (CanHideToTray)
         {
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
             window.Closing += (_, e) =>
