@@ -53,6 +53,15 @@ public sealed record RecognizedSegment(
 /// </summary>
 public sealed record StreamingUpdate(string UtteranceId, RecognizedSegment Segment, bool IsFinal);
 
+/// <summary>
+/// Optional: a streaming session that can recover on its own (for example by restarting a wedged worker connection)
+/// tells the caller so the break in continuity can be shown to the user.
+/// </summary>
+public interface IStreamingNotices
+{
+    event Action<string>? Notice;
+}
+
 public interface IStreamingRecognitionSession : IAsyncDisposable
 {
     /// <summary>Feeds audio on the session timeline. Frames must be in the provider's required format.</summary>
