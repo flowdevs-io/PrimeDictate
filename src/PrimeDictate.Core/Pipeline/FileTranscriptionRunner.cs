@@ -211,7 +211,7 @@ public sealed class FileTranscriptionRunner(ModelLeaseScheduler scheduler, ITran
             writer?.Flush();
             var code = ex is MediaDecodeException m ? m.ErrorCode : "transcription-failed";
             // Message is technical. It never contains transcript text.
-            host.Apply(new SessionFailed(sessionId, code, ex.GetType().Name, Recoverable: true));
+            host.Apply(new SessionFailed(sessionId, code, $"{ex.GetType().Name}: {ex.Message}", Recoverable: true));
             await host.CheckpointAsync(CancellationToken.None).ConfigureAwait(false);
             throw;
         }

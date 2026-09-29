@@ -11,7 +11,7 @@ namespace PrimeDictate.Core.Storage;
 /// </summary>
 public sealed class SqliteTranscriptionSessionStore : ITranscriptionSessionStore
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.General);
 
@@ -68,6 +68,14 @@ public sealed class SqliteTranscriptionSessionStore : ITranscriptionSessionStore
                 await tx.CommitAsync(cancellationToken).ConfigureAwait(false);
             }
 
+            if (version < 2)
+            {
+                await using var tx = conn.BeginTransaction();
+                await ExecuteAsync(conn, tx, SchemaV2, cancellationToken).ConfigureAwait(false);
+                await ExecuteAsync(conn, tx, "PRAGMA user_version = 2;", cancellationToken).ConfigureAwait(false);
+                await tx.CommitAsync(cancellationToken).ConfigureAwait(false);
+            }
+
             this.connection = conn;
         }
         finally
@@ -90,13 +98,14 @@ public sealed class SqliteTranscriptionSessionStore : ITranscriptionSessionStore
                 cmd.Transaction = tx;
                 cmd.CommandText = """
                     INSERT INTO sessions (id, schema_version, title, source_type, status, created_at, updated_at,
-                        duration_ticks, language, active_result_version, media_json)
-                    VALUES ($id, $schema, $title, $source, $status, $created, $updated, $duration, $language, $active, $media)
+                        duration_ticks, language, active_result_version, media_json, failure_reason, notes_json)
+                    VALUES ($id, $schema, $title, $source, $status, $created, $updated, $duration, $language, $active, $media, $failure, $notes)
                     ON CONFLICT(id) DO UPDATE SET
                         schema_version = excluded.schema_version, title = excluded.title, status = excluded.status,
                         updated_at = excluded.updated_at, duration_ticks = excluded.duration_ticks,
                         language = excluded.language, active_result_version = excluded.active_result_version,
-                        media_json = excluded.media_json;
+                        media_json = excluded.media_json, failure_reason = excluded.failure_reason,
+                        notes_json = excluded.notes_json;
                     """;
                 cmd.Parameters.AddWithValue("$id", document.SessionId.ToString("D"));
                 cmd.Parameters.AddWithValue("$schema", document.SchemaVersion);
@@ -109,6 +118,8 @@ public sealed class SqliteTranscriptionSessionStore : ITranscriptionSessionStore
                 cmd.Parameters.AddWithValue("$language", (object?)document.Language ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$active", document.ActiveResultVersion);
                 cmd.Parameters.AddWithValue("$media", document.Media is null ? DBNull.Value : JsonSerializer.Serialize(document.Media, JsonOptions));
+                cmd.Parameters.AddWithValue("$failure", (object?)document.FailureReason ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$notes", document.Notes.Count == 0 ? DBNull.Value : JsonSerializer.Serialize(document.Notes, JsonOptions));
                 await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
@@ -131,13 +142,15 @@ public sealed class SqliteTranscriptionSessionStore : ITranscriptionSessionStore
                 await using var cmd = conn.CreateCommand();
                 cmd.Transaction = tx;
                 cmd.CommandText = """
-                    INSERT INTO speakers (session_id, id, default_label, display_name) VALUES ($sid, $id, $label, $name)
-                    ON CONFLICT(session_id, id) DO UPDATE SET default_label = excluded.default_label, display_name = excluded.display_name;
+                    INSERT INTO speakers (session_id, id, default_label, display_name, merged_into) VALUES ($sid, $id, $label, $name, $merged)
+                    ON CONFLICT(session_id, id) DO UPDATE SET default_label = excluded.default_label, display_name = excluded.display_name,
+                        merged_into = excluded.merged_into;
                     """;
                 cmd.Parameters.AddWithValue("$sid", document.SessionId.ToString("D"));
                 cmd.Parameters.AddWithValue("$id", speaker.Id);
                 cmd.Parameters.AddWithValue("$label", speaker.DefaultLabel);
                 cmd.Parameters.AddWithValue("$name", (object?)speaker.DisplayName ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$merged", (object?)speaker.MergedIntoId ?? DBNull.Value);
                 await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
@@ -215,7 +228,7 @@ public sealed class SqliteTranscriptionSessionStore : ITranscriptionSessionStore
             {
                 cmd.CommandText = """
                     SELECT schema_version, title, source_type, status, created_at, updated_at, duration_ticks, language,
-                        active_result_version, media_json
+                        active_result_version, media_json, failure_reason, notes_json
                     FROM sessions WHERE id = $id;
                     """;
                 cmd.Parameters.AddWithValue("$id", id);
@@ -237,7 +250,9 @@ public sealed class SqliteTranscriptionSessionStore : ITranscriptionSessionStore
                     Duration = reader.IsDBNull(6) ? null : TimeSpan.FromTicks(reader.GetInt64(6)),
                     Language = reader.IsDBNull(7) ? null : reader.GetString(7),
                     ActiveResultVersion = reader.GetInt32(8),
-                    Media = reader.IsDBNull(9) ? null : JsonSerializer.Deserialize<MediaMetadata>(reader.GetString(9), JsonOptions)
+                    Media = reader.IsDBNull(9) ? null : JsonSerializer.Deserialize<MediaMetadata>(reader.GetString(9), JsonOptions),
+                    FailureReason = reader.IsDBNull(10) ? null : reader.GetString(10),
+                    Notes = reader.IsDBNull(11) ? [] : JsonSerializer.Deserialize<List<string>>(reader.GetString(11), JsonOptions) ?? []
                 };
             }
 
@@ -256,12 +271,12 @@ public sealed class SqliteTranscriptionSessionStore : ITranscriptionSessionStore
             var speakers = new List<TranscriptSpeaker>();
             await using (var cmd = conn.CreateCommand())
             {
-                cmd.CommandText = "SELECT id, default_label, display_name FROM speakers WHERE session_id = $id ORDER BY rowid;";
+                cmd.CommandText = "SELECT id, default_label, display_name, merged_into FROM speakers WHERE session_id = $id ORDER BY rowid;";
                 cmd.Parameters.AddWithValue("$id", id);
                 await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
                 while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 {
-                    speakers.Add(new TranscriptSpeaker(reader.GetString(0), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2)));
+                    speakers.Add(new TranscriptSpeaker(reader.GetString(0), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2)) { MergedIntoId = reader.IsDBNull(3) ? null : reader.GetString(3) });
                 }
             }
 
@@ -342,7 +357,7 @@ public sealed class SqliteTranscriptionSessionStore : ITranscriptionSessionStore
             await ExecuteAsync(
                 conn,
                 tx,
-                $"UPDATE sessions SET status = {(int)TranscriptSessionStatus.Interrupted} WHERE status IN ({inList});",
+                $"UPDATE sessions SET status = {(int)TranscriptSessionStatus.Interrupted}, failure_reason = COALESCE(failure_reason, 'The app stopped while this session was running (crash, force quit or power loss). Everything finalized before that is kept.') WHERE status IN ({inList});",
                 cancellationToken).ConfigureAwait(false);
             await tx.CommitAsync(cancellationToken).ConfigureAwait(false);
             return await this.QuerySummariesAsync(
@@ -598,5 +613,12 @@ public sealed class SqliteTranscriptionSessionStore : ITranscriptionSessionStore
             PRIMARY KEY (session_id, result_version, id)
         );
         CREATE INDEX ix_segments_time ON segments (session_id, result_version, start_ticks);
+        """;
+
+    // v2: why a session failed, notes about what happened, and speaker merges (mapping only).
+    private const string SchemaV2 = """
+        ALTER TABLE sessions ADD COLUMN failure_reason TEXT NULL;
+        ALTER TABLE sessions ADD COLUMN notes_json TEXT NULL;
+        ALTER TABLE speakers ADD COLUMN merged_into TEXT NULL;
         """;
 }

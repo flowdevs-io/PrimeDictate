@@ -72,7 +72,7 @@ public static class TranscriptExporter
 
     private static string SpeakerName(TranscriptDocument document, TranscriptSegment segment)
     {
-        var id = segment.Speakers.Count > 0 ? segment.Speakers[0].SpeakerId : null;
+        var id = segment.Speakers.Count > 0 ? document.ResolveSpeakerId(segment.Speakers[0].SpeakerId) : null;
         return id is null ? string.Empty : document.Speakers.FirstOrDefault(s => s.Id == id)?.Name ?? id;
     }
 
