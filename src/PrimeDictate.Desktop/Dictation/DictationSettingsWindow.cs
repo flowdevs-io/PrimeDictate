@@ -20,6 +20,12 @@ public sealed class DictationSettingsWindow : Window
     private readonly CheckBox sendEnter = new() { Content = "Coding mode: press Enter after typing" };
     private readonly CheckBox returnToStart = new() { Content = "If focus moved, return to the window I started in" };
     private readonly CheckBox typeWithoutGuard = new() { Content = "Type even when the app cannot check which window is in front" };
+    private readonly CheckBox wakeEnabled = new() { Content = "Wake word: start dictation when I say the phrase (listens on the idle microphone, audio stays in memory)" };
+    private readonly TextBox wakePhrase = new() { Width = 260 };
+    private readonly CheckBox voiceCommands = new() { Content = "Voice commands while dictating" };
+    private readonly TextBox commitPhrase = new() { Width = 260 };
+    private readonly TextBox stopPhrase = new() { Width = 260 };
+    private readonly TextBox historyPhrase = new() { Width = 260 };
     private readonly ComboBox overlayBox = new() { ItemsSource = new[] { "Compact microphone", "Full panel" } };
     private readonly CheckBox sticky = new() { Content = "Keep the overlay pinned on screen" };
     private readonly TextBox replacements = new() { AcceptsReturn = true, MinHeight = 90, PlaceholderText = "spoken phrase => replacement (one per line)" };
@@ -59,6 +65,12 @@ public sealed class DictationSettingsWindow : Window
             panel.Children.Add(this.typeWithoutGuard);
         }
 
+        panel.Children.Add(this.wakeEnabled);
+        panel.Children.Add(Row("Wake phrase", this.wakePhrase));
+        panel.Children.Add(this.voiceCommands);
+        panel.Children.Add(Row("Commit phrase (types what you said, then stops)", this.commitPhrase));
+        panel.Children.Add(Row("Discard phrase (stops without typing)", this.stopPhrase));
+        panel.Children.Add(Row("History phrase", this.historyPhrase));
         panel.Children.Add(Row("Overlay", this.overlayBox));
         panel.Children.Add(this.sticky);
         panel.Children.Add(new TextBlock { Text = "Replacements" });
@@ -135,6 +147,12 @@ public sealed class DictationSettingsWindow : Window
         this.sendEnter.IsChecked = this.working.SendEnterAfterCommit;
         this.returnToStart.IsChecked = this.working.ReturnToStartTargetOnCommit;
         this.typeWithoutGuard.IsChecked = this.working.TypeWithoutFocusGuard;
+        this.wakeEnabled.IsChecked = this.working.EnableWakeWord;
+        this.wakePhrase.Text = this.working.WakeWordPhrase;
+        this.voiceCommands.IsChecked = this.working.EnableVoiceCommands;
+        this.commitPhrase.Text = this.working.VoiceDictationPhrase;
+        this.stopPhrase.Text = this.working.VoiceStopPhrase;
+        this.historyPhrase.Text = this.working.VoiceHistoryPhrase;
         this.overlayBox.SelectedIndex = (int)this.working.OverlayMode;
         this.sticky.IsChecked = this.working.IsOverlaySticky;
         this.replacements.Text = string.Join('\n', this.working.TranscriptReplacements.Select(r => $"{r.Find} => {r.Replace}"));
@@ -171,6 +189,12 @@ public sealed class DictationSettingsWindow : Window
         s.SendEnterAfterCommit = this.sendEnter.IsChecked == true;
         s.ReturnToStartTargetOnCommit = this.returnToStart.IsChecked == true;
         s.TypeWithoutFocusGuard = this.typeWithoutGuard.IsChecked == true;
+        s.EnableWakeWord = this.wakeEnabled.IsChecked == true;
+        s.WakeWordPhrase = WakePhrase.Normalize(this.wakePhrase.Text);
+        s.EnableVoiceCommands = this.voiceCommands.IsChecked == true;
+        s.VoiceDictationPhrase = this.commitPhrase.Text?.Trim() ?? string.Empty;
+        s.VoiceStopPhrase = this.stopPhrase.Text?.Trim() ?? string.Empty;
+        s.VoiceHistoryPhrase = this.historyPhrase.Text?.Trim() ?? string.Empty;
         s.OverlayMode = (OverlayStyle)Math.Max(0, this.overlayBox.SelectedIndex);
         s.IsOverlaySticky = this.sticky.IsChecked == true;
         s.DictationHotkey = HotkeyDto.From(this.hotkeys[HotkeyAction.ToggleDictation].Gesture);

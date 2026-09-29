@@ -15,7 +15,7 @@ namespace PrimeDictate.Desktop.Dictation;
 /// </summary>
 public sealed class DictationOverlayWindow : Window
 {
-    private readonly Border levelBar = new() { Height = 4, Width = 0, CornerRadius = new CornerRadius(2), HorizontalAlignment = HorizontalAlignment.Left, Background = Brushes.LimeGreen };
+    private readonly VisualizerControl visualizer = new();
     private readonly TextBlock status = new() { FontSize = 12, Opacity = 0.7 };
     private readonly TextBlock text = new() { FontSize = 15, TextWrapping = TextWrapping.Wrap, MaxWidth = 460 };
     private readonly Ellipse dot = new() { Width = 10, Height = 10, Fill = Brushes.Gray };
@@ -48,7 +48,7 @@ public sealed class DictationOverlayWindow : Window
                 {
                     new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { this.dot, this.status } },
                     this.text,
-                    this.levelBar
+                    this.visualizer
                 }
             }
         };
@@ -96,8 +96,7 @@ public sealed class DictationOverlayWindow : Window
         this.Refresh();
     }
 
-    public void SetLevel(double rms) =>
-        this.levelBar.Width = Math.Clamp(Math.Sqrt(rms) * 6, 0, 1) * 200;
+    public void SetLevel(double rms) => this.visualizer.SetLevel(rms);
 
     public void SetNotice(string message)
     {
@@ -124,7 +123,8 @@ public sealed class DictationOverlayWindow : Window
 
         var showText = !string.IsNullOrEmpty(this.text.Text) && (active || DateTime.UtcNow < this.hideAtUtc);
         this.text.IsVisible = showText && (this.style == OverlayStyle.FullPanel || active || DateTime.UtcNow < this.hideAtUtc);
-        this.levelBar.IsVisible = this.state == DictationState.Listening;
+        this.visualizer.IsVisible = this.state == DictationState.Listening;
+        this.visualizer.SetRunning(this.state == DictationState.Listening);
         var visible = active || DateTime.UtcNow < this.hideAtUtc || this.sticky || this.style == OverlayStyle.CompactMicrophone;
         if (visible && !this.IsVisible)
         {

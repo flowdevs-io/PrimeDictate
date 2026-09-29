@@ -20,3 +20,17 @@ public sealed class NoVoiceCommands : IVoiceCommandProcessor
 
     public VoiceCommandResult Apply(string transcript) => VoiceCommandResult.Passthrough(transcript);
 }
+
+/// <summary>Spoken commands for dictation, using the WPF app's matcher and default phrases.</summary>
+public sealed class VoiceCommandProcessor(Func<VoiceCommandOptions> options) : IVoiceCommandProcessor
+{
+    public const string DefaultDictationPhrase = "thank you";
+    public const string DefaultStopPhrase = "potato farmer";
+    public const string DefaultHistoryPhrase = "show me the money";
+
+    public VoiceCommandResult Apply(string transcript)
+    {
+        var match = VoiceCommandMatcher.Apply(transcript, options());
+        return new VoiceCommandResult(match.CleanedText, match.CommitRequested, match.StopRequested, match.HistoryRequested);
+    }
+}

@@ -19,6 +19,8 @@ public sealed class DictationHost : IAsyncDisposable
     private readonly IForegroundTargetGuard guard;
     private readonly object providerSync = new();
     private SherpaWhisperProvider? provider;
+    private SherpaWhisperProvider? wakeProvider;
+    private string? wakeProviderId;
     private string? providerId;
     private bool disposed;
 
@@ -50,10 +52,15 @@ public sealed class DictationHost : IAsyncDisposable
             this.guard,
             injector ?? new SharpHookTextInjector(),
             microphone,
-            voiceCommands);
+            voiceCommands ?? new VoiceCommandProcessor(() => this.Settings.ToVoiceCommandOptions()));
         this.Controller.Notice += message => this.Notice?.Invoke(message);
         this.Controller.HistoryRequested += () => this.HistoryRequested?.Invoke();
         this.Controller.Options = this.Settings.ToOptions();
+        this.Wake = new WakeWordListener(audio, this.TranscribeWakeAsync);
+        microphone.Register(this.Wake);
+        this.Wake.Notice += message => this.Notice?.Invoke(message);
+        this.Wake.WakeDetected += () => _ = Task.Run(this.StartFromWakeAsync);
+        this.ConfigureWake();
         if (this.hotkeys is not null)
         {
             this.hotkeys.SetBindings(this.Settings.ToBindings());
@@ -67,6 +74,9 @@ public sealed class DictationHost : IAsyncDisposable
     public DictationController? Controller { get; }
 
     public string? UnavailableReason { get; }
+
+    /// <summary>Null when the microphone is unavailable.</summary>
+    public WakeWordListener? Wake { get; }
 
     public string? StartupNotice { get; }
 
@@ -111,12 +121,21 @@ public sealed class DictationHost : IAsyncDisposable
         });
     }
 
+    /// <summary>Starts wake word listening if the user enabled it. Call after the shell is up.</summary>
+    public void StartWakeWord() => _ = this.Wake?.EnsureRunningAsync();
+
     public void ApplySettings(DictationSettings settings, bool persist = true)
     {
         this.Settings = settings;
         if (this.Controller is not null)
         {
             this.Controller.Options = settings.ToOptions();
+        }
+
+        this.ConfigureWake();
+        if (this.Wake is not null)
+        {
+            _ = settings.EnableWakeWord && this.Controller?.IsRecording != true ? this.Wake.EnsureRunningAsync() : this.Wake.StopAsync();
         }
 
         this.hotkeys?.SetBindings(settings.ToBindings());
@@ -145,16 +164,25 @@ public sealed class DictationHost : IAsyncDisposable
             await this.Controller.DisposeAsync().ConfigureAwait(false);
         }
 
-        SherpaWhisperProvider? old;
-        lock (this.providerSync)
+        if (this.Wake is not null)
         {
-            old = this.provider;
-            this.provider = null;
+            await this.Wake.DisposeAsync().ConfigureAwait(false);
         }
 
-        if (old is not null)
+        SherpaWhisperProvider?[] old;
+        lock (this.providerSync)
         {
-            await old.DisposeAsync().ConfigureAwait(false);
+            old = [this.provider, this.wakeProvider];
+            this.provider = null;
+            this.wakeProvider = null;
+        }
+
+        foreach (var p in old)
+        {
+            if (p is not null)
+            {
+                await p.DisposeAsync().ConfigureAwait(false);
+            }
         }
     }
 
@@ -223,6 +251,70 @@ public sealed class DictationHost : IAsyncDisposable
             }
 
             return this.provider;
+        }
+    }
+
+    private void ConfigureWake() =>
+        this.Wake?.Configure(this.Settings.EnableWakeWord, this.Settings.WakeWordPhrase, this.Settings.SelectedInputDeviceId, this.Settings.InputGainMultiplier);
+
+    private async Task StartFromWakeAsync()
+    {
+        var controller = this.Controller;
+        if (controller is null || controller.IsRecording)
+        {
+            return;
+        }
+
+        try
+        {
+            await controller.ToggleAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            this.Notice?.Invoke($"Wake word could not start dictation: {ex.Message}");
+        }
+
+        if (!controller.IsRecording && this.Wake is not null)
+        {
+            // Dictation did not start (no model, busy microphone); keep listening.
+            await this.Wake.EnsureRunningAsync().ConfigureAwait(false);
+        }
+    }
+
+    private async ValueTask<string> TranscribeWakeAsync(ReadOnlyMemory<float> samples, CancellationToken cancellationToken)
+    {
+        var wake = this.GetWakeProvider();
+        if (wake is null)
+        {
+            throw new InvalidOperationException("No speech model is installed for wake word listening.");
+        }
+
+        var segments = await wake.RecognizeWindowAsync(samples, null, cancellationToken).ConfigureAwait(false);
+        return string.Join(' ', segments.Select(s => s.Text.Trim()));
+    }
+
+    /// <summary>Prefers a small model for idle listening (as the WPF app does) and falls back to the dictation model.</summary>
+    private ITranscriptionProvider? GetWakeProvider()
+    {
+        var installed = this.InstalledModels();
+        var small = new[] { "tiny.en", "base.en", "tiny", "base" }
+            .Select(id => installed.FirstOrDefault(m => string.Equals(m.Id, id, StringComparison.OrdinalIgnoreCase)))
+            .FirstOrDefault(m => m is not null);
+        if (small is null)
+        {
+            return this.GetProvider();
+        }
+
+        lock (this.providerSync)
+        {
+            if (this.wakeProvider is null || this.wakeProviderId != small.ModelId)
+            {
+                _ = this.wakeProvider?.DisposeAsync();
+                this.wakeProvider = new SherpaWhisperProvider(small);
+                this.wakeProviderId = small.ModelId;
+            }
+
+            return this.wakeProvider;
         }
     }
 }

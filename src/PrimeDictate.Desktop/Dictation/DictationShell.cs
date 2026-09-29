@@ -62,6 +62,7 @@ public sealed class DictationShell : IAsyncDisposable
         }
 
         this.host.StartHotkeys();
+        this.host.StartWakeWord();
         this.overlay.SetState(DictationState.Idle);
     }
 

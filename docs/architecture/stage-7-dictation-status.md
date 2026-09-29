@@ -18,6 +18,10 @@ Branch `claude/dictation-parity-4k0tl9`, following `stage-7-parity-plan.md`. "Ra
 | Windows foreground guard and restore | `WindowsForegroundGuard.cs` | Compiled only |
 | Avalonia tray (state-colored dot), overlay, settings window, hotkey capture | `PrimeDictate.Desktop/Dictation/` | Ran: app starts under Xvfb without errors for 20 s. Not visually checked, hotkeys and typing not exercised |
 
+| Voice commands (commit / discard / history phrases, incl. "ok"/"okay" and "thanks"/"thank you" variants) | `VoiceCommandMatcher.cs`, `VoiceCommands.cs` | Ran: unit tests. Ported from Justin's committed version (b2e6dcc). Dictation only; transcription mode has no hook |
+| Wake word (matching and idle-mic listener, yields the mic to dictation and to transcription sessions via `MicrophoneCoordinator`) | `WakeWord.cs`, `DictationHost.cs` | Ran: unit tests with a fake microphone. Not tried with a real microphone or model |
+| Particle overlay (150 particles on a vector field, scrolling mirrored waveform) | `OverlayVisualizer.cs` (physics, tested), `VisualizerControl.cs` (drawing) | Physics ran; drawing not looked at |
+
 ## Rules kept from AGENTS.md
 
 Final-only typing, no clipboard, no live retyping into the target, Enter only after a guarded successful commit, hook thread only raises an event and work is offloaded, one gate serializes toggle/commit/discard.
@@ -30,9 +34,10 @@ Final-only typing, no clipboard, no live retyping into the target, Enter only af
 
 ## Not done yet
 
-- Wake word and voice commands: waiting for Justin's committed `WakeWordListener.cs` / `VoiceCommandMatcher.cs`. The controller already takes an `IVoiceCommandProcessor`; the default matches nothing. Transcription mode has no such hook.
+- Voice shell commands: matching is ported, running is not. Off until an explicit opt-in with a visible warning exists. Never in transcription mode.
+- Wake word uses a Tiny/Base Whisper model when installed, else the dictation model (as WPF does). Moonshine/Whisper.net wake models are not ported.
 - Voice shell commands, Ollama post-processing, dictation history, stats, audio cues.
 - The WPF app's focused-edit-control insertion (`WindowsFocusedTextControl`) and direct injection into the original target.
-- Overlay visuals (Justin's particle overlay is uncommitted), macOS `NSPanel`, Linux X11 hints, saved overlay position.
+- Compact-mode ripple animation and the copy/pin buttons of the WPF overlay, macOS `NSPanel`, Linux X11 hints, saved overlay position. The procedural tray icon (`AppIconProvider`) and `--show`/`--workspace` are WPF-only so far; the new tray uses a plain state-colored dot.
 - Parakeet and Moonshine backends: a WPF setting that selects one gets a notice and no model.
 - First-run onboarding, launch at login, updater, packaging.

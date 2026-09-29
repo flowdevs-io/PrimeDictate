@@ -47,6 +47,26 @@ public sealed class DictationSettings
 
     public List<ReplacementDto> TranscriptReplacements { get; set; } = [];
 
+    /// <summary>Opt-in: listen on the idle microphone for the wake phrase and start dictation.</summary>
+    public bool EnableWakeWord { get; set; }
+
+    public string WakeWordPhrase { get; set; } = WakePhrase.Default;
+
+    public bool EnableVoiceCommands { get; set; } = true;
+
+    public string VoiceDictationPhrase { get; set; } = VoiceCommandProcessor.DefaultDictationPhrase;
+
+    public string VoiceStopPhrase { get; set; } = VoiceCommandProcessor.DefaultStopPhrase;
+
+    public string VoiceHistoryPhrase { get; set; } = VoiceCommandProcessor.DefaultHistoryPhrase;
+
+    public VoiceCommandOptions ToVoiceCommandOptions() => new(
+        this.EnableVoiceCommands,
+        this.VoiceDictationPhrase?.Trim() ?? string.Empty,
+        this.VoiceStopPhrase?.Trim() ?? string.Empty,
+        this.VoiceHistoryPhrase?.Trim() ?? string.Empty,
+        []);
+
     /// <summary>New: type even where the platform cannot check which window is in front. Off by default.</summary>
     public bool TypeWithoutFocusGuard { get; set; }
 
