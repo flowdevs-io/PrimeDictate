@@ -26,6 +26,7 @@ public sealed class DictationShell : IAsyncDisposable
     private readonly TrayIcon tray = new();
     private readonly NativeMenuItem toggleItem = new("Start dictation");
     private DictationSettingsWindow? settingsWindow;
+    private DictationHistoryWindow? historyWindow;
 
     public DictationShell(IClassicDesktopStyleApplicationLifetime lifetime, TranscriptionWorkspaceService workspace, Action showWorkspace, DictationHost? host = null)
     {
@@ -42,7 +43,7 @@ public sealed class DictationShell : IAsyncDisposable
         this.overlay.Configure(this.host.Settings.OverlayMode, this.host.Settings.IsOverlaySticky);
         this.BuildTray(app);
         this.host.Notice += message => Dispatcher.UIThread.Post(() => this.OnNotice(message));
-        this.host.HistoryRequested += () => Dispatcher.UIThread.Post(this.showWorkspace);
+        this.host.HistoryRequested += () => Dispatcher.UIThread.Post(this.ShowHistory);
         if (this.host.Controller is { } controller)
         {
             controller.StateChanged += state => Dispatcher.UIThread.Post(() => this.OnState(state));
@@ -84,11 +85,13 @@ public sealed class DictationShell : IAsyncDisposable
         };
         var workspaceItem = new NativeMenuItem("Open workspace");
         workspaceItem.Click += (_, _) => this.showWorkspace();
+        var historyItem = new NativeMenuItem("Dictation history...");
+        historyItem.Click += (_, _) => this.ShowHistory();
         var settingsItem = new NativeMenuItem("Dictation settings...");
         settingsItem.Click += (_, _) => this.ShowSettings();
         var quitItem = new NativeMenuItem("Quit PrimeDictate");
         quitItem.Click += (_, _) => this.lifetime.Shutdown();
-        this.tray.Menu = [this.toggleItem, workspaceItem, settingsItem, new NativeMenuItemSeparator(), quitItem];
+        this.tray.Menu = [this.toggleItem, workspaceItem, historyItem, settingsItem, new NativeMenuItemSeparator(), quitItem];
         this.tray.Clicked += (_, _) => this.showWorkspace();
         this.tray.Icon = MakeIcon(DictationState.Idle);
         this.tray.ToolTipText = "PrimeDictate: ready";
@@ -121,6 +124,18 @@ public sealed class DictationShell : IAsyncDisposable
     }
 
     private void OnNotice(string message) => this.overlay.SetNotice(message);
+
+    private void ShowHistory()
+    {
+        if (this.historyWindow is { IsVisible: true })
+        {
+            this.historyWindow.Activate();
+            return;
+        }
+
+        this.historyWindow = new DictationHistoryWindow(this.host);
+        this.historyWindow.Show();
+    }
 
     private void ShowSettings()
     {

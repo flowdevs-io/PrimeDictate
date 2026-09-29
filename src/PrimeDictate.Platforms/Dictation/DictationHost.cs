@@ -15,6 +15,7 @@ public sealed class DictationHost : IAsyncDisposable
 {
     private readonly AppDataPaths paths;
     private readonly DictationSettingsStore store;
+    private readonly DictationHistoryStore history;
     private readonly IHotkeySource? hotkeys;
     private readonly IForegroundTargetGuard guard;
     private readonly object providerSync = new();
@@ -35,6 +36,7 @@ public sealed class DictationHost : IAsyncDisposable
     {
         this.paths = paths;
         this.store = new DictationSettingsStore(paths);
+        this.history = new DictationHistoryStore(paths);
         this.hotkeys = hotkeys;
         this.guard = guard ?? PlatformInput.CreateForegroundGuard();
         var load = this.store.Load();
@@ -56,6 +58,7 @@ public sealed class DictationHost : IAsyncDisposable
             rewriter: new OllamaRewriter(() => this.Settings.ToOllamaOptions(), report: message => this.Notice?.Invoke(message)));
         this.Controller.Notice += message => this.Notice?.Invoke(message);
         this.Controller.HistoryRequested += () => this.HistoryRequested?.Invoke();
+        this.Controller.Committed += this.OnCommitted;
         this.Controller.Options = this.Settings.ToOptions();
         this.Wake = new WakeWordListener(audio, this.TranscribeWakeAsync);
         microphone.Register(this.Wake);
@@ -80,6 +83,11 @@ public sealed class DictationHost : IAsyncDisposable
     public WakeWordListener? Wake { get; }
 
     public string? StartupNotice { get; }
+
+    public DictationHistoryStore History => this.history;
+
+    /// <summary>Raised after a commit has been written to history.</summary>
+    public event Action<DictationHistoryEntry>? HistoryChanged;
 
     public string? HotkeyUnavailableReason => this.hotkeys?.UnavailableReason;
 
@@ -252,6 +260,20 @@ public sealed class DictationHost : IAsyncDisposable
             }
 
             return this.provider;
+        }
+    }
+
+    private void OnCommitted(DictationCommit commit)
+    {
+        try
+        {
+            var entry = DictationHistoryEntry.From(commit);
+            this.history.Add(entry);
+            this.HistoryChanged?.Invoke(entry);
+        }
+        catch (Exception ex)
+        {
+            this.Notice?.Invoke($"Could not save dictation history: {ex.Message}");
         }
     }
 

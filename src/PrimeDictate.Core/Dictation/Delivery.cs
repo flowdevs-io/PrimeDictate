@@ -43,7 +43,12 @@ public enum DictationDeliveryStatus
     SkippedFocusChanged = 1,
     SkippedNoFocusGuard = 2,
     FailedToInject = 3,
-    Discarded = 4
+    Discarded = 4,
+
+    /// <summary>Legacy history only: a voice shell command ran.</summary>
+    CommandExecuted = 5,
+
+    CommandFailed = 6
 }
 
 public sealed record DeliveryResult(DictationDeliveryStatus Status, bool EnterSent, string? Error);
