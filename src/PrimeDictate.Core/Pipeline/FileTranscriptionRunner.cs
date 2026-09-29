@@ -91,9 +91,9 @@ public sealed class FileTranscriptionRunner(ModelLeaseScheduler scheduler, ITran
         var run = new RecognitionRunInfo(
             resultVersion,
             provider.ModelId,
-            request.Options.AsrModelRevision,
-            null,
-            null,
+            request.Options.AsrModelRevision ?? provider.ModelInfo.AsrRevision,
+            provider.ModelInfo.DiarizerModelId,
+            provider.ModelInfo.DiarizerRevision,
             request.Options.Language,
             provider.Runtime.RuntimeName,
             provider.Runtime.RuntimeVersion,

@@ -401,6 +401,9 @@ public sealed class NemotronTests : IDisposable
 
         var doc = session.Host.Document;
         Assert.Equal(TranscriptSessionStatus.Completed, doc.Status);
+        var run = Assert.Single(doc.Runs);
+        Assert.Equal("nemotron-3-diarization", run.DiarizerModelId);
+        Assert.Contains("Nemotron-3-Diarization.q8_0.gguf", run.DiarizerModelRevision);
         Assert.Equal(2, doc.Speakers.Count);
         var finals = doc.ActiveSegments.ToList();
         Assert.Equal(2, finals.Count);
@@ -413,7 +416,7 @@ public sealed class NemotronTests : IDisposable
     }
 
     /// <summary>Counts audio bytes per connection; connection 1 optionally never answers (the wedge in NeMo-Speech.cpp#48).</summary>
-    private static (HttpListener Listener, Uri Base, List<long> AudioBytes) StartCountingServer(bool wedgeFirst)
+    private static (HttpListener Listener, Uri Base, List<long> AudioBytes) StartCountingServer(bool wedgeFirst, bool rejectLanguage = false, List<string>? texts = null)
     {
         var port = FreePort.Next();
         var listener = new HttpListener();
@@ -474,7 +477,19 @@ public sealed class NemotronTests : IDisposable
                             }
 
                             var text = Encoding.UTF8.GetString(buffer, 0, r.Count);
-                            if (text.Contains("session.update"))
+                            if (texts is not null)
+                            {
+                                lock (texts)
+                                {
+                                    texts.Add(text);
+                                }
+                            }
+
+                            if (text.Contains("session.update") && rejectLanguage && text.Contains("\"language\""))
+                            {
+                                await Send("""{"type":"error","error":{"message":"unknown session field: language"}}""");
+                            }
+                            else if (text.Contains("session.update"))
                             {
                                 await Send("""{"type":"session.updated"}""");
                             }
@@ -614,8 +629,8 @@ public sealed class NemotronTests : IDisposable
             dev=cpu; port=0
             while [ $# -gt 0 ]; do case "$1" in --device) dev="$2";; --port) port="$2";; esac; shift; done
             case "$dev" in
-              cuda*) {{(cudaFails ? "echo 'CUDA error' >&2; exit 5" : "echo '[asr] loaded backend=CUDA0'")}};;
-              *) echo '[asr] loaded backend=CPU';;
+              cuda*) {{(cudaFails ? "exit 5" : "printf '[nemo-speech] serve session started\r\n[asr] model=.nemotron-3.5-asr-streaming-0.6b.q8_0.gguf head=rnnt backend=CUDA0 diarization=on\r\n[asr] mode=offline head=rnnt\r\n' >&2")}};;
+              *) printf '[nemo-speech] serve session started\r\n[asr] model=.nemotron-3.5-asr-streaming-0.6b.q8_0.gguf head=rnnt backend=CPU\r\n' >&2;;
             esac
             exec /usr/bin/python3 -c "
             import http.server
@@ -663,6 +678,7 @@ public sealed class NemotronTests : IDisposable
             {
                 Assert.Equal("cuda:0", gpu.EffectiveBackend);
                 Assert.Null(gpu.FallbackReason);
+                Assert.True(gpu.DiarizerConfirmed); // "diarization=on" on the real startup line, parsed despite CRLF
             }
 
             await using (var fell = await NemotronWorker.StartPreferredAsync(cpu, badCuda, files, "cuda:0", _ => [], notices.Add, default, TimeSpan.FromSeconds(20)))
@@ -676,6 +692,7 @@ public sealed class NemotronTests : IDisposable
             {
                 Assert.Equal("cpu", forced.EffectiveBackend);
                 Assert.Null(forced.FallbackReason);
+                Assert.False(forced.DiarizerConfirmed); // the CPU line without a diarizer has no diarization= field
             }
 
             Assert.Contains(notices, n => n.Contains("running on cuda:0"));
@@ -686,6 +703,47 @@ public sealed class NemotronTests : IDisposable
             if (Directory.Exists(root))
             {
                 Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Realtime_session_sends_the_language_and_survives_a_worker_that_rejects_it()
+    {
+        var texts = new List<string>();
+        var (listener, uri, _) = StartCountingServer(false, rejectLanguage: false, texts);
+        using (listener)
+        {
+            await using var ok = await NemotronRealtimeSession.ConnectAsync(uri, "k", diarize: false, default, language: "en-US");
+            Assert.Null(ok.StartupNotice);
+            lock (texts)
+            {
+                Assert.Contains(texts, x => x.Contains("session.update") && x.Contains("\"language\":\"en-US\""));
+            }
+        }
+
+        var rejected = new List<string>();
+        var (listener2, uri2, _) = StartCountingServer(false, rejectLanguage: true, rejected);
+        using (listener2)
+        {
+            await using var fallback = await NemotronRealtimeSession.ConnectAsync(uri2, "k", diarize: false, default, language: "en-US");
+            Assert.Contains("en-US", fallback.StartupNotice);
+            lock (rejected)
+            {
+                // Second attempt carried no language.
+                Assert.Contains(rejected, x => x.Contains("session.update") && !x.Contains("language"));
+            }
+        }
+
+        // "auto" and unset send no language at all.
+        var auto = new List<string>();
+        var (listener3, uri3, _) = StartCountingServer(false, false, auto);
+        using (listener3)
+        {
+            await using var s = await NemotronRealtimeSession.ConnectAsync(uri3, "k", diarize: false, default, language: "auto");
+            lock (auto)
+            {
+                Assert.DoesNotContain(auto, x => x.Contains("language"));
             }
         }
     }

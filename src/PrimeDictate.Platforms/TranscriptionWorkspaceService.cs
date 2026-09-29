@@ -33,7 +33,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     private readonly SemaphoreSlim providerGate = new(1, 1);
     private NemotronWorker? nemotronWorker;
     private string? nemotronWorkerKey;
-    private NemotronSetup? nemotron;
+    private List<NemotronSetup> nemotron = [];
     private readonly FileTranscriptionRunner runner;
     private readonly IAudioSource? audioSource;
     private readonly ISystemAudioSource? systemAudioSource;
@@ -171,14 +171,15 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         }
 
         this.nemotron = FindNemotron();
-        if (this.nemotron is { } n)
+        foreach (var n in this.nemotron)
         {
             var speakers = n.Files.DiarizerPath is not null;
             var gpu = n.CudaWorkerPath is not null && this.nemotronPreference != "cpu";
+            var englishOnly = n.Asr == NemotronPins.EnglishOnly;
             choices.Add(new SpeechModelChoice(
                 $"nemotron:{n.Asr.Id}",
-                (gpu ? "Nemotron 3.5 (GPU, CPU if it fails)" : "Nemotron 3.5 (CPU)") + (speakers ? ", speakers" : string.Empty),
-                null,
+                (englishOnly ? "Nemotron English" : "Nemotron 3.5") + (gpu ? " (GPU, CPU if it fails)" : " (CPU)") + (speakers ? ", speakers" : string.Empty),
+                englishOnly ? "en-US" : null,
                 speakers,
                 speakers ? null : "Speaker detection needs the Nemotron-3-Diarization file next to the speech model."));
         }
@@ -186,7 +187,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         return choices;
     }
 
-    private NemotronSetup? FindNemotron()
+    private List<NemotronSetup> FindNemotron()
     {
         var folder = Path.Combine(this.paths.ModelsDirectory, "nemotron");
         var exeName = OperatingSystem.IsWindows() ? "nemo-speech.exe" : "nemo-speech";
@@ -205,20 +206,22 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
 
         // With only a CUDA build installed it also serves as the CPU worker (--device cpu).
         worker ??= cuda;
+        var found = new List<NemotronSetup>();
         if (worker is null || !Directory.Exists(folder))
         {
-            return null;
+            return found;
         }
 
+        // Both speech models are offered when both files are installed; only one runs at a time.
         foreach (var asr in new[] { NemotronPins.Multilingual, NemotronPins.EnglishOnly })
         {
             if (NemotronModelFiles.TryFind(folder, asr) is { } files)
             {
-                return new NemotronSetup(worker, cuda, asr, files);
+                found.Add(new NemotronSetup(worker, cuda, asr, files));
             }
         }
 
-        return null;
+        return found;
     }
 
     public ValueTask<IReadOnlyList<TranscriptSessionSummary>> ListSessionsAsync(CancellationToken cancellationToken) =>
@@ -233,8 +236,15 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     public async Task<MediaProbeResult> ProbeAsync(string path, CancellationToken cancellationToken) =>
         await this.decoder.ProbeAsync(path, cancellationToken).ConfigureAwait(false);
 
-    private static TranscriptionSessionOptions Options(SpeechModelChoice model, string? deviceId, AudioRetention retention) =>
-        new(model.ModelId, null, "cpu", model.Language, null, retention, DownmixMode.Average, null, null, deviceId);
+    /// <summary>
+    /// Spoken language for multilingual models, for example en-US, or "auto" to let the model guess. Auto-detect on
+    /// noisy system audio produced words in the wrong script, so the default is en-US
+    /// (or PRIMEDICTATE_LANGUAGE). English-only models ignore it.
+    /// </summary>
+    public string Language { get; set; } = Environment.GetEnvironmentVariable("PRIMEDICTATE_LANGUAGE") is { Length: > 0 } configured ? configured : "en-US";
+
+    private TranscriptionSessionOptions Options(SpeechModelChoice model, string? deviceId, AudioRetention retention) =>
+        new(model.ModelId, null, "cpu", model.Language ?? this.Language, null, retention, DownmixMode.Average, null, null, deviceId);
 
     private async Task<ITranscriptionProvider> ProviderAsync(SpeechModelChoice model, CancellationToken cancellationToken)
     {
@@ -263,13 +273,17 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
             {
                 provider = new SherpaWhisperProvider(whisper);
             }
-            else if (this.nemotron is { } setup && model.ModelId.StartsWith("nemotron:", StringComparison.Ordinal))
+            else if (this.nemotron.FirstOrDefault(n => $"nemotron:{n.Asr.Id}" == model.ModelId) is { } setup)
             {
-                // One worker at a time: it holds a multi-hundred-MB model in memory.
+                // One worker at a time: it holds a multi-hundred-MB model in memory. Providers of the old one die with it.
                 if (this.nemotronWorker is not null && this.nemotronWorkerKey != model.ModelId)
                 {
                     await this.nemotronWorker.DisposeAsync().ConfigureAwait(false);
                     this.nemotronWorker = null;
+                    foreach (var stale in this.providers.Keys.Where(k => k.StartsWith("nemotron:", StringComparison.Ordinal)).ToList())
+                    {
+                        this.providers.Remove(stale);
+                    }
                 }
 
                 this.nemotronWorker ??= await this.StartNemotronWorkerAsync(setup, cancellationToken).ConfigureAwait(false);

@@ -108,7 +108,7 @@ public sealed class SherpaWhisperProvider : ITranscriptionProvider
         config.ModelConfig.Whisper.Encoder = this.model.Encoder;
         config.ModelConfig.Whisper.Decoder = this.model.Decoder;
         // English-only models must be told "en"; multilingual models detect the language when it is empty.
-        config.ModelConfig.Whisper.Language = this.model.IsEnglishOnly ? "en" : (language is null or "auto" ? string.Empty : language);
+        config.ModelConfig.Whisper.Language = this.model.IsEnglishOnly ? "en" : (language is null or "auto" ? string.Empty : language.Split('-')[0].ToLowerInvariant());
         config.ModelConfig.Whisper.Task = "transcribe";
         return new OfflineRecognizer(config);
     }

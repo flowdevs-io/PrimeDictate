@@ -29,6 +29,19 @@ public sealed class NemotronProvider(INemotronEndpoint worker, string modelId, b
         Languages: ["auto"],
         RequiredSampleRate: 16_000);
 
+    public ProviderModelInfo ModelInfo
+    {
+        get
+        {
+            var asr = NemotronPins.All.FirstOrDefault(p => !p.IsDiarizer && $"nemotron:{p.Id}" == modelId);
+            var diar = worker.HasDiarizer && identifySpeakers ? NemotronPins.Diarizer : null;
+            return new ProviderModelInfo(
+                asr is null ? null : $"{asr.FileName} sha256:{asr.Sha256Prefix}",
+                diar?.Id,
+                diar is null ? null : $"{diar.FileName} sha256:{diar.Sha256Prefix}");
+        }
+    }
+
     public EffectiveRuntime Runtime { get; } = new("nemo-speech", NemotronPins.RuntimeCommit[..8], worker.RequestedBackend, worker.EffectiveBackend, worker.FallbackReason);
 
     public async ValueTask<IReadOnlyList<RecognizedSegment>> RecognizeWindowAsync(ReadOnlyMemory<float> samples, string? language, CancellationToken cancellationToken)
@@ -80,7 +93,7 @@ public sealed class NemotronProvider(INemotronEndpoint worker, string modelId, b
     {
         // The worker accepts a speaker request without a diarizer and then errors on every audio frame, so never send it.
         var withSpeakers = diarize && worker.HasDiarizer;
-        return await NemotronRealtimeSession.ConnectAsync(worker.BaseAddress, worker.ApiKey, withSpeakers, cancellationToken).ConfigureAwait(false);
+        return await NemotronRealtimeSession.ConnectAsync(worker.BaseAddress, worker.ApiKey, withSpeakers, cancellationToken, language: language).ConfigureAwait(false);
     }
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;

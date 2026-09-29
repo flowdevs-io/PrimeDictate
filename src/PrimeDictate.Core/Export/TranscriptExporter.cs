@@ -45,7 +45,11 @@ public static class TranscriptExporter
     public static string Export(TranscriptDocument document, ExportOptions options)
     {
         ArgumentNullException.ThrowIfNull(document);
-        var segments = document.ActiveSegments.Where(s => s.State == SegmentState.Final || document.Status != TranscriptSessionStatus.Completed).ToList();
+        // A line whose text was edited to nothing (for example when a merged turn was rewritten as one block) is not a cue.
+        var segments = document.ActiveSegments
+            .Where(s => s.State == SegmentState.Final || document.Status != TranscriptSessionStatus.Completed)
+            .Where(s => options.Format == ExportFormat.Json || Text(s, options.Text).Trim().Length > 0)
+            .ToList();
         return options.Format switch
         {
             ExportFormat.Text => ToText(document, segments, options),
