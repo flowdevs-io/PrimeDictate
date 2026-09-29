@@ -1,0 +1,70 @@
+{
+ "note": "Worker started WITHOUT --diar-model; client sent session.update with speaker_diarization=true. session.updated still accepts it, then the server sends one error event per appended audio frame (and commit) and no transcript events. 122 error events in 12 s of audio; only the first is shown; all were identical apart from event_id.",
+ "non_error_events": [
+  {
+   "t": 0.05,
+   "dir": "server->client",
+   "event": {
+    "event_id": "event_4",
+    "session": {
+     "input_audio_format": "pcm16",
+     "model": ".nemotron-3.5-asr-streaming-0.6b.q8_0.gguf",
+     "sample_rate": 16000
+    },
+    "type": "session.created"
+   }
+  },
+  {
+   "t": 0.56,
+   "dir": "client->server",
+   "event": {
+    "type": "session.update",
+    "session": {
+     "sample_rate": 16000,
+     "word_timestamps": true,
+     "speaker_diarization": true
+    }
+   }
+  },
+  {
+   "t": 0.56,
+   "dir": "server->client",
+   "event": {
+    "event_id": "event_5",
+    "session": {
+     "sample_rate": 16000,
+     "speaker_diarization": true,
+     "word_timestamps": true
+    },
+    "type": "session.updated"
+   }
+  },
+  {
+   "t": 7.47,
+   "dir": "client->server",
+   "event": {
+    "type": "input_audio_buffer.commit"
+   }
+  },
+  {
+   "t": 20.01,
+   "dir": "client->server",
+   "event": {
+    "type": "input_audio_buffer.commit"
+   }
+  }
+ ],
+ "first_error": {
+  "t": 1.06,
+  "dir": "server->client",
+  "event": {
+   "error": {
+    "message": "speaker diarization requested but no diarizer model is loaded (start the server with --diar-model)",
+    "type": "invalid_request_error"
+   },
+   "event_id": "event_6",
+   "type": "error"
+  }
+ },
+ "error_event_count": 122
+}
