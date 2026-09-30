@@ -304,6 +304,71 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         await this.ReleaseAsync().ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// For app exit: ends the session as canceled no matter what state it is in. Unlike <see cref="StopAsync"/> and
+    /// <see cref="DiscardAsync"/> it does not return early because a stop is already under way, and it never waits longer than
+    /// <paramref name="grace"/> for the device, the capture loop or the recognizer, so a stalled device or a hung stop cannot keep the
+    /// session Running. A session that already completed stays Completed. The audio written so far is flushed and kept.
+    /// </summary>
+    public async Task AbortAsync(TimeSpan grace)
+    {
+        this.discard = true;
+        Volatile.Write(ref this.stopped, 1);
+        try
+        {
+            await this.stopSignal.CancelAsync().ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        await BoundedAsync(this.StopCaptureAsync(), grace).ConfigureAwait(false);
+        await BoundedAsync(this.captureTask, grace).ConfigureAwait(false);
+        this.queue.Writer.TryComplete();
+        await BoundedAsync(this.inferenceTask, grace).ConfigureAwait(false);
+
+        try
+        {
+            this.writer?.Flush();
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        {
+            // The audio already on disk is what is kept.
+        }
+
+        if (this.Host is { } host)
+        {
+            if (TranscriptionSessionStateMachine.CanTransition(host.Document.Status, TranscriptSessionStatus.Canceled))
+            {
+                host.SetStatus(TranscriptSessionStatus.Canceled);
+            }
+
+            await host.CheckpointAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+
+        await BoundedAsync(this.ReleaseAsync(), grace).ConfigureAwait(false);
+    }
+
+    private static async Task BoundedAsync(Task? task, TimeSpan grace)
+    {
+        if (task is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await task.WaitAsync(grace).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+        }
+        catch (Exception)
+        {
+            // A faulted loop has already recorded its failure; abort only needs it to be over or given up on.
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (Volatile.Read(ref this.stopped) == 0 && this.Host is not null)

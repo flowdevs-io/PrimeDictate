@@ -267,6 +267,7 @@ public sealed class NemotronTests : IDisposable
 
         public ValueTask<IReadOnlyList<PrimeDictate.Core.Sessions.TranscriptSessionSummary>> ListAsync(int s, int t, CancellationToken c) => ValueTask.FromResult<IReadOnlyList<PrimeDictate.Core.Sessions.TranscriptSessionSummary>>([]);
 
+        public ValueTask<int> CancelInFlightSessionsAsync(string reason, CancellationToken c) => ValueTask.FromResult(0);
         public ValueTask<IReadOnlyList<PrimeDictate.Core.Sessions.TranscriptSessionSummary>> MarkInterruptedSessionsAsync(CancellationToken c) => ValueTask.FromResult<IReadOnlyList<PrimeDictate.Core.Sessions.TranscriptSessionSummary>>([]);
 
         public ValueTask<IReadOnlyList<string>> DeleteOwnedAudioAsync(Guid id, CancellationToken c) => ValueTask.FromResult<IReadOnlyList<string>>([]);

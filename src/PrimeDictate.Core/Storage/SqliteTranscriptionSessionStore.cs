@@ -373,6 +373,25 @@ public sealed class SqliteTranscriptionSessionStore : ITranscriptionSessionStore
         }
     }
 
+    public async ValueTask<int> CancelInFlightSessionsAsync(string reason, CancellationToken cancellationToken)
+    {
+        await this.gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var conn = this.RequireConnection();
+            var inList = string.Join(",", new[] { TranscriptSessionStatus.Created, TranscriptSessionStatus.Running, TranscriptSessionStatus.Paused, TranscriptSessionStatus.Finalizing }
+                .Select(s => ((int)s).ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"UPDATE sessions SET status = {(int)TranscriptSessionStatus.Canceled}, failure_reason = COALESCE(failure_reason, $reason) WHERE status IN ({inList});";
+            cmd.Parameters.AddWithValue("$reason", reason);
+            return await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            this.gate.Release();
+        }
+    }
+
     public async ValueTask<IReadOnlyList<string>> DeleteOwnedAudioAsync(Guid sessionId, CancellationToken cancellationToken)
     {
         await this.gate.WaitAsync(cancellationToken).ConfigureAwait(false);
