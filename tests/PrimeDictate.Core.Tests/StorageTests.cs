@@ -345,6 +345,27 @@ public sealed class StorageTests : IDisposable
     }
 
     [Fact]
+    public void Meeting_options_default_sensibly_and_an_older_file_without_them_still_loads()
+    {
+        var path = this.Paths.TranscriptionPreferencesPath;
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, """{ "SchemaVersion": 1, "AsrModelId": "whisper-onnx:base.en" }""");
+        var store = new TranscriptionPreferencesStore(path);
+        var loaded = store.Load(() => new TranscriptionPreferences()).Preferences;
+        Assert.Equal("whisper-onnx:base.en", loaded.AsrModelId);
+        Assert.Equal(LiveTextModes.Off, loaded.LiveTextMode);
+        Assert.True(loaded.SpeakerLabelsAfterStop);
+        Assert.True(loaded.BoostQuietAudio);
+        Assert.Null(loaded.LastSource);
+
+        store.Save(loaded with { LiveTextMode = LiveTextModes.Draft, BoostQuietAudio = false, LastSource = RecordingSources.Meeting });
+        var again = store.Load(() => new TranscriptionPreferences()).Preferences;
+        Assert.Equal(LiveTextModes.Draft, again.LiveTextMode);
+        Assert.False(again.BoostQuietAudio);
+        Assert.Equal(RecordingSources.Meeting, again.LastSource);
+    }
+
+    [Fact]
     public void Preferences_migration_backs_up_once_and_is_idempotent()
     {
         var path = this.Paths.TranscriptionPreferencesPath;

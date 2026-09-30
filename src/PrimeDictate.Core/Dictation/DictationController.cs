@@ -54,6 +54,7 @@ public sealed class DictationController : IAsyncDisposable
     private readonly IVoiceCommandProcessor voiceCommands;
     private readonly TimeProvider time;
     private readonly ITranscriptRewriter? rewriter;
+    private readonly IVoiceShellCommandRunner? shellRunner;
     private readonly SemaphoreSlim gate = new(1, 1);
     private volatile DictationOptions options = new DictationOptions().Normalized();
     private Session? session;
@@ -66,7 +67,8 @@ public sealed class DictationController : IAsyncDisposable
         MicrophoneCoordinator? microphone = null,
         IVoiceCommandProcessor? voiceCommands = null,
         TimeProvider? time = null,
-        ITranscriptRewriter? rewriter = null)
+        ITranscriptRewriter? rewriter = null,
+        IVoiceShellCommandRunner? shellRunner = null)
     {
         this.audioSource = audioSource;
         this.providerSource = providerSource;
@@ -76,6 +78,7 @@ public sealed class DictationController : IAsyncDisposable
         this.voiceCommands = voiceCommands ?? NoVoiceCommands.Instance;
         this.time = time ?? TimeProvider.System;
         this.rewriter = rewriter;
+        this.shellRunner = shellRunner;
     }
 
     public event Action<DictationState>? StateChanged;
@@ -421,7 +424,17 @@ public sealed class DictationController : IAsyncDisposable
         try
         {
             var raw = await this.RecognizeAsync(s.Provider, audio, CancellationToken.None).ConfigureAwait(false);
-            var match = this.voiceCommands.Apply(TranscriptPostProcessor.RemoveTrailingSilenceArtifact(raw, reason.Contains("silence", StringComparison.Ordinal)));
+            var spoken = TranscriptPostProcessor.RemoveTrailingSilenceArtifact(raw, reason.Contains("silence", StringComparison.Ordinal));
+            // Shell commands are matched only here, in the final transcript of a dictation, and only when a runner exists.
+            var match = this.shellRunner is null ? this.voiceCommands.Apply(spoken) : this.voiceCommands.ApplyFinal(spoken);
+            if (match.Shell is { } shell && this.shellRunner is not null)
+            {
+                if (!await this.RunShellCommandAsync(s, shell, this.shellRunner, duration).ConfigureAwait(false))
+                {
+                    return;
+                }
+            }
+
             if (match.StopRequested)
             {
                 return;
@@ -498,6 +511,71 @@ public sealed class DictationController : IAsyncDisposable
             result.EnterSent,
             original,
             rewritePrompt));
+    }
+
+    private static readonly TimeSpan ShellTypeTargetWait = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan ShellTypePollInterval = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>
+    /// Runs the user's command for a matched phrase. The command string is the one saved in settings; nothing from the
+    /// transcript reaches it. Returns true when the rest of the dictation should go on to be typed: only for
+    /// <see cref="VoiceShellCommandCompletionBehavior.Continue"/> and only when words remain after the phrase was removed.
+    /// </summary>
+    private async Task<bool> RunShellCommandAsync(Session s, VoiceShellCommandInvocation invocation, IVoiceShellCommandRunner runner, TimeSpan duration)
+    {
+        var command = invocation.Command;
+        var phrase = command.Phrase.Trim();
+        var label = $"Voice command: {phrase}";
+        DictationDeliveryStatus status;
+        string? error = null;
+        try
+        {
+            var result = runner.Run(command);
+            Diagnostics.AppLog.Event("dictation", $"Voice command ran: \"{phrase}\" (pid {result.ProcessId?.ToString() ?? "unknown"}).");
+            if (!string.IsNullOrWhiteSpace(invocation.TextToType))
+            {
+                if (!await this.WaitForShellTypeTargetAsync(s.Target).ConfigureAwait(false))
+                {
+                    throw new InvalidOperationException("Chained typing skipped because the command did not move focus away from the starting window.");
+                }
+
+                this.injector.TypeText(invocation.TextToType);
+            }
+
+            status = DictationDeliveryStatus.CommandExecuted;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            status = DictationDeliveryStatus.CommandFailed;
+            error = ex.Message;
+            Diagnostics.AppLog.Event("dictation", $"Voice command failed: \"{phrase}\": {ex.Message}");
+            this.Notice?.Invoke($"Voice command \"{phrase}\" failed: {ex.Message}");
+        }
+
+        this.Committed?.Invoke(new DictationCommit(
+            s.Id, this.time.GetUtcNow().UtcDateTime, label, status, "Command", null, null, error, duration, EnterSent: false));
+        return status == DictationDeliveryStatus.CommandExecuted && command.CompletionBehavior == VoiceShellCommandCompletionBehavior.Continue;
+    }
+
+    private async Task<bool> WaitForShellTypeTargetAsync(IForegroundTarget? start)
+    {
+        if (start is null)
+        {
+            await Task.Delay(ShellTypePollInterval, this.time).ConfigureAwait(false);
+            return true;
+        }
+
+        var deadline = this.time.GetUtcNow() + ShellTypeTargetWait;
+        while (this.time.GetUtcNow() < deadline)
+        {
+            await Task.Delay(ShellTypePollInterval, this.time).ConfigureAwait(false);
+            if (!start.IsStillForeground())
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static async Task<string> RecognizeAsync(ITranscriptionProvider provider, ReadOnlyMemory<float> samples, string? language, CancellationToken ct)

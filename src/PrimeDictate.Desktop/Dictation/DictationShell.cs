@@ -20,12 +20,15 @@ namespace PrimeDictate.Desktop.Dictation;
 public sealed class DictationShell : IAsyncDisposable
 {
     private readonly DictationHost host;
+    private readonly MainWindow window;
     private readonly TranscriptionWorkspaceService workspace;
     private readonly IClassicDesktopStyleApplicationLifetime lifetime;
     private readonly Action showWorkspace;
     private readonly DictationOverlayWindow overlay = new();
     private readonly TrayIcon tray = new();
     private readonly NativeMenuItem toggleItem = new("Start dictation");
+    private readonly NativeMenuItem recordItem = new("Record meeting");
+    private string modelName = string.Empty;
     private readonly IAudioCuePlayer cues = new ProcessAudioCuePlayer();
     private DictationState lastState = DictationState.Idle;
     private DateTime errorUntilUtc;
@@ -33,10 +36,11 @@ public sealed class DictationShell : IAsyncDisposable
     private DictationHistoryWindow? historyWindow;
     private DictationStatsWindow? statsWindow;
 
-    public DictationShell(IClassicDesktopStyleApplicationLifetime lifetime, TranscriptionWorkspaceService workspace, Action showWorkspace, DictationHost? host = null)
+    public DictationShell(IClassicDesktopStyleApplicationLifetime lifetime, MainWindow window, Action showWorkspace, DictationHost? host = null)
     {
         this.lifetime = lifetime;
-        this.workspace = workspace;
+        this.window = window;
+        this.workspace = window.Workspace;
         this.showWorkspace = showWorkspace;
         this.host = host ?? new DictationHost(workspace.Paths, workspace.Microphone, workspace.MicrophoneSource, new SharpHookHotkeySource());
     }
@@ -48,6 +52,11 @@ public sealed class DictationShell : IAsyncDisposable
         this.ConfigureOverlay();
         this.overlay.AnchorMoved += (x, y) => this.host.RememberOverlayAnchor(x, y);
         this.BuildTray(app);
+        this.window.DictationHistoryRequested += this.ShowHistory;
+        this.window.DictationStatsRequested += this.ShowStats;
+        this.window.SettingsRequested += this.ShowSettings;
+        this.window.RecordingChanged += this.OnMeetingRecordingChanged;
+        this.RefreshHeader(refreshModel: true);
         this.host.Notice += message => Dispatcher.UIThread.Post(() => this.OnNotice(message));
         this.host.HistoryRequested += () => Dispatcher.UIThread.Post(this.ShowHistory);
         if (this.host.Controller is { } controller)
@@ -112,17 +121,32 @@ public sealed class DictationShell : IAsyncDisposable
                 await Task.Run(controller.ToggleAsync);
             }
         };
-        var workspaceItem = new NativeMenuItem("Open workspace");
+        // Start or stop a live recording in the workspace through the same code the Record and Stop buttons use, so either
+        // one can end what the other started.
+        this.recordItem.Click += async (_, _) =>
+        {
+            this.showWorkspace();
+            if (this.window.IsRecording)
+            {
+                await this.window.StopMeetingRecordingAsync();
+            }
+            else
+            {
+                await this.window.StartMeetingRecordingAsync();
+            }
+        };
+        var workspaceItem = new NativeMenuItem("Open PrimeDictate");
         workspaceItem.Click += (_, _) => this.showWorkspace();
-        var historyItem = new NativeMenuItem("Dictation history...");
+        var historyItem = new NativeMenuItem("Dictation history…");
         historyItem.Click += (_, _) => this.ShowHistory();
-        var statsItem = new NativeMenuItem("Dictation stats...");
+        var statsItem = new NativeMenuItem("Stats…");
         statsItem.Click += (_, _) => this.ShowStats();
-        var settingsItem = new NativeMenuItem("Dictation settings...");
+        var settingsItem = new NativeMenuItem("Settings…");
         settingsItem.Click += (_, _) => this.ShowSettings();
         var quitItem = new NativeMenuItem("Exit PrimeDictate");
         quitItem.Click += (_, _) => this.ExitRequested?.Invoke();
-        this.tray.Menu = [this.toggleItem, workspaceItem, historyItem, statsItem, settingsItem, new NativeMenuItemSeparator(), quitItem];
+        // The updater's "Check for updates…" item goes just before Exit.
+        this.tray.Menu = [this.toggleItem, this.recordItem, workspaceItem, historyItem, statsItem, settingsItem, new NativeMenuItemSeparator(), quitItem];
         this.tray.Clicked += (_, _) => this.showWorkspace();
         this.tray.Icon = TrayIconRenderer.Create(this.CurrentTrayState());
         this.tray.ToolTipText = "PrimeDictate: ready";
@@ -131,7 +155,7 @@ public sealed class DictationShell : IAsyncDisposable
 
     private TrayVisualState CurrentTrayState() =>
         this.errorUntilUtc > DateTime.UtcNow ? TrayVisualState.Error
-        : this.lastState == DictationState.Listening ? TrayVisualState.Recording
+        : this.lastState == DictationState.Listening || this.window.IsRecording ? TrayVisualState.Recording
         : this.lastState == DictationState.Processing ? TrayVisualState.Processing
         : this.host.Wake?.IsRunning == true ? TrayVisualState.AlwaysListening
         : TrayVisualState.Ready;
@@ -155,13 +179,53 @@ public sealed class DictationShell : IAsyncDisposable
         this.lastState = state;
         this.overlay.SetState(state);
         this.RefreshTrayIcon();
-        this.tray.ToolTipText = state switch
+        this.RefreshTooltip();
+        this.toggleItem.Header = state == DictationState.Listening ? "Stop and type" : "Start dictation";
+        this.RefreshHeader(refreshModel: false);
+    }
+
+    private void OnMeetingRecordingChanged()
+    {
+        this.recordItem.Header = this.window.IsRecording ? "Stop meeting recording" : "Record meeting";
+        this.RefreshTrayIcon();
+        this.RefreshTooltip();
+    }
+
+    /// <summary>Dictation states win over a meeting recording in the tooltip, since dictation is the short, active thing.</summary>
+    private void RefreshTooltip() =>
+        this.tray.ToolTipText = this.lastState switch
         {
             DictationState.Listening => "PrimeDictate: listening",
             DictationState.Processing => "PrimeDictate: transcribing",
+            _ when this.window.IsRecording => $"PrimeDictate: recording meeting ({this.window.RecordingSourceLabel})",
             _ => "PrimeDictate: ready"
         };
-        this.toggleItem.Header = state == DictationState.Listening ? "Stop and type" : "Start dictation";
+
+    /// <summary>The main window's header line: dictation state, the model dictation uses and the hotkey.</summary>
+    private void RefreshHeader(bool refreshModel)
+    {
+        if (this.host.Controller is null)
+        {
+            this.window.SetDictationStatus("Dictation unavailable: " + (this.host.UnavailableReason ?? "no microphone"));
+            return;
+        }
+
+        if (refreshModel)
+        {
+            var wanted = this.host.Settings.ResolveModelId();
+            var installed = this.host.InstalledModels();
+            this.modelName = installed.FirstOrDefault(m => m.ModelId == wanted)?.DisplayName
+                ?? (installed.Count > 0 ? installed[0].DisplayName : "no model installed");
+        }
+
+        var state = this.lastState switch
+        {
+            DictationState.Listening => "Listening",
+            DictationState.Processing => "Transcribing",
+            _ => "Ready"
+        };
+        var hotkey = this.host.Settings.ToBindings()[HotkeyAction.ToggleDictation];
+        this.window.SetDictationStatus($"Dictation: {state} · {this.modelName} · {hotkey}");
     }
 
     private void OnCommitted(DictationCommit commit)
@@ -213,8 +277,12 @@ public sealed class DictationShell : IAsyncDisposable
             return;
         }
 
-        this.settingsWindow = new DictationSettingsWindow(this.host, this.workspace.MicrophoneSource);
-        this.settingsWindow.Closed += (_, _) => this.ConfigureOverlay();
+        this.settingsWindow = new DictationSettingsWindow(this.host, this.workspace.MicrophoneSource, this.window.Prefs);
+        this.settingsWindow.Closed += (_, _) =>
+        {
+            this.ConfigureOverlay();
+            this.RefreshHeader(refreshModel: true);
+        };
         this.settingsWindow.Show();
     }
 

@@ -33,6 +33,31 @@ public sealed record TranscriptionPreferences
 
     /// <summary>Copy imported files into app storage instead of referencing them in place.</summary>
     public bool CopyImportedMedia { get; init; }
+
+    /// <summary>Meetings: <c>off</c> records only and transcribes after Stop; <c>draft</c> shows a fast model's text while people talk.</summary>
+    public string LiveTextMode { get; init; } = LiveTextModes.Off;
+
+    /// <summary>Meetings: after Stop, re-read the recording, label the speakers and mark who talked over whom.</summary>
+    public bool SpeakerLabelsAfterStop { get; init; } = true;
+
+    /// <summary>Raise quiet audio before it is transcribed. The saved recording is not changed.</summary>
+    public bool BoostQuietAudio { get; init; } = true;
+
+    /// <summary>The recording source last used: <c>microphone</c>, <c>system</c> or <c>meeting</c> (both). Null until one was used.</summary>
+    public string? LastSource { get; init; }
+}
+
+public static class LiveTextModes
+{
+    public const string Off = "off";
+    public const string Draft = "draft";
+}
+
+public static class RecordingSources
+{
+    public const string Microphone = "microphone";
+    public const string System = "system";
+    public const string Meeting = "meeting";
 }
 
 public sealed record PreferencesLoadResult(TranscriptionPreferences Preferences, bool IsReadOnly, string? Warning, string? BackupPath);

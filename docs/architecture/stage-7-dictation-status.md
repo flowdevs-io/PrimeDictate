@@ -59,9 +59,19 @@ Final-only typing, no clipboard, no live retyping into the target, Enter only af
 
 ## Not done yet
 
-- Voice shell commands: matching is ported, running is not. Off until an explicit opt-in with a visible warning exists. Never in transcription mode.
+- (Voice shell commands are now done, see the table.)
 - Updater, installers.
 - Wake word uses a Tiny/Base Whisper model when installed, else the dictation model (as WPF does). Moonshine/Whisper.net wake models are not ported.
 - The WPF app's focused-edit-control insertion (`WindowsFocusedTextControl`) and direct injection into the original target.
 - Compact-mode ripple animation and the copy/pin buttons of the WPF overlay, macOS `NSPanel`, Linux X11 hints.
 - First-run onboarding, launch at login, updater, packaging.
+
+## One app: tray, window and settings (6.1.0 work)
+
+| Piece | Where | Verified |
+|---|---|---|
+| Voice shell commands run in dictation only: matched in the final transcript (never in the live preview, never in transcription), the command string comes only from settings, Stop/Continue as in WPF (Continue types the words that remain), history row "Voice command: phrase". Imported WPF commands keep their On state; commands added here start Off; the Settings editor (On / Say / After / Command) shows a warning | `DictationController.cs`, `VoiceShellCommandRunner.cs` (interface), `ProcessVoiceShellCommandRunner.cs` (cmd.exe /d /c, /bin/sh -c), `DictationSettingsWindow.cs` | Ran: unit tests with a fake runner. Real process start and the editor not exercised by hand |
+| Tray menu: Start dictation, Record meeting (flips to Stop meeting recording; same code as the Record button, so either can stop the other; opens the window), Open PrimeDictate, Dictation history, Stats, Settings, Exit. Tray icon and tooltip show recording during a meeting | `DictationShell.cs`, `MainWindow.axaml.cs` | Compiled and started on Windows; menu clicks and a real recording not exercised |
+| Main window header: dictation state, model, hotkey, buttons for history, stats, settings | `MainWindow.axaml` | Started on Windows and looked at |
+| Transcription model defaults to the dictation model when none was chosen for transcription | `MainWindow.axaml.cs` | Not exercised (no model in the test data dir) |
+| One Settings window with a "Transcription & meetings" section (source, live text, speaker labels, boost), kept in sync with the main window; stored in `transcription-settings.json`, the old `meeting-live-text.txt` is carried over once | `TranscriptionPrefsService.cs`, `TranscriptionPreferences.cs` | Defaults and load: unit tests. Sync not exercised by hand |

@@ -1,6 +1,11 @@
 namespace PrimeDictate.Core.Dictation;
 
-public sealed record VoiceCommandResult(string CleanedText, bool CommitRequested, bool StopRequested, bool HistoryRequested)
+public sealed record VoiceCommandResult(
+    string CleanedText,
+    bool CommitRequested,
+    bool StopRequested,
+    bool HistoryRequested,
+    VoiceShellCommandInvocation? Shell = null)
 {
     public static VoiceCommandResult Passthrough(string text) => new(text, false, false, false);
 }
@@ -12,6 +17,12 @@ public sealed record VoiceCommandResult(string CleanedText, bool CommitRequested
 public interface IVoiceCommandProcessor
 {
     VoiceCommandResult Apply(string transcript);
+
+    /// <summary>
+    /// Like <see cref="Apply"/> for the finished transcript of a dictation, where the user's shell-command phrases are
+    /// also matched. Live previews never use this, so a preview can never run anything.
+    /// </summary>
+    VoiceCommandResult ApplyFinal(string transcript) => this.Apply(transcript);
 }
 
 public sealed class NoVoiceCommands : IVoiceCommandProcessor
@@ -32,5 +43,11 @@ public sealed class VoiceCommandProcessor(Func<VoiceCommandOptions> options) : I
     {
         var match = VoiceCommandMatcher.Apply(transcript, options());
         return new VoiceCommandResult(match.CleanedText, match.CommitRequested, match.StopRequested, match.HistoryRequested);
+    }
+
+    public VoiceCommandResult ApplyFinal(string transcript)
+    {
+        var match = VoiceCommandMatcher.Apply(transcript, options(), includeShellCommands: true);
+        return new VoiceCommandResult(match.CleanedText, match.CommitRequested, match.StopRequested, match.HistoryRequested, match.ShellCommandInvocation);
     }
 }
