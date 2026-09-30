@@ -21,7 +21,7 @@ internal static class TonePlayer
             var bytes = new byte[up.Length * 2 * sizeof(float)];
             for (var i = 0; i < up.Length; i++)
             {
-                var b = BitConverter.GetBytes(up[i] * 0.9f);
+                var b = BitConverter.GetBytes(up[i]);
                 b.CopyTo(bytes, i * 8);
                 b.CopyTo(bytes, (i * 8) + 4);
             }
@@ -45,7 +45,7 @@ internal static class TonePlayer
             {
                 foreach (var v in up)
                 {
-                    var s = (short)(Math.Clamp(v * 0.9f, -1f, 1f) * short.MaxValue);
+                    var s = (short)(Math.Clamp(v, -1f, 1f) * short.MaxValue);
                     w.WriteByte((byte)(s & 0xFF));
                     w.WriteByte((byte)((s >> 8) & 0xFF));
                     w.WriteByte((byte)(s & 0xFF));

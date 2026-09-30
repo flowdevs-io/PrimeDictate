@@ -133,9 +133,15 @@ number is meaningless.
 ## Self-contained skew probe
 
 `dotnet run --project src/PrimeDictate.Tools.ChannelSkew -- --probe [--save out.wav]` opens the same combined
-lease as the app, plays a known 3.2 s noise-burst train through the default output, and finds the train in each
+lease as the app, plays a known 3.2 s noise-burst train (low level, 0.8 s fade-in) through the default output, and finds the train in each
 channel with a matched filter (`ReferenceLocator`). It prints the lag of the microphone behind system audio, plus
 correlation and peak/sidelobe for each side, and says RESULT: unusable when either side did not hear the train.
 The matched filter finds a faint copy in room noise, so it works where envelope correlation of a recording did not.
 The lag includes the speaker path (output device latency, ~3 ms/m of air). Linux check with a null sink whose
 suspend-on-idle module is unloaded: +14 ms (the miniaudio mic's known ~20 ms). Not yet run on Windows.
+
+The probe refuses to play when the default output looks like headphones or a headset (Windows endpoint form
+factor, or a name such as headset/Arctis/AirPods/Bluetooth; Linux `device.form_factor` or name) and tells the
+user to switch to speakers; `--allow-headphones` overrides. First Windows runs, both on a wireless headset:
+loopback found the train ~75 ms after play(), system stream opened 41 to 65 ms after the mic, no padding; the
+headset mic heard its own earcup leak, giving +149 ms, which is not a capture offset, so no fixed correction is applied.

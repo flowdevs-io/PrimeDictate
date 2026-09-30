@@ -6,7 +6,7 @@ if (args.Length >= 1 && args[0] == "--probe")
 {
     // ChannelSkew --probe [--save recording.wav]: self-contained measurement, no app needed.
     var save = args.Length >= 3 && args[1] == "--save" ? args[2] : null;
-    return await Probe.RunAsync(save);
+    return await Probe.RunAsync(save, args.Contains("--allow-headphones"));
 }
 
 if (args.Length != 1 || !File.Exists(args[0]))

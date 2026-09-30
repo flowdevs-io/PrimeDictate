@@ -11,8 +11,20 @@ internal static class Probe
 {
     private const int PlayRate = 48_000;
 
-    public static async Task<int> RunAsync(string? saveWavPath)
+    /// <summary>Peak level of the test signal. Deliberately low: it is noise, and it may be next to someone's ears.</summary>
+    private const float PlayLevel = 0.15f;
+    private const int FadeInMs = 800;
+
+    public static async Task<int> RunAsync(string? saveWavPath, bool allowHeadphones)
     {
+        var headphones = OutputGuard.DetectHeadphones();
+        if (headphones is not null && !allowHeadphones)
+        {
+            Console.Error.WriteLine($"Refusing to play: the default output looks like headphones or a headset: {headphones}.");
+            Console.Error.WriteLine("The mic cannot hear those, and the noise goes into your ears. Switch the Windows default output to speakers and rerun. (--allow-headphones overrides; the level is low and fades in.)");
+            return 3;
+        }
+
         var system = SystemAudioSources.TryCreate(out var reason);
         if (system is null)
         {
@@ -32,13 +44,18 @@ internal static class Probe
         }
 
         var reference = ReferenceLocator.NoiseBurstTrain(16_000);
+        for (var i = 0; i < reference.Length; i++)
+        {
+            reference[i] *= PlayLevel * Math.Min(1f, i / (16_000f * FadeInMs / 1000)); // the exact signal that is played, so the matched filter still fits
+        }
+
         var trainSeconds = reference.Length / 16_000.0;
         var left = new List<float>();
         var right = new List<float>();
         var lease = await new CombinedAudioSource(mic, system).OpenAsync(null, default);
         await using var _ = lease;
         Console.WriteLine($"Microphone: {lease.DeviceName}");
-        Console.WriteLine($"Opened combined lease at {lease.Format.SampleRate} Hz, {lease.Format.Channels} ch. Playing a {trainSeconds:0.0} s noise train through the default output; keep the speakers on and turn them up.");
+        Console.WriteLine($"Opened combined lease at {lease.Format.SampleRate} Hz, {lease.Format.Channels} ch. Playing a {trainSeconds:0.0} s noise train through the default output; at a low level with a fade-in. Keep the mic within about a metre of the speakers.");
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1.5 + trainSeconds + 2.5));
         var clock = Stopwatch.StartNew();
