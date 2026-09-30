@@ -676,33 +676,45 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         var document = host.Document;
         IEnumerable<TranscriptSegment> Finals(string prefix) => document.ActiveSegments.Where(s => s.State == SegmentState.Final && s.Id.StartsWith(prefix, StringComparison.Ordinal));
         var hidden = 0;
+        var trimmed = 0;
+        void Apply(TranscriptSegment mic, IEnumerable<TranscriptSegment> system)
+        {
+            if (EchoMatcher.Judge(mic, system) is not { } verdict)
+            {
+                return;
+            }
+
+            if (verdict.HideAll)
+            {
+                host.Edit(mic.Id, string.Empty);
+                hidden++;
+            }
+            else
+            {
+                host.Apply(new SegmentFinalized(document.SessionId, verdict.Trimmed!));
+                trimmed++;
+            }
+        }
+
         if (isMicrophone)
         {
             var system = Finals("us").ToList();
             foreach (var mic in justFinalized)
             {
-                if (system.Any(s => EchoMatcher.Overlaps(mic.Start, mic.End, s.Start, s.End) && EchoMatcher.Repeats(mic.RawText, s.RawText)))
-                {
-                    host.Edit(mic.Id, string.Empty);
-                    hidden++;
-                }
+                Apply(mic, system);
             }
         }
         else
         {
             foreach (var mic in Finals("um").Where(m => m.DisplayText.Length > 0))
             {
-                if (justFinalized.Any(s => EchoMatcher.Overlaps(mic.Start, mic.End, s.Start, s.End) && EchoMatcher.Repeats(mic.RawText, s.RawText)))
-                {
-                    host.Edit(mic.Id, string.Empty);
-                    hidden++;
-                }
+                Apply(mic, justFinalized);
             }
         }
 
-        if (hidden > 0 && Interlocked.Exchange(ref this.echoNoted, 1) == 0)
+        if (hidden + trimmed > 0 && Interlocked.Exchange(ref this.echoNoted, 1) == 0)
         {
-            host.AddNote("Microphone lines that repeat what the system audio just said (the microphone hears the speakers) are hidden. The recognized text is kept in the session.");
+            host.AddNote("The microphone hears the speakers, so words that repeat what the system audio just said are removed from the You lines (a line that is only an echo is hidden, and its recognized text is kept).");
         }
     }
 
