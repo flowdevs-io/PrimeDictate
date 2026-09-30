@@ -110,6 +110,8 @@ public sealed partial class MainWindow : Window
         this.AddHandler(DragDrop.DropEvent, this.OnDrop);
         this.Opened += async (_, _) => await this.InitializeWorkspaceAsync();
         this.Closing += (_, _) => this.workspace.DiscardLiveAsync().GetAwaiter().GetResult();
+        // Closing the window ends the speech worker too; left running it keeps the GPU's memory.
+        this.Closed += (_, _) => this.workspace.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(10));
     }
 
     /// <summary>Selects the newest session; used by the smoke screenshot.</summary>
@@ -249,22 +251,13 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>Redraws a finished meeting's speaker timeline from the whole-file diarizer, so overlapping speech shows.</summary>
-    private async Task RefineTimelineAsync(Guid sessionId)
+    private async Task RefineTimelineAsync(SessionDocumentHost target)
     {
-        var (overlay, reason) = await this.workspace.BuildOverlayAsync(sessionId, CancellationToken.None);
-        if (this.host is not { } current || current.Document.SessionId != sessionId)
+        var overlay = await this.workspace.RefineSpeakerTimelineAsync(target, CancellationToken.None);
+        if (overlay is not null && ReferenceEquals(this.host, target))
         {
-            return;
+            this.Timeline.SetOverlay(overlay.MapTo(target.Document));
         }
-
-        if (overlay is null)
-        {
-            current.AddNote($"Speaker timeline was not redrawn: {reason}");
-            return;
-        }
-
-        this.Timeline.SetOverlay(overlay.MapTo(current.Document));
-        current.AddNote($"Speaker timeline redrawn from the diarizer: {overlay.SpeakerCount} system speakers, {overlay.OverlapSeconds:0.#} s of overlapping speech.");
     }
 
     private void OnDocumentChanged(TranscriptDocument _)
@@ -756,10 +749,10 @@ public sealed partial class MainWindow : Window
         this.EndJob();
         this.Say(target?.Document.Status == TranscriptSessionStatus.Completed ? "Saved." : $"Stopped: {target?.Document.Status}. What was captured is kept.");
         await this.ReloadSessionsAsync(target?.Document.SessionId);
-        if (target is { Document.SourceType: TranscriptSourceType.Meeting } meeting && meeting.Document.Status == TranscriptSessionStatus.Completed)
+        if (target is { Document.SourceType: TranscriptSourceType.Meeting } meeting)
         {
             this.Say("Saved. Redrawing the speaker timeline…");
-            await this.RunSafelyAsync(() => this.RefineTimelineAsync(meeting.Document.SessionId));
+            await this.RunSafelyAsync(() => this.RefineTimelineAsync(meeting));
             this.Say("Saved.");
         }
     }

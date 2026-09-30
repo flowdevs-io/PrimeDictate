@@ -31,6 +31,30 @@ public sealed class StorageTests : IDisposable
     }
 
     [Fact]
+    public async Task Segments_saved_in_finish_order_load_sorted_by_start_and_a_late_note_needs_its_own_checkpoint()
+    {
+        await using var store = await this.OpenStoreAsync();
+        var doc = NewDocument();
+        doc = TranscriptDocumentReducer.Apply(doc, new SessionStarted(doc.SessionId, Run()), Now);
+        // The two meeting streams finish in any order, so segments are stored in the order they were finalized.
+        foreach (var (id, start) in new[] { ("us0.0", 5.0), ("um0.0", 1.0), ("us0.1", 3.0) })
+        {
+            doc = TranscriptDocumentReducer.Apply(doc, new SegmentFinalized(doc.SessionId, Segment(id, id, start, start + 1)), Now);
+        }
+
+        var host = new PrimeDictate.Core.Pipeline.SessionDocumentHost(doc, store);
+        await host.CheckpointAsync();
+        host.AddNote("added after the session was already saved");
+
+        Assert.DoesNotContain("added after the session was already saved", (await store.LoadAsync(doc.SessionId, default))!.Notes);
+        await host.CheckpointAsync();
+        var loaded = (await store.LoadAsync(doc.SessionId, default))!;
+
+        Assert.Equal(["um0.0", "us0.1", "us0.0"], loaded.Segments.Select(s => s.Id));
+        Assert.Contains("added after the session was already saved", loaded.Notes);
+    }
+
+    [Fact]
     public async Task Checkpoint_round_trips_final_content_but_not_partials()
     {
         await using var store = await this.OpenStoreAsync();

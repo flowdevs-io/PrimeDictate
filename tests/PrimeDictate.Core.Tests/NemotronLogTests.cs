@@ -46,6 +46,26 @@ public sealed class NemotronLogTests
     }
 
     [Fact]
+    public void Tracking_a_process_that_was_already_disposed_does_not_throw_and_helpers_are_killed_on_request()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;
+        }
+
+        var gone = System.Diagnostics.Process.Start("/bin/true")!;
+        gone.WaitForExit();
+        gone.Dispose();
+        var sleeper = System.Diagnostics.Process.Start("/bin/sleep", "60")!;
+
+        ChildProcessJob.TryAdd(gone);
+        ChildProcessJob.TryAdd(sleeper);
+        ChildProcessJob.KillAll();
+
+        Assert.True(sleeper.WaitForExit(5000));
+    }
+
+    [Fact]
     public void Long_lines_are_cut_short()
     {
         var kept = NemotronLog.Filter("[asr] " + new string('x', 1000));

@@ -465,6 +465,51 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         return (overlay, error);
     }
 
+    /// <summary>
+    /// Runs the whole-file diarizer for a finished meeting and always says what happened in the session's notes, saved to
+    /// the database: that it started, and then that it worked or why it did not. The notes are saved here because nothing
+    /// else writes the session again after Stop.
+    /// </summary>
+    public async Task<DiarizationOverlay?> RefineSpeakerTimelineAsync(SessionDocumentHost host, CancellationToken cancellationToken)
+    {
+        async Task NoteAsync(string text)
+        {
+            host.AddNote(text);
+            await host.CheckpointAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+
+        var document = host.Document;
+        if (document.SourceType != TranscriptSourceType.Meeting)
+        {
+            return null;
+        }
+
+        if (document.Status != TranscriptSessionStatus.Completed)
+        {
+            await NoteAsync($"Speaker timeline was not redrawn: the session ended as {document.Status}, not Completed.").ConfigureAwait(false);
+            return null;
+        }
+
+        try
+        {
+            await NoteAsync("Redrawing the speaker timeline from the diarizer (running)…").ConfigureAwait(false);
+            var (overlay, reason) = await this.BuildOverlayAsync(document.SessionId, cancellationToken).ConfigureAwait(false);
+            if (overlay is null)
+            {
+                await NoteAsync($"Speaker timeline was not redrawn: {reason}").ConfigureAwait(false);
+                return null;
+            }
+
+            await NoteAsync($"Speaker timeline redrawn from the diarizer: {overlay.SpeakerCount} system speakers, {overlay.OverlapSeconds:0.#} s of overlapping speech.").ConfigureAwait(false);
+            return overlay;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await NoteAsync($"Speaker timeline was not redrawn: {ex.Message}").ConfigureAwait(false);
+            return null;
+        }
+    }
+
     public async Task DiscardLiveAsync()
     {
         var session = Interlocked.Exchange(ref this.live, null);
@@ -501,14 +546,21 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await this.DiscardLiveAsync().ConfigureAwait(false);
-        foreach (var provider in this.providers.Values)
-        {
-            await provider.DisposeAsync().ConfigureAwait(false);
-        }
-
+        // Stop the worker first: it holds the GPU, and the providers' sockets then close quickly instead of waiting on it.
         if (this.nemotronWorker is not null)
         {
             await this.nemotronWorker.DisposeAsync().ConfigureAwait(false);
+        }
+
+        foreach (var provider in this.providers.Values)
+        {
+            try
+            {
+                await provider.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is TimeoutException or ObjectDisposedException or InvalidOperationException)
+            {
+            }
         }
 
         await this.store.DisposeAsync().ConfigureAwait(false);

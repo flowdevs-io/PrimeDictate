@@ -6,17 +6,64 @@ namespace PrimeDictate.Platforms.Nemotron;
 /// <summary>
 /// Ties helper processes to this app on Windows: they go into a job object that kills them when the app's last handle
 /// to it closes, which includes a crash or a force-kill (a rebuild, Task Manager). Without it a killed app leaves the
-/// GPU-holding <c>nemo-speech</c> worker running. Other platforms have no equivalent here and return false; there the
-/// worker still dies when the app disposes it normally.
+/// GPU-holding <c>nemo-speech</c> worker running. Every platform also kills the helpers when the app exits normally or
+/// after an unhandled error; only a force-kill on Linux or macOS can still leave one behind.
 /// </summary>
 public static class ChildProcessJob
 {
     private static readonly object Gate = new();
     private static IntPtr job;
+    private static readonly List<Process> Started = [];
 
-    /// <returns>True when the process is now tied to this app.</returns>
+    static ChildProcessJob() => AppDomain.CurrentDomain.ProcessExit += (_, _) => KillAll();
+
+    /// <summary>Kills every helper still running. Runs when the app exits on any platform, including after an unhandled error.</summary>
+    public static void KillAll()
+    {
+        Process[] running;
+        lock (Gate)
+        {
+            running = [.. Started];
+            Started.Clear();
+        }
+
+        foreach (var process in running)
+        {
+            try
+            {
+                if (!IsGone(process))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+            }
+        }
+    }
+
+    /// <summary>True when the process ended or its object was already disposed.</summary>
+    private static bool IsGone(Process process)
+    {
+        try
+        {
+            return process.HasExited;
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+    }
+
+    /// <returns>True when the process is now tied to this app by the operating system (Windows job object).</returns>
     public static bool TryAdd(Process process)
     {
+        lock (Gate)
+        {
+            Started.RemoveAll(IsGone);
+            Started.Add(process);
+        }
+
         if (!OperatingSystem.IsWindows())
         {
             return false;
