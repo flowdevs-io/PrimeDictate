@@ -329,8 +329,9 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
     /// <see cref="DiscardAsync"/> it does not return early because a stop is already under way, and it never waits longer than
     /// <paramref name="grace"/> for the device, the capture loop or the recognizer, so a stalled device or a hung stop cannot keep the
     /// session Running. A session that already completed stays Completed. The audio written so far is flushed and kept.
+    /// With <paramref name="recoverable"/> the session ends Interrupted instead, the state the next launch finishes from its saved audio.
     /// </summary>
-    public async Task AbortAsync(TimeSpan grace)
+    public async Task AbortAsync(TimeSpan grace, bool recoverable = false)
     {
         this.discard = true;
         Volatile.Write(ref this.stopped, 1);
@@ -358,9 +359,10 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
 
         if (this.Host is { } host)
         {
-            if (TranscriptionSessionStateMachine.CanTransition(host.Document.Status, TranscriptSessionStatus.Canceled))
+            var end = recoverable ? TranscriptSessionStatus.Interrupted : TranscriptSessionStatus.Canceled;
+            if (TranscriptionSessionStateMachine.CanTransition(host.Document.Status, end))
             {
-                host.SetStatus(TranscriptSessionStatus.Canceled);
+                host.SetStatus(end);
             }
 
             await host.CheckpointAsync(CancellationToken.None).ConfigureAwait(false);

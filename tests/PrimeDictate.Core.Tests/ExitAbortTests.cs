@@ -137,4 +137,41 @@ public sealed class ExitAbortTests : IDisposable
             Assert.Equal(status == TranscriptSessionStatus.Completed ? TranscriptSessionStatus.Completed : TranscriptSessionStatus.Canceled, loaded!.Status);
         }
     }
+
+    [Fact]
+    public async Task Exit_leaves_a_cut_off_record_only_meeting_recoverable_and_the_next_launch_picks_it_up()
+    {
+        var paths = new AppDataPaths(this.root);
+        Guid meeting = Guid.NewGuid(), discarded = Guid.NewGuid(), dictation = Guid.NewGuid();
+        await using (var seed = SqliteTranscriptionSessionStore.Create(paths))
+        {
+            await seed.InitializeAsync(default);
+            foreach (var (id, type, marker) in new[] { (meeting, TranscriptSourceType.Meeting, true), (discarded, TranscriptSourceType.Meeting, false), (dictation, TranscriptSourceType.Microphone, false) })
+            {
+                var now = DateTimeOffset.UtcNow;
+                await seed.SaveCheckpointAsync(new TranscriptDocument { SessionId = id, Title = "t", SourceType = type, CreatedAt = now, UpdatedAt = now, Status = TranscriptSessionStatus.Running }, default);
+                var directory = seed.GetSessionMediaDirectory(id);
+                Directory.CreateDirectory(directory);
+                new WavFileWriter(Path.Combine(directory, "recording-16k-stereo.wav"), 16_000, 2).Dispose();
+                if (marker)
+                {
+                    PrimeDictate.Platforms.Nemotron.FinalPassPending.Mark(directory);
+                }
+            }
+        }
+
+        await using (var first = new PrimeDictate.Platforms.TranscriptionWorkspaceService(paths, null, probeMicrophone: false))
+        {
+            await first.StopLiveForExitAsync(TimeSpan.FromSeconds(2));
+        }
+
+        await using var second = new PrimeDictate.Platforms.TranscriptionWorkspaceService(paths, null, probeMicrophone: false);
+        await second.InitializeAsync(default);
+        var sessions = await second.ListSessionsAsync(default);
+        Assert.Equal(TranscriptSessionStatus.Interrupted, sessions.Single(x => x.SessionId == meeting).Status);
+        Assert.Equal(TranscriptSessionStatus.Canceled, sessions.Single(x => x.SessionId == discarded).Status);
+        Assert.Equal(TranscriptSessionStatus.Canceled, sessions.Single(x => x.SessionId == dictation).Status);
+        // The next launch offers exactly the cut-off meeting to the after-Stop pass.
+        Assert.Equal([meeting], await second.FinalPassPendingSessionsAsync(default));
+    }
 }

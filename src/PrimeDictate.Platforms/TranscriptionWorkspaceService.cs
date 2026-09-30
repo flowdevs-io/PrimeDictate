@@ -752,6 +752,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         {
             // Idempotent: a tray-only start never opened the store, but a session left Running by an earlier run still has to be closed.
             await this.store.InitializeAsync(CancellationToken.None).ConfigureAwait(false);
+            await this.MarkRecoverableMeetingsAsync().ConfigureAwait(false);
             var swept = await this.store.CancelInFlightSessionsAsync("The app was closed while this session was still recording. The audio and text captured so far are kept.", CancellationToken.None).ConfigureAwait(false);
             if (swept > 0)
             {
@@ -764,6 +765,33 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// A meeting whose after-Stop pass is pending and whose stereo recording is on disk is finished on the next launch, but only from
+    /// Running, Interrupted or Failed. So such a meeting is left Interrupted by exit, not Canceled (which means the user threw it away).
+    /// </summary>
+    private bool IsRecoverableMeeting(TranscriptDocument? document) =>
+        document is { SourceType: TranscriptSourceType.Meeting } d
+        && FinalPassPending.IsPending(this.store.GetSessionMediaDirectory(d.SessionId))
+        && File.Exists(Path.Combine(this.store.GetSessionMediaDirectory(d.SessionId), "recording-16k-stereo.wav"));
+
+    private async Task MarkRecoverableMeetingsAsync()
+    {
+        var inFlight = new[] { TranscriptSessionStatus.Created, TranscriptSessionStatus.Running, TranscriptSessionStatus.Paused, TranscriptSessionStatus.Finalizing };
+        foreach (var summary in await this.store.ListAsync(0, int.MaxValue, CancellationToken.None).ConfigureAwait(false))
+        {
+            if (summary.SourceType != TranscriptSourceType.Meeting || !inFlight.Contains(summary.Status))
+            {
+                continue;
+            }
+
+            var document = await this.store.LoadAsync(summary.SessionId, CancellationToken.None).ConfigureAwait(false);
+            if (document is not null && this.IsRecoverableMeeting(document))
+            {
+                await this.store.SaveCheckpointAsync(document with { Status = TranscriptSessionStatus.Interrupted, UpdatedAt = DateTimeOffset.UtcNow }, CancellationToken.None).ConfigureAwait(false);
+            }
+        }
+    }
+
     private async Task AbortLiveAsync(LiveTranscriptionSession session)
     {
         Interlocked.CompareExchange(ref this.live, null, session);
@@ -771,7 +799,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         Interlocked.CompareExchange(ref this.stopping, null, session);
         try
         {
-            await session.AbortAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+            await session.AbortAsync(TimeSpan.FromSeconds(3), this.IsRecoverableMeeting(session.Host?.Document)).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
