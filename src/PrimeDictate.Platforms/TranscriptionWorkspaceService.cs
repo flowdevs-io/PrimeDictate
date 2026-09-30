@@ -499,6 +499,44 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     /// </summary>
     public async Task<FinalPassResult?> RunFinalPassAsync(SessionDocumentHost host, IProgress<double>? progress, CancellationToken cancellationToken)
     {
+        try
+        {
+            return await this.RunFinalPassCoreAsync(host, progress, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // Whatever happened, the pass has had its turn; only an app exit before it ran leaves the marker for the next launch.
+            this.ClearFinalPassPending(host.Document.SessionId);
+        }
+    }
+
+    /// <summary>Remembers that this meeting still needs its after-Stop pass, so an exit before it runs does not leave a draft forever.</summary>
+    public void MarkFinalPassPending(Guid sessionId) => FinalPassPending.Mark(this.store.GetSessionMediaDirectory(sessionId));
+
+    public void ClearFinalPassPending(Guid sessionId)
+    {
+        try
+        {
+            FinalPassPending.Clear(this.store.GetSessionMediaDirectory(sessionId));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
+    /// <summary>Completed meetings whose after-Stop pass never ran, newest first.</summary>
+    public async Task<IReadOnlyList<Guid>> FinalPassPendingSessionsAsync(CancellationToken cancellationToken)
+    {
+        var sessions = await this.ListSessionsAsync(cancellationToken).ConfigureAwait(false);
+        return sessions
+            .Where(x => x.SourceType == TranscriptSourceType.Meeting && x.Status == TranscriptSessionStatus.Completed && FinalPassPending.IsPending(this.store.GetSessionMediaDirectory(x.SessionId)))
+            .OrderByDescending(x => x.CreatedAt)
+            .Select(x => x.SessionId)
+            .ToList();
+    }
+
+    private async Task<FinalPassResult?> RunFinalPassCoreAsync(SessionDocumentHost host, IProgress<double>? progress, CancellationToken cancellationToken)
+    {
         async Task NoteAsync(string text)
         {
             host.AddNote(text);

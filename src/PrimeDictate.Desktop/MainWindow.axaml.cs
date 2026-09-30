@@ -114,7 +114,11 @@ public sealed partial class MainWindow : Window
         DragDrop.SetAllowDrop(this, true);
         this.AddHandler(DragDrop.DragOverEvent, (_, e) => e.DragEffects = e.DataTransfer.Contains(DataFormat.File) ? DragDropEffects.Copy : DragDropEffects.None);
         this.AddHandler(DragDrop.DropEvent, this.OnDrop);
-        this.Opened += async (_, _) => await this.InitializeWorkspaceAsync();
+        this.Opened += async (_, _) =>
+        {
+            await this.InitializeWorkspaceAsync();
+            await this.RunSafelyAsync(this.ResumePendingFinalPassAsync);
+        };
         this.Closing += (_, e) =>
         {
             // With hide-to-tray a click on the window's close button only hides it, so a recording must keep running.
@@ -221,6 +225,33 @@ public sealed partial class MainWindow : Window
             this.ImportButton.IsEnabled = false;
             this.RecordButton.IsEnabled = false;
         }
+    }
+
+    /// <summary>A meeting saved by an exit before its after-Stop pass ran is finished on the next launch, newest first, one per launch.</summary>
+    private async Task ResumePendingFinalPassAsync()
+    {
+        if (!this.workspace.FinalPassAvailable || this.live is not null)
+        {
+            return;
+        }
+
+        var pending = await this.workspace.FinalPassPendingSessionsAsync(CancellationToken.None);
+        if (pending.Count == 0)
+        {
+            return;
+        }
+
+        var target = await this.workspace.OpenSessionAsync(pending[0], CancellationToken.None);
+        if (target is null)
+        {
+            this.workspace.ClearFinalPassPending(pending[0]);
+            return;
+        }
+
+        this.Attach(target);
+        await this.ReloadSessionsAsync(target.Document.SessionId);
+        this.Say($"\"{target.Document.Title}\" was saved before its transcript was finished. Finishing it now...");
+        await this.FinalPassAsync(target);
     }
 
     private SpeechModelChoice? SelectedModel => this.ModelBox.SelectedIndex is >= 0 and var i && i < this.models.Count ? this.models[i] : null;
@@ -729,6 +760,11 @@ public sealed partial class MainWindow : Window
             this.DiscardButton.IsVisible = true;
             this.stickToBottom = true;
             this.Timeline.FollowLive();
+            if (this.twoPassPlanned)
+            {
+                this.workspace.MarkFinalPassPending(this.live.Host!.Document.SessionId);
+            }
+
             this.Attach(this.live.Host!);
             await this.ReloadSessionsAsync(this.live.Host!.Document.SessionId);
             this.Say(recordOnly
