@@ -52,7 +52,7 @@ public sealed class RecordOnlyTests
         var failed = silent with { DiarizerProblem = "exited with code 1" };
         Assert.Contains("could not be told apart: exited with code 1", failed.Describe());
         var heard = silent with { Overlay = new PrimeDictate.Core.Transcripts.DiarizationOverlay([new("speaker_1", 0, 2), new("speaker_2", 2, 4)]) };
-        Assert.Contains("diarizer heard 2 speakers", heard.Describe());
+        Assert.Contains("diarizer found only 2 speakers and 4 s of speech", heard.Describe());
         var normal = silent with { SystemLines = 4, SpeakerCount = 2, OverlapSeconds = 1.5 };
         Assert.Contains("2 speakers on the system audio, 1.5 s", normal.Describe());
     }

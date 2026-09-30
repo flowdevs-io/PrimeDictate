@@ -537,7 +537,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
                 directory,
                 progress,
                 cancellationToken).ConfigureAwait(false);
-            await NoteAsync($"Final pass ({asr.Runtime.EffectiveBackend}): {result.MicrophoneLines} lines from the microphone, {result.SystemLines} from the system audio, {result.SpeakerCount} system speakers ({result.Overlay?.Mode ?? "no"} diarization), {result.OverlapSeconds:0.#} s of overlapping speech. These rows replace the live draft, which is kept as the earlier result."
+            await NoteAsync($"Final pass ({asr.Runtime.EffectiveBackend}): {result.MicrophoneLines} lines from the microphone, {result.SystemLines} from the system audio, {result.SpeakerCount} system speakers ({result.Overlay?.Mode ?? "no"} diarization), {result.OverlapSeconds:0.#} s of overlapping speech. These rows replace the live draft, which is kept as the earlier result. Channels: {result.ChannelReport}."
                 + (result.DiarizerProblem is { } problem ? $" Speakers could not be told apart: {problem}" : result.SystemLines == 0 ? " " + result.Describe() : string.Empty)).ConfigureAwait(false);
             return result;
         }

@@ -7,7 +7,7 @@ using PrimeDictate.Core.Transcripts;
 namespace PrimeDictate.Platforms.Nemotron;
 
 /// <summary>What the final pass produced, for the note on the session and the timeline.</summary>
-public sealed record FinalPassResult(int ResultVersion, int MicrophoneLines, int SystemLines, int SpeakerCount, double OverlapSeconds, DiarizationOverlay? Overlay, string? DiarizerProblem)
+public sealed record FinalPassResult(int ResultVersion, int MicrophoneLines, int SystemLines, int SpeakerCount, double OverlapSeconds, DiarizationOverlay? Overlay, string? DiarizerProblem, string? ChannelReport = null)
 {
     /// <summary>One sentence for the status line. Zero speakers is explained: nobody spoke on the system side, or the diarizer failed.</summary>
     public string Describe()
@@ -20,7 +20,7 @@ public sealed record FinalPassResult(int ResultVersion, int MicrophoneLines, int
         if (this.SystemLines == 0)
         {
             return this.Overlay is { SpeakerCount: > 0 } o
-                ? $"Final transcript ready. The diarizer heard {o.SpeakerCount} speakers on the system audio, but no words were recognized there."
+                ? $"Final transcript ready. The diarizer found only {o.SpeakerCount} speaker{(o.SpeakerCount == 1 ? string.Empty : "s")} and {o.SpeechSeconds:0.#} s of speech on the system audio, and no words were recognized there."
                 : "Final transcript ready. Nothing was recognized on the system audio (no one spoke there, or it was silent).";
         }
 
@@ -62,6 +62,8 @@ public sealed class MeetingFinalPass(ModelLeaseScheduler scheduler)
         var mic = new List<TranscriptSegment>();
         var system = new List<TranscriptSegment>();
         var total = host.Document.Duration ?? TimeSpan.Zero;
+        // Per channel: samples, sum of squares, peak, windows cut, windows sent to the recognizer, words back.
+        var stats = new (long Samples, double Squares, float Peak, int Windows, int Sent, int Words)[2];
 
         async Task RecognizeAsync(int channel, IReadOnlyList<AudioChunk> chunks)
         {
@@ -69,6 +71,16 @@ public sealed class MeetingFinalPass(ModelLeaseScheduler scheduler)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var index = counters[channel]++;
+                var st = stats[channel];
+                st.Windows++;
+                foreach (var v in chunk.Samples)
+                {
+                    st.Squares += v * v;
+                    st.Peak = Math.Max(st.Peak, Math.Abs(v));
+                }
+
+                st.Samples += chunk.Samples.Length;
+                stats[channel] = st;
                 if (!chunk.ContainsSpeech)
                 {
                     continue;
@@ -80,6 +92,8 @@ public sealed class MeetingFinalPass(ModelLeaseScheduler scheduler)
                     recognized = await asr.RecognizeWindowAsync(chunk.Samples, language, cancellationToken).ConfigureAwait(false);
                 }
 
+                stats[channel].Sent++;
+                stats[channel].Words += recognized.Sum(r => r.Words?.Count ?? r.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length);
                 if (channel == 0)
                 {
                     var forced = recognized.Select(r => r with { SpeakerLabel = "local", Words = r.Words?.Select(w => w with { SpeakerId = "local" }).ToList() });
@@ -167,7 +181,10 @@ public sealed class MeetingFinalPass(ModelLeaseScheduler scheduler)
         }
 
         var speakers = system.SelectMany(s => s.Speakers).Select(a => a.SpeakerId).Distinct().Count();
-        return new FinalPassResult(resultVersion, mic.Count, system.Count, speakers, overlay?.OverlapSeconds ?? 0, overlay, diarizerProblem);
+        string Report(string name, int c) => stats[c].Samples == 0
+            ? $"{name}: no audio"
+            : $"{name}: rms {Math.Sqrt(stats[c].Squares / stats[c].Samples) * 32768:0}, peak {stats[c].Peak * 32768:0}, {stats[c].Sent} of {stats[c].Windows} windows sent, {stats[c].Words} words";
+        return new FinalPassResult(resultVersion, mic.Count, system.Count, speakers, overlay?.OverlapSeconds ?? 0, overlay, diarizerProblem, $"{Report("microphone", 0)}; {Report("system", 1)}");
     }
 
     /// <summary>

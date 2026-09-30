@@ -19,6 +19,27 @@ public sealed record DiarizationOverlay(IReadOnlyList<DiarizationSegment> Segmen
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
+    /// <summary>Total seconds during which at least one diarizer speaker is active.</summary>
+    public double SpeechSeconds
+    {
+        get
+        {
+            double total = 0, end = double.MinValue;
+            foreach (var s in this.Segments.OrderBy(x => x.Start))
+            {
+                var from = Math.Max(s.Start, end);
+                if (s.End > from)
+                {
+                    total += s.End - from;
+                }
+
+                end = Math.Max(end, s.End);
+            }
+
+            return total;
+        }
+    }
+
     /// <summary>Total seconds during which two or more diarizer speakers are active at once.</summary>
     public double OverlapSeconds
     {
@@ -62,14 +83,20 @@ public sealed record DiarizationOverlay(IReadOnlyList<DiarizationSegment> Segmen
         File.WriteAllText(Path.Combine(mediaDirectory, FileName), JsonSerializer.Serialize(this, JsonOptions));
 
     /// <summary>Parses the worker's <c>--format json</c>: <c>{"segments":[{"start":0.0,"end":2.0,"speaker":1}]}</c>. Bad input gives no segments.</summary>
-    public static IReadOnlyList<DiarizationSegment> ParseJson(string json)
+    public static IReadOnlyList<DiarizationSegment> ParseJson(string json) => TryParseJson(json, out var segments) ? segments : [];
+
+    /// <summary>False when the text is not the expected JSON at all (as opposed to valid JSON with no segments).</summary>
+    public static bool TryParseJson(string json, out IReadOnlyList<DiarizationSegment> segments)
     {
+        segments = [];
         try
         {
-            using var doc = JsonDocument.Parse(json);
+            // Tolerate log lines before the object.
+            var brace = json.IndexOf('{');
+            using var doc = JsonDocument.Parse(brace > 0 ? json[brace..] : json);
             if (!doc.RootElement.TryGetProperty("segments", out var list) || list.ValueKind != JsonValueKind.Array)
             {
-                return [];
+                return false;
             }
 
             var result = new List<DiarizationSegment>();
@@ -83,11 +110,12 @@ public sealed record DiarizationOverlay(IReadOnlyList<DiarizationSegment> Segmen
                 }
             }
 
-            return result.OrderBy(x => x.Start).ToList();
+            segments = result.OrderBy(x => x.Start).ToList();
+            return true;
         }
         catch (JsonException)
         {
-            return [];
+            return false;
         }
     }
 

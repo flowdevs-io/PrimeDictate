@@ -169,3 +169,121 @@ public sealed class MeetingFinalPassTests : IDisposable
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }
+
+public sealed class SystemChannelTests : IDisposable
+{
+    private readonly string root = Path.Combine(Path.GetTempPath(), "pd-syschan", Guid.NewGuid().ToString("N"));
+
+    public void Dispose()
+    {
+        if (Directory.Exists(this.root))
+        {
+            Directory.Delete(this.root, recursive: true);
+        }
+    }
+
+    /// <summary>Loud speech-like right channel (rms about 0.06, peak 0.84) and a very quiet left one.</summary>
+    private string LoudRightQuietLeft(int seconds = 8)
+    {
+        Directory.CreateDirectory(this.root);
+        var path = Path.Combine(this.root, "stereo.wav");
+        using var writer = new WavFileWriter(path, 16_000, 2);
+        var samples = new float[seconds * 16_000 * 2];
+        for (var i = 0; i < seconds * 16_000; i++)
+        {
+            samples[i * 2] = 0.003f * MathF.Sin(i * 0.05f);
+            samples[(i * 2) + 1] = 0.84f * MathF.Sin(i * 0.07f) * (0.5f + (0.5f * MathF.Sin(i * 0.0004f)));
+        }
+
+        writer.Write(samples);
+        return path;
+    }
+
+    [Fact]
+    public async Task The_extracted_file_is_the_right_channel_at_16k_mono_16_bit()
+    {
+        var stereo = this.LoudRightQuietLeft();
+        var mono = Path.Combine(this.root, "mono.wav");
+
+        await NemotronDiarizer.ExtractChannelAsync(stereo, 1, mono, default);
+
+        var probe = await new WavAudioDecoder().ProbeAsync(mono, default);
+        var stream = probe.AudioStreams[0];
+        Assert.Equal(1, stream.Channels);
+        Assert.Equal(16_000, stream.SampleRate);
+        Assert.Equal("pcm_s16le", stream.Codec);
+        Assert.Equal(8.0, probe.Duration!.Value.TotalSeconds, 2);
+        float peak = 0;
+        await foreach (var frame in new WavAudioDecoder().DecodeAsync(mono, 0, default))
+        {
+            peak = Math.Max(peak, frame.Samples.Span.ToArray().Max(Math.Abs));
+        }
+
+        Assert.InRange(peak, 0.8f, 0.86f);
+    }
+
+    [Fact]
+    public async Task The_recognizer_gets_every_loud_system_window_and_the_report_says_so()
+    {
+        var stereo = this.LoudRightQuietLeft(40);
+        var provider = new SeenProvider();
+        var store = SqliteTranscriptionSessionStore.Create(new AppDataPaths(this.root));
+        await store.InitializeAsync(CancellationToken.None);
+        var doc = NewDocument() with { SourceType = TranscriptSourceType.Meeting, Duration = TimeSpan.FromSeconds(40) };
+        doc = TranscriptDocumentReducer.Apply(doc, new SessionStarted(doc.SessionId, Run(1, "whisper-onnx/tiny.en")), Now);
+        var host = new SessionDocumentHost(doc, store);
+
+        var result = await new MeetingFinalPass(new ModelLeaseScheduler()).RunAsync(host, stereo, provider, _ => Task.FromResult<(DiarizationOverlay?, string?)>((null, null)), "en-US", this.root, null, default);
+
+        await store.DisposeAsync();
+        SqliteConnection.ClearAllPools();
+        Assert.Equal(2, provider.LoudWindows); // 40 s = two windows of the right channel
+        Assert.Equal(0, provider.QuietSent);   // the quiet left channel is below the silence threshold
+        Assert.Contains("system: rms", result.ChannelReport);
+        Assert.Contains("2 of 2 windows sent", result.ChannelReport);
+        Assert.Contains("microphone: rms", result.ChannelReport);
+        Assert.Contains("0 of 2 windows sent", result.ChannelReport);
+    }
+
+    private sealed class SeenProvider : ITranscriptionProvider
+    {
+        public int LoudWindows;
+        public int QuietSent;
+
+        public string ModelId => "nemotron:fake";
+
+        public TranscriptionProviderCapabilities Capabilities { get; } = new(true, LiveRecognitionMode.NativeStreaming, TimingCapabilities.WordTimestamps, false, null, TimeSpan.FromSeconds(30), ["en"], 16_000);
+
+        public EffectiveRuntime Runtime { get; } = new("fake", "1", "cuda:0", "cuda:0", null);
+
+        public ValueTask<IReadOnlyList<RecognizedSegment>> RecognizeWindowAsync(ReadOnlyMemory<float> samples, string? language, CancellationToken cancellationToken)
+        {
+            if (samples.Span.ToArray().Max(Math.Abs) > 0.5f)
+            {
+                LoudWindows++;
+            }
+            else
+            {
+                QuietSent++;
+            }
+
+            var word = new WordTiming("hi", TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1.3), null, TimingProvenance.Model);
+            return ValueTask.FromResult<IReadOnlyList<RecognizedSegment>>([new RecognizedSegment(word.Start, word.End, "hi", [word], null, null, TimingProvenance.Model)]);
+        }
+
+        public ValueTask<IStreamingRecognitionSession> StartStreamingAsync(string? language, bool diarize, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    [Fact]
+    public void Diarizer_json_is_told_apart_from_no_speech_and_tolerates_log_lines()
+    {
+        Assert.False(DiarizationOverlay.TryParseJson("not json", out _));
+        Assert.False(DiarizationOverlay.TryParseJson("{\"oops\":1}", out _));
+        Assert.True(DiarizationOverlay.TryParseJson("{\"segments\":[]}", out var none));
+        Assert.Empty(none);
+        Assert.True(DiarizationOverlay.TryParseJson("loading model...\n{\"segments\":[{\"start\":0.5,\"end\":2.0,\"speaker\":1}]}", out var one));
+        Assert.Single(one);
+    }
+}

@@ -111,7 +111,12 @@ public static class NemotronDiarizer
             }
 
             NemotronLog.Event(source, $"exited with code {process.ExitCode}");
-            var segments = DiarizationOverlay.ParseJson(text);
+            var parsed = DiarizationOverlay.TryParseJson(text, out var segments);
+            if (process.ExitCode == 0 && !parsed)
+            {
+                return (null, "The diarizer's output could not be read.");
+            }
+
             if (process.ExitCode != 0 || segments.Count == 0)
             {
                 var reason = (await errors.ConfigureAwait(false)).Trim();
