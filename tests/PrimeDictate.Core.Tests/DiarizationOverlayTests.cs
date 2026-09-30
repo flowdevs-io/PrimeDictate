@@ -105,7 +105,7 @@ public sealed class DiarizationOverlayTests
                 """);
             File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
-            var (overlay, error) = await NemotronDiarizer.RunAsync(script, "/m/diar.gguf", "cuda:0", stereo, dir, TimeSpan.FromSeconds(30), null, default);
+            var (overlay, error) = await NemotronDiarizer.RunAsync(script, "/m/diar.gguf", "cuda:0", stereo, offline: true, dir, TimeSpan.FromSeconds(30), null, default);
 
             Assert.Null(error);
             Assert.Single(overlay!.Segments);
@@ -114,6 +114,9 @@ public sealed class DiarizationOverlayTests
             Assert.Contains("--format json", args);
             Assert.Contains("--model /m/diar.gguf", args);
             Assert.Contains("--device cuda:0", args);
+            Assert.Contains("--offline", args);
+            Assert.Equal("offline", overlay.Mode);
+            Assert.DoesNotContain("--offline", string.Join(' ', NemotronDiarizer.BuildArguments("/x.wav", "/m.gguf", "cpu")));
             var received = new List<float>();
             await foreach (var frame in new WavAudioDecoder().DecodeAsync(Path.Combine(dir, "received.wav"), 0, default))
             {
@@ -152,7 +155,7 @@ public sealed class DiarizationOverlayTests
             File.WriteAllText(script, "#!/bin/sh\necho 'unknown option' >&2\nexit 2\n");
             File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
-            var (overlay, error) = await NemotronDiarizer.RunAsync(script, "/m/d.gguf", "cpu", stereo, dir, TimeSpan.FromSeconds(30), null, default);
+            var (overlay, error) = await NemotronDiarizer.RunAsync(script, "/m/d.gguf", "cpu", stereo, offline: false, dir, TimeSpan.FromSeconds(30), null, default);
 
             Assert.Null(overlay);
             Assert.Contains("code 2", error);

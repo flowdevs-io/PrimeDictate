@@ -36,6 +36,7 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
     private ClientWebSocket socket;
     private readonly Channel<StreamingUpdate> updates = Channel.CreateUnbounded<StreamingUpdate>();
     private readonly Queue<double> pendingCommitStarts = new();
+    private readonly Queue<double> pendingCommitSeconds = new();
     private readonly object sync = new();
     private readonly List<float> block = new(BlockSamples * 2);
     private CancellationTokenSource cancel = new();
@@ -248,6 +249,7 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
             }
 
             this.pendingCommitStarts.Enqueue(start / 16_000d);
+            this.pendingCommitSeconds.Enqueue(Math.Max(0, (this.endSample - start) / 16_000d));
             this.unanswered.Add((null, true));
             this.allCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             this.partial = string.Empty;
@@ -419,8 +421,12 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
         var patience = this.gotOutput ? 1.0 : 3.0;
         lock (this.sync)
         {
-            var speechStalled = this.voicedSinceOutput >= 2 && now - this.voicedSinceTicks >= this.stallTimeout.TotalMilliseconds * patience;
-            var commitStalled = this.pendingCommitStarts.Count > 0 && now - this.oldestPendingTicks >= this.stallTimeout.TotalMilliseconds * 2 * patience;
+            // While a commit is being finalized the worker is busy and says nothing, so silence then is not a stall of
+            // the speech itself. Finalizing takes longer for longer audio, and a cold GPU takes longer still.
+            var committing = this.pendingCommitStarts.Count > 0;
+            var speechStalled = !committing && this.voicedSinceOutput >= 2 && now - this.voicedSinceTicks >= this.stallTimeout.TotalMilliseconds * patience;
+            var finalizeAllowance = (this.stallTimeout.TotalMilliseconds * 2 * patience) + (committing ? this.pendingCommitSeconds.Peek() * 1000 : 0);
+            var commitStalled = committing && now - this.oldestPendingTicks >= finalizeAllowance;
             return speechStalled || commitStalled;
         }
     }
@@ -490,6 +496,7 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
                 {
                     replay = [];
                     this.unanswered.Clear();
+                    this.pendingCommitSeconds.Clear();
                     while (this.pendingCommitStarts.Count > 0)
                     {
                         var offset = this.pendingCommitStarts.Dequeue();
@@ -713,6 +720,13 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
             if (this.pendingCommitStarts.Count > 0)
             {
                 this.pendingCommitStarts.Dequeue();
+                if (this.pendingCommitSeconds.Count > 0)
+                {
+                    this.pendingCommitSeconds.Dequeue();
+                }
+
+                // The next commit in line has been waiting only since this answer came.
+                this.oldestPendingTicks = Environment.TickCount64;
             }
 
             // The answered commit and everything before it no longer needs replaying.

@@ -494,7 +494,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
                 directory,
                 progress,
                 cancellationToken).ConfigureAwait(false);
-            await NoteAsync($"Final pass ({asr.Runtime.EffectiveBackend}): {result.MicrophoneLines} lines from the microphone, {result.SystemLines} from the system audio, {result.SpeakerCount} system speakers, {result.OverlapSeconds:0.#} s of overlapping speech. These rows replace the live draft, which is kept as the earlier result."
+            await NoteAsync($"Final pass ({asr.Runtime.EffectiveBackend}): {result.MicrophoneLines} lines from the microphone, {result.SystemLines} from the system audio, {result.SpeakerCount} system speakers ({result.Overlay?.Mode ?? "no"} diarization), {result.OverlapSeconds:0.#} s of overlapping speech. These rows replace the live draft, which is kept as the earlier result."
                 + (result.DiarizerProblem is { } problem ? $" Speakers could not be told apart: {problem}" : string.Empty)).ConfigureAwait(false);
             return result;
         }
@@ -510,7 +510,11 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         }
     }
 
-    /// <summary>Diarizes the system channel with the same device choice as the live worker, falling back to the CPU worker.</summary>
+    /// <summary>
+    /// Diarizes the system channel. Accuracy first: recordings short enough use the offline (full attention) mode, longer
+    /// ones the streaming mode. It uses the same device choice as the live worker and falls back to the CPU worker, and
+    /// to streaming mode if the offline run fails.
+    /// </summary>
     private async Task<(DiarizationOverlay? Overlay, string? Error)> RunDiarizerAsync(NemotronSetup setup, string stereo, string directory, CancellationToken cancellationToken)
     {
         var attempts = new List<(string Worker, string Device)>();
@@ -520,15 +524,20 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         }
 
         attempts.Add((setup.WorkerPath, "cpu"));
+        var length = (await this.decoder.ProbeAsync(stereo, cancellationToken).ConfigureAwait(false)).Duration ?? TimeSpan.MaxValue;
+        var modes = length <= NemotronDiarizer.OfflineLimit ? new[] { true, false } : new[] { false };
         DiarizationOverlay? overlay = null;
         string? error = null;
         foreach (var (worker, device) in attempts)
         {
-            (overlay, error) = await NemotronDiarizer.RunAsync(
-                worker, setup.Files.DiarizerPath!, device, stereo, directory, TimeSpan.FromMinutes(10), this.CudaRuntimeDirectories(worker), cancellationToken).ConfigureAwait(false);
-            if (overlay is not null)
+            foreach (var offline in modes)
             {
-                break;
+                (overlay, error) = await NemotronDiarizer.RunAsync(
+                    worker, setup.Files.DiarizerPath!, device, stereo, offline, directory, TimeSpan.FromMinutes(10), this.CudaRuntimeDirectories(worker), cancellationToken).ConfigureAwait(false);
+                if (overlay is not null)
+                {
+                    return (overlay, null);
+                }
             }
         }
 

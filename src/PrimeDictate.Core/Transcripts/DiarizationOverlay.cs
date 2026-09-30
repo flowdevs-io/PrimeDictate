@@ -13,7 +13,7 @@ public sealed record OverlayBar(string SpeakerId, double Start, double End);
 /// The diarizer's own view of the system audio, run over the whole recording after Stop. Live rows carry one
 /// speaker per word, so overlapping speech is lost there; this keeps it and is used only to draw the timeline.
 /// </summary>
-public sealed record DiarizationOverlay(IReadOnlyList<DiarizationSegment> Segments)
+public sealed record DiarizationOverlay(IReadOnlyList<DiarizationSegment> Segments, string? Mode = null)
 {
     public const string FileName = "system-diarization.json";
 

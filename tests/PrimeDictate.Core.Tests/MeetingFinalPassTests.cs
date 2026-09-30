@@ -14,8 +14,12 @@ public sealed class MeetingFinalPassTests : IDisposable
 {
     private readonly string root = Path.Combine(Path.GetTempPath(), "pd-final-pass", Guid.NewGuid().ToString("N"));
 
+    private SqliteTranscriptionSessionStore? store;
+
     public void Dispose()
     {
+        // The store keeps sessions.db open (and the connection pool keeps it too); Windows will not delete an open file.
+        this.store?.DisposeAsync().AsTask().GetAwaiter().GetResult();
         SqliteConnection.ClearAllPools();
         if (Directory.Exists(this.root))
         {
@@ -75,7 +79,7 @@ public sealed class MeetingFinalPassTests : IDisposable
 
     private async Task<SessionDocumentHost> DraftAsync()
     {
-        var store = SqliteTranscriptionSessionStore.Create(new AppDataPaths(this.root));
+        var store = this.store = SqliteTranscriptionSessionStore.Create(new AppDataPaths(this.root));
         await store.InitializeAsync(CancellationToken.None);
         var doc = NewDocument() with { SourceType = TranscriptSourceType.Meeting, Duration = TimeSpan.FromSeconds(12) };
         doc = TranscriptDocumentReducer.Apply(doc, new SessionStarted(doc.SessionId, Run(1, "whisper-onnx/tiny.en")), Now);

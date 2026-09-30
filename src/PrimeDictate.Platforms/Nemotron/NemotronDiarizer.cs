@@ -14,8 +14,22 @@ namespace PrimeDictate.Platforms.Nemotron;
 /// </summary>
 public static class NemotronDiarizer
 {
-    public static IReadOnlyList<string> BuildArguments(string wavPath, string diarizerModelPath, string device) =>
-        ["diarize", wavPath, "--model", diarizerModelPath, "--device", device, "--format", "json"];
+    /// <summary>
+    /// Offline (full attention over the whole recording) is the more accurate mode but the model can only hold about
+    /// 6.6 minutes; longer recordings use the default streaming mode, which has no length limit.
+    /// </summary>
+    public static readonly TimeSpan OfflineLimit = TimeSpan.FromMinutes(6);
+
+    public static IReadOnlyList<string> BuildArguments(string wavPath, string diarizerModelPath, string device, bool offline = false)
+    {
+        var args = new List<string> { "diarize", wavPath, "--model", diarizerModelPath, "--device", device, "--format", "json" };
+        if (offline)
+        {
+            args.Add("--offline");
+        }
+
+        return args;
+    }
 
     /// <summary>Copies one channel of a multi-channel WAV to a mono 16 kHz WAV.</summary>
     public static async Task ExtractChannelAsync(string stereoPath, int channel, string monoPath, CancellationToken cancellationToken)
@@ -42,6 +56,7 @@ public static class NemotronDiarizer
         string diarizerModelPath,
         string device,
         string stereoWavPath,
+        bool offline,
         string workDirectory,
         TimeSpan timeout,
         IEnumerable<string>? extraPathDirectories,
@@ -58,7 +73,7 @@ public static class NemotronDiarizer
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
-            foreach (var arg in BuildArguments(monoPath, diarizerModelPath, device))
+            foreach (var arg in BuildArguments(monoPath, diarizerModelPath, device, offline))
             {
                 info.ArgumentList.Add(arg);
             }
@@ -73,7 +88,7 @@ public static class NemotronDiarizer
             NemotronLog.ScrubEnvironment(info);
             using var process = Process.Start(info) ?? throw new InvalidOperationException("The diarizer did not start.");
             ChildProcessJob.TryAdd(process);
-            var source = $"[diarizer pid={process.Id} {device}]";
+            var source = $"[diarizer pid={process.Id} {device}{(offline ? " offline" : string.Empty)}]";
             NemotronLog.Event(source, "started");
             using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             limit.CancelAfter(timeout);
@@ -105,7 +120,7 @@ public static class NemotronDiarizer
                     : "The diarizer found no speech in the system audio.");
             }
 
-            return (new DiarizationOverlay(segments), null);
+            return (new DiarizationOverlay(segments, offline ? "offline" : "streaming"), null);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
