@@ -4,6 +4,7 @@ using Avalonia.Layout;
 using PrimeDictate.Core.Dictation;
 using PrimeDictate.Core.Providers;
 using PrimeDictate.Platforms.Dictation;
+using PrimeDictate.Platforms.Speech;
 using PrimeDictate.Platforms.Startup;
 using PrimeDictate.Platforms.Input;
 
@@ -21,6 +22,7 @@ public sealed class DictationSettingsWindow : Window
     private readonly NumericUpDown silence = new() { Minimum = 0, Maximum = 30, Increment = 1, FormatString = "0", Width = 120 };
     private readonly CheckBox audioCues = new() { Content = "Play start and stop sounds" };
     private readonly LaunchAtLogin launch = new();
+    private readonly ComboBox deviceBox = new() { ItemsSource = new[] { "Auto (CUDA if ready, else CPU)", "CPU", "CUDA" }, MinWidth = 260 };
     private readonly CheckBox launchAtLogin = new() { Content = "Start PrimeDictate when I sign in (tray only)" };
     private readonly CheckBox sendEnter = new() { Content = "Coding mode: press Enter after typing" };
     private readonly CheckBox returnToStart = new() { Content = "If focus moved, return to the window I started in" };
@@ -53,6 +55,8 @@ public sealed class DictationSettingsWindow : Window
         panel.Children.Add(Row("Model", this.modelBox));
         panel.Children.Add(new TextBlock { Text = "Download another model", FontWeight = Avalonia.Media.FontWeight.SemiBold });
         panel.Children.Add(new ModelDownloadPanel(host, this.RefreshModels));
+        panel.Children.Add(Row("Speech model device (applies after restart)", this.deviceBox));
+        panel.Children.Add(new TextBlock { Text = OnnxRuntimeDevice.Summary, Opacity = 0.7, TextWrapping = Avalonia.Media.TextWrapping.Wrap });
         panel.Children.Add(Row("Microphone", this.micBox));
         panel.Children.Add(Row("Input gain", this.gain));
         panel.Children.Add(Row("Auto-commit after silence (seconds, 0 = hotkey only)", this.silence));
@@ -156,6 +160,7 @@ public sealed class DictationSettingsWindow : Window
         this.gain.Value = this.working.InputGainMultiplier;
         this.silence.Value = this.working.AutoCommitSilenceSeconds;
         this.audioCues.IsChecked = this.working.PlayAudioCues;
+        this.deviceBox.SelectedIndex = (int)OnnxRuntimeDevice.ParsePreference(this.working.OnnxDevice);
         this.launchAtLogin.IsChecked = this.launch.IsEnabled;
         this.sendEnter.IsChecked = this.working.SendEnterAfterCommit;
         this.returnToStart.IsChecked = this.working.ReturnToStartTargetOnCommit;
@@ -210,6 +215,7 @@ public sealed class DictationSettingsWindow : Window
         s.InputGainMultiplier = this.gain.Value;
         s.AutoCommitSilenceSeconds = (int)(this.silence.Value ?? 3);
         s.PlayAudioCues = this.audioCues.IsChecked == true;
+        s.OnnxDevice = ((OnnxDevicePreference)Math.Max(0, this.deviceBox.SelectedIndex)).ToString().ToLowerInvariant();
         this.ApplyLaunchAtLogin();
         s.SendEnterAfterCommit = this.sendEnter.IsChecked == true;
         s.ReturnToStartTargetOnCommit = this.returnToStart.IsChecked == true;

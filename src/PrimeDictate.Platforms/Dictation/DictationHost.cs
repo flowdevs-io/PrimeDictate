@@ -165,6 +165,17 @@ public sealed class DictationHost : IAsyncDisposable
         }
     }
 
+    /// <summary>First step of leaving: no hotkey or wake word can start a new dictation while the app shuts down.</summary>
+    public void StopListeningForExit()
+    {
+        if (this.hotkeys is not null)
+        {
+            this.hotkeys.Pressed -= this.OnHotkey;
+        }
+
+        this.Wake?.Configure(false, this.Settings.WakeWordPhrase, this.Settings.SelectedInputDeviceId, this.Settings.InputGainMultiplier);
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (this.disposed)

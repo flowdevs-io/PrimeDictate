@@ -1,8 +1,11 @@
 namespace PrimeDictate.Platforms.Speech;
 
 /// <summary>An installed sherpa-onnx Whisper model folder.</summary>
-public sealed record InstalledWhisperModel(string Id, string DisplayName, string Directory, string Encoder, string Decoder, string Tokens, bool IsEnglishOnly)
+public sealed record InstalledWhisperModel(string Id, string DisplayName, string Directory, string Encoder, string Decoder, string Tokens, bool IsEnglishOnly, string? EncoderFullPrecision = null, string? DecoderFullPrecision = null)
 {
+    /// <summary>The unquantized pair when the folder has it. CUDA has no kernels for most int8 operators, so on the GPU the full-precision files are used.</summary>
+    public bool HasFullPrecision => this.EncoderFullPrecision is not null && this.DecoderFullPrecision is not null;
+
     /// <summary>Stable model id used in transcripts, for example <c>whisper-onnx:base.en</c>.</summary>
     public string ModelId => $"whisper-onnx:{this.Id}";
 }
@@ -58,8 +61,10 @@ public static class WhisperOnnxModelLocator
             return false;
         }
 
-        var encoder = Single(directory, "*-encoder.int8.onnx") ?? Single(directory, "*-encoder.onnx");
-        var decoder = Single(directory, "*-decoder.int8.onnx") ?? Single(directory, "*-decoder.onnx");
+        var encoderFull = Single(directory, "*-encoder.onnx");
+        var decoderFull = Single(directory, "*-decoder.onnx");
+        var encoder = Single(directory, "*-encoder.int8.onnx") ?? encoderFull;
+        var decoder = Single(directory, "*-decoder.int8.onnx") ?? decoderFull;
         var tokens = Single(directory, "*-tokens.txt");
         if (encoder is null || decoder is null || tokens is null)
         {
@@ -68,7 +73,7 @@ public static class WhisperOnnxModelLocator
 
         var name = Path.GetFileName(directory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         var id = name.StartsWith(FolderPrefix, StringComparison.OrdinalIgnoreCase) ? name[FolderPrefix.Length..] : name;
-        model = new InstalledWhisperModel(id, $"Whisper {id} (ONNX)", Path.GetFullPath(directory), encoder, decoder, tokens, id.EndsWith(".en", StringComparison.OrdinalIgnoreCase));
+        model = new InstalledWhisperModel(id, $"Whisper {id} (ONNX)", Path.GetFullPath(directory), encoder, decoder, tokens, id.EndsWith(".en", StringComparison.OrdinalIgnoreCase), encoderFull, decoderFull);
         return true;
     }
 

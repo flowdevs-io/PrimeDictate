@@ -114,11 +114,27 @@ public sealed partial class MainWindow : Window
         DragDrop.SetAllowDrop(this, true);
         this.AddHandler(DragDrop.DragOverEvent, (_, e) => e.DragEffects = e.DataTransfer.Contains(DataFormat.File) ? DragDropEffects.Copy : DragDropEffects.None);
         this.AddHandler(DragDrop.DropEvent, this.OnDrop);
-        this.Opened += async (_, _) => await this.InitializeWorkspaceAsync();
-        this.Closing += (_, _) => this.workspace.DiscardLiveAsync().GetAwaiter().GetResult();
+        this.Opened += async (_, _) =>
+        {
+            await this.InitializeWorkspaceAsync();
+            await this.RunSafelyAsync(this.ResumePendingFinalPassAsync);
+        };
+        this.Closing += (_, e) =>
+        {
+            // With hide-to-tray a click on the window's close button only hides it, so a recording must keep running.
+            if (this.HidesOnClose && e.CloseReason == WindowCloseReason.WindowClosing)
+            {
+                return;
+            }
+
+            this.workspace.StopLiveForExitAsync(TimeSpan.FromSeconds(20)).GetAwaiter().GetResult();
+        };
         // Closing the window ends the speech worker too; left running it keeps the GPU's memory.
         this.Closed += (_, _) => this.workspace.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(10));
     }
+
+    /// <summary>True when closing the window only hides it (the app lives in the tray).</summary>
+    public bool HidesOnClose { get; set; }
 
     /// <summary>Selects the newest session; used by the smoke screenshot.</summary>
     public void SelectFirstSession() => this.SessionList.SelectedIndex = this.SessionList.ItemCount > 0 ? 0 : -1;
@@ -209,6 +225,33 @@ public sealed partial class MainWindow : Window
             this.ImportButton.IsEnabled = false;
             this.RecordButton.IsEnabled = false;
         }
+    }
+
+    /// <summary>A meeting saved by an exit before its after-Stop pass ran is finished on the next launch, newest first, one per launch.</summary>
+    private async Task ResumePendingFinalPassAsync()
+    {
+        if (!this.workspace.FinalPassAvailable || this.live is not null)
+        {
+            return;
+        }
+
+        var pending = await this.workspace.FinalPassPendingSessionsAsync(CancellationToken.None);
+        if (pending.Count == 0)
+        {
+            return;
+        }
+
+        var target = await this.workspace.OpenSessionAsync(pending[0], CancellationToken.None);
+        if (target is null)
+        {
+            this.workspace.ClearFinalPassPending(pending[0]);
+            return;
+        }
+
+        this.Attach(target);
+        await this.ReloadSessionsAsync(target.Document.SessionId);
+        this.Say($"\"{target.Document.Title}\" was saved before its transcript was finished. Finishing it now...");
+        await this.FinalPassAsync(target);
     }
 
     private SpeechModelChoice? SelectedModel => this.ModelBox.SelectedIndex is >= 0 and var i && i < this.models.Count ? this.models[i] : null;
@@ -717,6 +760,11 @@ public sealed partial class MainWindow : Window
             this.DiscardButton.IsVisible = true;
             this.stickToBottom = true;
             this.Timeline.FollowLive();
+            if (this.twoPassPlanned)
+            {
+                this.workspace.MarkFinalPassPending(this.live.Host!.Document.SessionId);
+            }
+
             this.Attach(this.live.Host!);
             await this.ReloadSessionsAsync(this.live.Host!.Document.SessionId);
             this.Say(recordOnly

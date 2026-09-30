@@ -40,6 +40,9 @@ public sealed class DictationSettings
 
     public bool PlayAudioCues { get; set; } = true;
 
+    /// <summary>Where the ONNX speech models run: <c>auto</c>, <c>cpu</c> or <c>cuda</c>. Applies at the next start; PRIMEDICTATE_ONNX_DEVICE overrides it.</summary>
+    public string OnnxDevice { get; set; } = "auto";
+
     /// <summary>Typing speed used for the time-saved figure. Valid range 20 to 120.</summary>
     public int BaselineTypingSpeedWpm { get; set; } = DictationStatsStore.DefaultBaselineWpm;
 

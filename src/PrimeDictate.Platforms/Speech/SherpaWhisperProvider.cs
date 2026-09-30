@@ -26,14 +26,16 @@ public abstract class SherpaOfflineProvider : ITranscriptionProvider
             MaxWindow: TimeSpan.FromSeconds(30),
             Languages: languages,
             RequiredSampleRate: 16_000);
-        this.Runtime = new EffectiveRuntime("sherpa-onnx", "1.13.0", "cpu", "cpu", null);
     }
 
     public string ModelId { get; }
 
     public TranscriptionProviderCapabilities Capabilities { get; }
 
-    public EffectiveRuntime Runtime { get; }
+    public EffectiveRuntime Runtime => new("sherpa-onnx", "1.13.0", this.ProviderName, this.ProviderName, null);
+
+    /// <summary><c>cpu</c> or <c>cuda</c> for this model. Families whose files have no GPU-friendly variant stay on the CPU even when CUDA is active.</summary>
+    protected virtual string ProviderName => OnnxRuntimeDevice.Provider;
 
     public async ValueTask<IReadOnlyList<RecognizedSegment>> RecognizeWindowAsync(ReadOnlyMemory<float> samples, string? language, CancellationToken cancellationToken)
     {
@@ -104,7 +106,7 @@ public abstract class SherpaOfflineProvider : ITranscriptionProvider
         config.FeatConfig.SampleRate = 16_000;
         config.FeatConfig.FeatureDim = 80;
         config.ModelConfig.Debug = 0;
-        config.ModelConfig.Provider = "cpu";
+        config.ModelConfig.Provider = this.ProviderName;
         config.ModelConfig.NumThreads = InferenceThreads.Default;
         this.Configure(ref config, language);
         return new OfflineRecognizer(config);
@@ -115,11 +117,14 @@ public abstract class SherpaOfflineProvider : ITranscriptionProvider
 public sealed class SherpaWhisperProvider(InstalledWhisperModel model)
     : SherpaOfflineProvider(model.ModelId, model.IsEnglishOnly ? ["en"] : ["auto"])
 {
+    protected override string ProviderName => OnnxRuntimeDevice.IsCuda && model.HasFullPrecision ? "cuda" : "cpu";
+
     protected override void Configure(ref OfflineRecognizerConfig config, string? language)
     {
+        var full = this.ProviderName == "cuda";
         config.ModelConfig.Tokens = model.Tokens;
-        config.ModelConfig.Whisper.Encoder = model.Encoder;
-        config.ModelConfig.Whisper.Decoder = model.Decoder;
+        config.ModelConfig.Whisper.Encoder = full ? model.EncoderFullPrecision! : model.Encoder;
+        config.ModelConfig.Whisper.Decoder = full ? model.DecoderFullPrecision! : model.Decoder;
         // English-only models must be told "en"; multilingual models detect the language when it is empty.
         config.ModelConfig.Whisper.Language = model.IsEnglishOnly ? "en" : (language is null or "auto" ? string.Empty : language.Split('-')[0].ToLowerInvariant());
         config.ModelConfig.Whisper.Task = "transcribe";
@@ -130,12 +135,17 @@ public sealed class SherpaWhisperProvider(InstalledWhisperModel model)
 public sealed class SherpaParakeetProvider(InstalledSpeechModel model)
     : SherpaOfflineProvider(model.ModelId, model.IsEnglishOnly ? ["en"] : ["auto"])
 {
+    protected override string ProviderName =>
+        OnnxRuntimeDevice.IsCuda && SpeechModelLocator.ParakeetPrecision(model.Directory, preferHalf: true) == "fp16" ? "cuda" : "cpu";
+
     protected override void Configure(ref OfflineRecognizerConfig config, string? language)
     {
+        var precision = SpeechModelLocator.ParakeetPrecision(model.Directory, this.ProviderName == "cuda")
+            ?? throw new FileNotFoundException($"The Parakeet model folder is incomplete: {model.Directory}");
         config.ModelConfig.Tokens = Path.Combine(model.Directory, "tokens.txt");
-        config.ModelConfig.Transducer.Encoder = Path.Combine(model.Directory, "encoder.int8.onnx");
-        config.ModelConfig.Transducer.Decoder = Path.Combine(model.Directory, "decoder.int8.onnx");
-        config.ModelConfig.Transducer.Joiner = Path.Combine(model.Directory, "joiner.int8.onnx");
+        config.ModelConfig.Transducer.Encoder = Path.Combine(model.Directory, $"encoder.{precision}.onnx");
+        config.ModelConfig.Transducer.Decoder = Path.Combine(model.Directory, $"decoder.{precision}.onnx");
+        config.ModelConfig.Transducer.Joiner = Path.Combine(model.Directory, $"joiner.{precision}.onnx");
         config.ModelConfig.ModelType = "nemo_transducer";
         config.DecodingMethod = "greedy_search";
         config.MaxActivePaths = 4;
@@ -146,6 +156,9 @@ public sealed class SherpaParakeetProvider(InstalledSpeechModel model)
 public sealed class SherpaMoonshineProvider(InstalledSpeechModel model)
     : SherpaOfflineProvider(model.ModelId, ["en"])
 {
+    // Moonshine ships int8 and ORT-format files only, so it stays on the CPU (it is small and fast there).
+    protected override string ProviderName => "cpu";
+
     protected override void Configure(ref OfflineRecognizerConfig config, string? language)
     {
         var files = SpeechModelLocator.ResolveMoonshine(model.Directory)

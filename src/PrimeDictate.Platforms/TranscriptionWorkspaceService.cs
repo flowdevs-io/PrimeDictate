@@ -499,6 +499,44 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     /// </summary>
     public async Task<FinalPassResult?> RunFinalPassAsync(SessionDocumentHost host, IProgress<double>? progress, CancellationToken cancellationToken)
     {
+        try
+        {
+            return await this.RunFinalPassCoreAsync(host, progress, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // Whatever happened, the pass has had its turn; only an app exit before it ran leaves the marker for the next launch.
+            this.ClearFinalPassPending(host.Document.SessionId);
+        }
+    }
+
+    /// <summary>Remembers that this meeting still needs its after-Stop pass, so an exit before it runs does not leave a draft forever.</summary>
+    public void MarkFinalPassPending(Guid sessionId) => FinalPassPending.Mark(this.store.GetSessionMediaDirectory(sessionId));
+
+    public void ClearFinalPassPending(Guid sessionId)
+    {
+        try
+        {
+            FinalPassPending.Clear(this.store.GetSessionMediaDirectory(sessionId));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
+    /// <summary>Completed meetings whose after-Stop pass never ran, newest first.</summary>
+    public async Task<IReadOnlyList<Guid>> FinalPassPendingSessionsAsync(CancellationToken cancellationToken)
+    {
+        var sessions = await this.ListSessionsAsync(cancellationToken).ConfigureAwait(false);
+        return sessions
+            .Where(x => x.SourceType == TranscriptSourceType.Meeting && x.Status == TranscriptSessionStatus.Completed && FinalPassPending.IsPending(this.store.GetSessionMediaDirectory(x.SessionId)))
+            .OrderByDescending(x => x.CreatedAt)
+            .Select(x => x.SessionId)
+            .ToList();
+    }
+
+    private async Task<FinalPassResult?> RunFinalPassCoreAsync(SessionDocumentHost host, IProgress<double>? progress, CancellationToken cancellationToken)
+    {
         async Task NoteAsync(string text)
         {
             host.AddNote(text);
@@ -629,6 +667,29 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         {
             await NoteAsync($"Speaker timeline was not redrawn: {ex.Message}").ConfigureAwait(false);
             return null;
+        }
+    }
+
+    /// <summary>
+    /// For app exit: stops an active recording the normal way so the audio and transcript are finalized and saved. If that does not
+    /// finish within <paramref name="timeout"/> (a long final pass), the session is stopped as canceled instead; what was captured stays on disk.
+    /// </summary>
+    public async Task StopLiveForExitAsync(TimeSpan timeout)
+    {
+        if (this.live is null)
+        {
+            return;
+        }
+
+        using var cts = new CancellationTokenSource(timeout);
+        try
+        {
+            await this.StopLiveAsync(cts.Token).WaitAsync(timeout).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or TimeoutException)
+        {
+            this.RaiseNotice("The recording did not finish saving in time and was stopped as canceled; its audio and text so far are kept.");
+            await this.DiscardLiveAsync().ConfigureAwait(false);
         }
     }
 
