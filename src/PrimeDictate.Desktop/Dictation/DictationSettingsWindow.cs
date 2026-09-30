@@ -6,6 +6,7 @@ using Avalonia.Platform;
 using Avalonia.Threading;
 using PrimeDictate.Core.Dictation;
 using PrimeDictate.Core.Providers;
+using PrimeDictate.Core.Settings;
 using PrimeDictate.Platforms.Dictation;
 using PrimeDictate.Platforms.Speech;
 using PrimeDictate.Platforms.Startup;
@@ -18,6 +19,7 @@ public sealed class DictationSettingsWindow : Window
 {
     private readonly DictationHost host;
     private readonly IAudioSource? audio;
+    private readonly TranscriptionPrefsService prefs;
     private List<string> shownModels = [];
     private readonly ComboBox modelBox = new() { MinWidth = 260 };
     private readonly ComboBox micBox = new() { MinWidth = 260 };
@@ -42,21 +44,35 @@ public sealed class DictationSettingsWindow : Window
     private readonly TextBox replacements = new() { AcceptsReturn = true, MinHeight = 90, MaxHeight = 220, PlaceholderText = "spoken phrase => replacement (one per line)" };
     private readonly Dictionary<HotkeyAction, (TextBlock Label, HotkeyGesture Gesture)> hotkeys = [];
     private readonly TextBlock status = new() { TextWrapping = Avalonia.Media.TextWrapping.Wrap, Opacity = 0.75, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
+    private readonly ComboBox liveTextBox = new()
+    {
+        ItemsSource = new[] { "Off: record only, transcribe after Stop", "Fast draft while people talk, then final pass" },
+        MinWidth = 260
+    };
+    private readonly ComboBox sourceBox = new() { ItemsSource = new[] { "Microphone", "System audio (speakers)", "Microphone + system audio" }, MinWidth = 260 };
+    private readonly CheckBox speakerLabels = Check("Meetings: speaker labels after Stop (needs Nemotron and its diarizer)");
+    private readonly CheckBox boostAudio = Check("Boost quiet audio for recognition (the saved recording is not changed)");
+    private readonly StackPanel shellRows = new() { Spacing = 8 };
+    private readonly List<ShellRow> shellEditors = [];
     private DictationSettings working;
     private IReadOnlyList<AudioInputDevice> devices = [];
 
-    public DictationSettingsWindow(DictationHost host, IAudioSource? audio)
+    private sealed record ShellRow(Control Root, CheckBox On, TextBox Phrase, ComboBox After, TextBox Command);
+
+    public DictationSettingsWindow(DictationHost host, IAudioSource? audio, TranscriptionPrefsService prefs)
     {
         this.host = host;
         this.audio = audio;
+        this.prefs = prefs;
         this.working = host.Settings;
-        this.Title = "PrimeDictate: dictation settings";
+        this.Title = "PrimeDictate: Settings";
         this.Width = 560;
         this.SizeToContent = SizeToContent.Height;
         this.WindowStartupLocation = WindowStartupLocation.CenterScreen;
         this.FitToScreen(this.Screens.Primary);
 
         var panel = new StackPanel { Margin = new Thickness(20, 20, 20, 10), Spacing = 10 };
+        panel.Children.Add(Heading("Dictation"));
         panel.Children.Add(Row("Model", this.modelBox));
         panel.Children.Add(new TextBlock { Text = "Download another model", FontWeight = Avalonia.Media.FontWeight.SemiBold });
         panel.Children.Add(new ModelDownloadPanel(host, this.RefreshModels));
@@ -107,6 +123,39 @@ public sealed class DictationSettingsWindow : Window
         panel.Children.Add(new TextBlock { Text = "Replacements" });
         panel.Children.Add(this.replacements);
 
+        panel.Children.Add(Heading("Transcription & meetings"));
+        panel.Children.Add(new TextBlock
+        {
+            Text = "These apply to the recording and transcription side of PrimeDictate (the main window). The same options are in its left column; a change in either place shows in both.",
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            Opacity = 0.7
+        });
+        panel.Children.Add(Row("Recording source (what Record meeting captures)", this.sourceBox));
+        panel.Children.Add(Row("Live text during a meeting", this.liveTextBox));
+        panel.Children.Add(this.speakerLabels);
+        panel.Children.Add(this.boostAudio);
+
+        panel.Children.Add(Heading("Commands that run programs (dictation only)"));
+        panel.Children.Add(new Border
+        {
+            Background = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.FromArgb(40, 255, 160, 0)),
+            BorderBrush = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.FromRgb(230, 140, 0)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(10),
+            Child = new TextBlock
+            {
+                Text = "Warning: when you say one of these phrases while dictating, PrimeDictate runs the command on this computer with your account's permissions. "
+                    + "Only add commands you understand and trust. The command is exactly what you type here; nothing you say is added to it. "
+                    + "They never run from transcription or meetings. New commands start Off. Commands imported from the older PrimeDictate app keep the On/Off setting they had there.",
+                TextWrapping = Avalonia.Media.TextWrapping.Wrap
+            }
+        });
+        panel.Children.Add(this.shellRows);
+        var addShell = new Button { Content = "Add command", HorizontalAlignment = HorizontalAlignment.Left };
+        addShell.Click += (_, _) => this.AddShellRow(new VoiceShellCommand { Enabled = false });
+        panel.Children.Add(addShell);
+
         // Save and the status line stay in view under the form, which scrolls when it is taller than the screen.
         var save = new Button { Content = "Save", VerticalAlignment = VerticalAlignment.Center };
         save.Click += (_, _) => this.Save();
@@ -124,6 +173,106 @@ public sealed class DictationSettingsWindow : Window
             this.FitToScreen(this.Screens.ScreenFromWindow(this));
             await this.LoadAsync();
         };
+        // A change made in the main window's left column shows here while this window is open.
+        void OnPrefsChanged(object? origin)
+        {
+            if (!ReferenceEquals(origin, this))
+            {
+                this.LoadTranscriptionFields();
+            }
+        }
+
+        prefs.Changed += OnPrefsChanged;
+        this.Closed += (_, _) => prefs.Changed -= OnPrefsChanged;
+    }
+
+    private static Control Heading(string text) => new TextBlock
+    {
+        Text = text,
+        FontSize = 16,
+        FontWeight = Avalonia.Media.FontWeight.SemiBold,
+        Margin = new Thickness(0, 14, 0, 0)
+    };
+
+    private void LoadTranscriptionFields()
+    {
+        var p = this.prefs.Current;
+        this.sourceBox.SelectedIndex = p.LastSource switch { RecordingSources.System => 1, RecordingSources.Meeting => 2, _ => 0 };
+        this.liveTextBox.SelectedIndex = p.LiveTextMode == LiveTextModes.Draft ? 1 : 0;
+        this.speakerLabels.IsChecked = p.SpeakerLabelsAfterStop;
+        this.boostAudio.IsChecked = p.BoostQuietAudio;
+    }
+
+    private void AddShellRow(VoiceShellCommand command)
+    {
+        var on = new CheckBox { Content = "On", IsChecked = command.Enabled, VerticalAlignment = VerticalAlignment.Center };
+        var phrase = new TextBox { Text = command.Phrase, PlaceholderText = "When I say", VerticalAlignment = VerticalAlignment.Center };
+        var after = new ComboBox
+        {
+            ItemsSource = new[] { "Then stop", "Then keep typing" },
+            SelectedIndex = command.CompletionBehavior == VoiceShellCommandCompletionBehavior.Continue ? 1 : 0,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        ToolTip.SetTip(after, "Then stop: nothing else from that dictation is typed. Then keep typing: the words after the phrase are typed as usual.");
+        var cmd = new TextBox { Text = command.Command, PlaceholderText = "Command to run (as you would type it in a terminal)" };
+        var remove = new Button { Content = "Remove", VerticalAlignment = VerticalAlignment.Center };
+        Grid.SetColumn(phrase, 1);
+        Grid.SetColumn(after, 2);
+        Grid.SetColumn(remove, 3);
+        var top = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto"), Children = { on, phrase, after, remove } };
+        top.ColumnDefinitions[1].MinWidth = 120;
+        foreach (var child in top.Children.Skip(1))
+        {
+            ((Control)child).Margin = new Thickness(8, 0, 0, 0);
+        }
+
+        var root = new Border
+        {
+            BorderBrush = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.FromArgb(70, 128, 128, 128)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(8),
+            Child = new StackPanel { Spacing = 6, Children = { top, cmd } }
+        };
+        var row = new ShellRow(root, on, phrase, after, cmd);
+        remove.Click += (_, _) =>
+        {
+            this.shellEditors.Remove(row);
+            this.shellRows.Children.Remove(root);
+        };
+        this.shellEditors.Add(row);
+        this.shellRows.Children.Add(root);
+    }
+
+    /// <summary>Rows that are fully empty are dropped; a row with only a phrase or only a command is an error the user must fix.</summary>
+    private bool TryBuildShellCommands(out List<VoiceShellCommand> commands)
+    {
+        commands = [];
+        foreach (var row in this.shellEditors)
+        {
+            var phrase = row.Phrase.Text?.Trim() ?? string.Empty;
+            var command = row.Command.Text?.Trim() ?? string.Empty;
+            if (phrase.Length == 0 && command.Length == 0)
+            {
+                continue;
+            }
+
+            if (phrase.Length == 0 || command.Length == 0)
+            {
+                this.status.Text = "Each voice command needs both a phrase to say and a command to run.";
+                return false;
+            }
+
+            commands.Add(new VoiceShellCommand
+            {
+                Enabled = row.On.IsChecked == true,
+                Phrase = phrase,
+                Command = command,
+                CompletionBehavior = row.After.SelectedIndex == 1 ? VoiceShellCommandCompletionBehavior.Continue : VoiceShellCommandCompletionBehavior.Stop
+            });
+        }
+
+        return true;
     }
 
     private static CheckBox Check(string text) => new() { Content = new TextBlock { Text = text, TextWrapping = Avalonia.Media.TextWrapping.Wrap } };
@@ -247,6 +396,14 @@ public sealed class DictationSettingsWindow : Window
         this.overlayBox.SelectedIndex = (int)this.working.OverlayMode;
         this.sticky.IsChecked = this.working.IsOverlaySticky;
         this.replacements.Text = string.Join('\n', this.working.TranscriptReplacements.Select(r => $"{r.Find} => {r.Replace}"));
+        this.LoadTranscriptionFields();
+        this.shellRows.Children.Clear();
+        this.shellEditors.Clear();
+        foreach (var command in this.working.VoiceShellCommands ?? [])
+        {
+            this.AddShellRow(command);
+        }
+
         var notes = new List<string>();
         if (this.host.FocusGuardNotice is { } guardNotice)
         {
@@ -276,6 +433,11 @@ public sealed class DictationSettingsWindow : Window
 
     private void Save()
     {
+        if (!this.TryBuildShellCommands(out var shellCommands))
+        {
+            return;
+        }
+
         var models = this.host.InstalledModels();
         var s = this.working;
         if (this.modelBox.SelectedIndex is >= 0 and var mi && mi < models.Count)
@@ -315,7 +477,18 @@ public sealed class DictationSettingsWindow : Window
             .Where(parts => parts.Length == 2 && !string.IsNullOrWhiteSpace(parts[0]))
             .Select(parts => new ReplacementDto { Find = parts[0].Trim(), Replace = parts[1].Trim() })
             .ToList();
+        s.VoiceShellCommands = shellCommands;
         this.host.ApplySettings(s);
+        var source = this.sourceBox.SelectedIndex switch { 1 => RecordingSources.System, 2 => RecordingSources.Meeting, _ => RecordingSources.Microphone };
+        this.prefs.Update(
+            p => p with
+            {
+                LastSource = source,
+                LiveTextMode = this.liveTextBox.SelectedIndex == 1 ? LiveTextModes.Draft : LiveTextModes.Off,
+                SpeakerLabelsAfterStop = this.speakerLabels.IsChecked == true,
+                BoostQuietAudio = this.boostAudio.IsChecked == true
+            },
+            this);
         this.Close();
     }
 }

@@ -88,7 +88,7 @@ public sealed class App : Application
 
     private void StartDictation(IClassicDesktopStyleApplicationLifetime desktop, MainWindow window)
     {
-        var shell = new DictationShell(desktop, window.Workspace, () => ShowWorkspace(window));
+        var shell = new DictationShell(desktop, window,() => ShowWorkspace(window));
         shell.Start(this);
         shell.ExitRequested += () => _ = this.ExitAsync(desktop, window, shell);
         desktop.Exit += (_, _) => this.Cleanup(window, shell);
