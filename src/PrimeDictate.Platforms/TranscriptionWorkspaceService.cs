@@ -206,6 +206,9 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     /// the chosen model the draft comes from Parakeet if installed, else a Whisper model (English-only first, for speed).
     /// Any other choice is used as it is. Null when nothing but Nemotron is installed.
     /// </summary>
+    /// <summary>"No live text": the meeting is only recorded, and the final pass transcribes it after Stop.</summary>
+    public static SpeechModelChoice RecordOnly { get; } = new(RecordOnlyProvider.Id, "Record only", null, false, null);
+
     public static SpeechModelChoice? LiveDraftModel(SpeechModelChoice selected, IReadOnlyList<SpeechModelChoice> available)
     {
         if (!selected.ModelId.StartsWith("nemotron:", StringComparison.Ordinal))
@@ -292,6 +295,11 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
                     await this.providers[stale].DisposeAsync().ConfigureAwait(false);
                     this.providers.Remove(stale);
                 }
+            }
+
+            if (model.ModelId == RecordOnlyProvider.Id)
+            {
+                return new RecordOnlyProvider();
             }
 
             if (this.providers.TryGetValue(model.ModelId, out var existing))
@@ -530,7 +538,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
                 progress,
                 cancellationToken).ConfigureAwait(false);
             await NoteAsync($"Final pass ({asr.Runtime.EffectiveBackend}): {result.MicrophoneLines} lines from the microphone, {result.SystemLines} from the system audio, {result.SpeakerCount} system speakers ({result.Overlay?.Mode ?? "no"} diarization), {result.OverlapSeconds:0.#} s of overlapping speech. These rows replace the live draft, which is kept as the earlier result."
-                + (result.DiarizerProblem is { } problem ? $" Speakers could not be told apart: {problem}" : string.Empty)).ConfigureAwait(false);
+                + (result.DiarizerProblem is { } problem ? $" Speakers could not be told apart: {problem}" : result.SystemLines == 0 ? " " + result.Describe() : string.Empty)).ConfigureAwait(false);
             return result;
         }
         catch (OperationCanceledException)

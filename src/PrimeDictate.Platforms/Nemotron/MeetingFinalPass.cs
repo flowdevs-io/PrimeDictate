@@ -7,7 +7,26 @@ using PrimeDictate.Core.Transcripts;
 namespace PrimeDictate.Platforms.Nemotron;
 
 /// <summary>What the final pass produced, for the note on the session and the timeline.</summary>
-public sealed record FinalPassResult(int ResultVersion, int MicrophoneLines, int SystemLines, int SpeakerCount, double OverlapSeconds, DiarizationOverlay? Overlay, string? DiarizerProblem);
+public sealed record FinalPassResult(int ResultVersion, int MicrophoneLines, int SystemLines, int SpeakerCount, double OverlapSeconds, DiarizationOverlay? Overlay, string? DiarizerProblem)
+{
+    /// <summary>One sentence for the status line. Zero speakers is explained: nobody spoke on the system side, or the diarizer failed.</summary>
+    public string Describe()
+    {
+        if (this.DiarizerProblem is { } problem)
+        {
+            return $"Final transcript ready, but speakers could not be told apart: {problem}";
+        }
+
+        if (this.SystemLines == 0)
+        {
+            return this.Overlay is { SpeakerCount: > 0 } o
+                ? $"Final transcript ready. The diarizer heard {o.SpeakerCount} speakers on the system audio, but no words were recognized there."
+                : "Final transcript ready. Nothing was recognized on the system audio (no one spoke there, or it was silent).";
+        }
+
+        return $"Final transcript ready: {this.SpeakerCount} speakers on the system audio, {this.OverlapSeconds:0.#} s of overlapping speech.";
+    }
+}
 
 /// <summary>
 /// The second pass of a two-pass meeting. The live pass (any fast model) gave a draft while people talked. After Stop this

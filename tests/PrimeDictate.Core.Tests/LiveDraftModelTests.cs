@@ -33,3 +33,27 @@ public sealed class LiveDraftModelTests
         Assert.Same(whisper, TranscriptionWorkspaceService.LiveDraftModel(whisper, [C("parakeet-onnx:tdt"), whisper]));
     }
 }
+
+public sealed class RecordOnlyTests
+{
+    [Fact]
+    public async Task Record_only_provider_hears_nothing()
+    {
+        await using var provider = new PrimeDictate.Platforms.Speech.RecordOnlyProvider();
+        Assert.Empty(await provider.RecognizeWindowAsync(new float[16_000], "en", CancellationToken.None));
+        Assert.Equal("record-only", TranscriptionWorkspaceService.RecordOnly.ModelId);
+    }
+
+    [Fact]
+    public void Zero_system_speakers_says_why()
+    {
+        var silent = new PrimeDictate.Platforms.Nemotron.FinalPassResult(2, 3, 0, 0, 0, null, null);
+        Assert.Contains("Nothing was recognized on the system audio", silent.Describe());
+        var failed = silent with { DiarizerProblem = "exited with code 1" };
+        Assert.Contains("could not be told apart: exited with code 1", failed.Describe());
+        var heard = silent with { Overlay = new PrimeDictate.Core.Transcripts.DiarizationOverlay([new("speaker_1", 0, 2), new("speaker_2", 2, 4)]) };
+        Assert.Contains("diarizer heard 2 speakers", heard.Describe());
+        var normal = silent with { SystemLines = 4, SpeakerCount = 2, OverlapSeconds = 1.5 };
+        Assert.Contains("2 speakers on the system audio, 1.5 s", normal.Describe());
+    }
+}

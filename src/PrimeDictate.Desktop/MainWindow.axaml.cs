@@ -71,6 +71,10 @@ public sealed partial class MainWindow : Window
         this.ImportButton.Click += async (_, _) => await this.RunSafelyAsync(() => this.PickFileAsync());
         this.SourceBox.ItemsSource = new[] { "Microphone", "System audio (speakers)", "Microphone + system audio" };
         this.SourceBox.SelectedIndex = 0;
+        this.LiveTextBox.ItemsSource = new[] { "Live text: off, transcribe after Stop", "Live text: fast draft, then final pass" };
+        this.LiveTextBox.SelectedIndex = LoadLiveTextChoice();
+        this.LiveTextBox.SelectionChanged += (_, _) => this.SaveLiveTextChoice();
+        this.FinalPassBox.IsCheckedChanged += (_, _) => this.LiveTextBox.IsEnabled = this.FinalPassBox.IsChecked == true && this.workspace.FinalPassAvailable;
         this.RecordButton.Click += async (_, _) => await this.RunSafelyAsync(() => this.StartRecordingAsync());
         this.PauseButton.Click += async (_, _) => await this.RunSafelyAsync(() => this.TogglePauseAsync());
         this.StopButton.Click += async (_, _) => await this.RunSafelyAsync(() => this.StopRecordingAsync());
@@ -192,6 +196,7 @@ public sealed partial class MainWindow : Window
             this.RecordButton.IsEnabled = this.workspace.CanRecord && this.models.Count > 0;
             this.ImportButton.IsEnabled = this.models.Count > 0;
             this.FinalPassBox.IsEnabled = this.workspace.FinalPassAvailable;
+            this.LiveTextBox.IsEnabled = this.workspace.FinalPassAvailable;
             if (!this.workspace.FinalPassAvailable)
             {
                 this.FinalPassBox.IsChecked = false;
@@ -650,6 +655,7 @@ public sealed partial class MainWindow : Window
         this.SourceBox.IsEnabled = !active;
         this.AutoGainBox.IsEnabled = !active;
         this.FinalPassBox.IsEnabled = !active && this.workspace.FinalPassAvailable;
+        this.LiveTextBox.IsEnabled = !active && this.FinalPassBox.IsChecked == true && this.workspace.FinalPassAvailable;
         this.StopButton.IsVisible = active && canStop;
         this.StopButton.Content = this.live is null ? "Cancel" : "Stop";
         this.ModelBox.IsEnabled = !active;
@@ -685,7 +691,12 @@ public sealed partial class MainWindow : Window
                 _ => "microphone"
             };
             var twoPass = mode == TranscriptSourceType.Meeting && this.FinalPassBox.IsChecked == true && this.workspace.FinalPassAvailable;
-            if (twoPass && TranscriptionWorkspaceService.LiveDraftModel(model, this.models) is { } draft)
+            var recordOnly = twoPass && this.LiveTextBox.SelectedIndex == 0;
+            if (recordOnly)
+            {
+                model = TranscriptionWorkspaceService.RecordOnly;
+            }
+            else if (twoPass && TranscriptionWorkspaceService.LiveDraftModel(model, this.models) is { } draft)
             {
                 model = draft;
             }
@@ -694,7 +705,7 @@ public sealed partial class MainWindow : Window
             this.recordingLabel = label;
             // With a fast model live and Nemotron available, the live text is a draft and Stop starts the final pass.
             this.twoPassPlanned = twoPass && !model.ModelId.StartsWith("nemotron:", StringComparison.Ordinal);
-            this.RecordingIndicator.Text = "● Recording " + label + (this.twoPassPlanned ? " (draft text, speaker labels after Stop)" : string.Empty);
+            this.RecordingIndicator.Text = "● Recording " + label + (this.twoPassPlanned ? (recordOnly ? " (transcribed after Stop)" : " (draft text, speaker labels after Stop)") : string.Empty);
             this.RecordingIndicator.IsVisible = true;
             this.live.Error += this.Say;
             this.live.LevelChanged += level => Dispatcher.UIThread.Post(() => this.LevelText.Text = $"Level {new string('█', (int)Math.Min(20, level * 60))}");
@@ -708,7 +719,9 @@ public sealed partial class MainWindow : Window
             this.Timeline.FollowLive();
             this.Attach(this.live.Host!);
             await this.ReloadSessionsAsync(this.live.Host!.Document.SessionId);
-            this.Say(this.twoPassPlanned
+            this.Say(recordOnly
+                ? "Recording only. Nothing is transcribed during the call; after Stop, Nemotron transcribes the whole recording on the GPU."
+                : this.twoPassPlanned
                 ? "Recording. This live text is a draft: after Stop, Nemotron re-reads the recording and adds speaker labels."
                 : "Recording. Text appears as you speak; gray lines can still change.");
         }
@@ -781,6 +794,39 @@ public sealed partial class MainWindow : Window
 
     private bool twoPassPlanned;
 
+    private string LiveTextPrefsPath => Path.Combine(this.workspace.Paths.Root, "meeting-live-text.txt");
+
+    /// <summary>0 = off (record only, the default), 1 = fast draft. Remembered between runs.</summary>
+    private int LoadLiveTextChoice()
+    {
+        try
+        {
+            return File.Exists(this.LiveTextPrefsPath) && File.ReadAllText(this.LiveTextPrefsPath).Trim() == "draft" ? 1 : 0;
+        }
+        catch (IOException)
+        {
+            return 0;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return 0;
+        }
+    }
+
+    private void SaveLiveTextChoice()
+    {
+        try
+        {
+            File.WriteAllText(this.LiveTextPrefsPath, this.LiveTextBox.SelectedIndex == 1 ? "draft" : "off");
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
     /// <summary>Second pass of a two-pass meeting: the final transcript with speaker labels replaces the live draft.</summary>
     private async Task FinalPassAsync(SessionDocumentHost target)
     {
@@ -788,7 +834,8 @@ public sealed partial class MainWindow : Window
         this.SetJobUi(active: true, canStop: true);
         this.Progress.IsIndeterminate = false;
         this.Progress.Value = 0;
-        this.Say("Draft saved. Improving it with speaker labels…");
+        this.Say("Recording saved. Transcribing it and labeling speakers…");
+        this.Progress.IsVisible = true;
         try
         {
             var progress = new Progress<double>(f => this.Progress.Value = f);
@@ -796,7 +843,7 @@ public sealed partial class MainWindow : Window
             if (result is not null && ReferenceEquals(this.host, target))
             {
                 this.Timeline.SetOverlay(result.Overlay?.MapTo(target.Document));
-                this.Say($"Final transcript ready: {result.SpeakerCount} speakers on the system audio, {result.OverlapSeconds:0.#} s of overlapping speech.");
+                this.Say(result.Describe());
             }
             else
             {
