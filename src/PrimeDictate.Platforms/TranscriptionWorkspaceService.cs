@@ -40,6 +40,9 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     private readonly IAudioSource? audioSource;
     private readonly ISystemAudioSource? systemAudioSource;
     private LiveTranscriptionSession? live;
+    private LiveTranscriptionSession? starting;
+    // Set while a stop is in flight: StopLiveAsync clears live first, and exit must still reach that session.
+    private LiveTranscriptionSession? stopping;
 
     public TranscriptionWorkspaceService(AppDataPaths? paths = null, IAudioSource? audioSource = null, bool probeMicrophone = true)
     {
@@ -422,13 +425,25 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
             this.scheduler,
             this.store,
             new LiveSessionOptions(Options(model, deviceId, retention), title, this.store.GetSessionMediaDirectory, LiveSessionOptions.DefaultPreviewInterval, null, source, autoGain));
-        await session.StartAsync(cancellationToken).ConfigureAwait(false);
-        if (session.Host is { } liveHost)
+        // Tracked from before StartAsync so an exit during a slow or stuck start can still end it.
+        this.starting = session;
+        try
         {
-            NoteFallback(liveHost, await this.ProviderAsync(model, cancellationToken).ConfigureAwait(false));
+            await session.StartAsync(cancellationToken).ConfigureAwait(false);
+            if (session.Host is { } liveHost)
+            {
+                NoteFallback(liveHost, await this.ProviderAsync(model, cancellationToken).ConfigureAwait(false));
+            }
+        }
+        catch
+        {
+            Interlocked.CompareExchange(ref this.starting, null, session);
+            await session.DisposeAsync().ConfigureAwait(false);
+            throw;
         }
 
         this.live = session;
+        Interlocked.CompareExchange(ref this.starting, null, session);
         return session;
     }
 
@@ -456,8 +471,16 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         var session = Interlocked.Exchange(ref this.live, null);
         if (session is not null)
         {
-            await session.StopAsync(cancellationToken).ConfigureAwait(false);
-            await session.DisposeAsync().ConfigureAwait(false);
+            this.stopping = session;
+            try
+            {
+                await session.StopAsync(cancellationToken).ConfigureAwait(false);
+                await session.DisposeAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                Interlocked.CompareExchange(ref this.stopping, null, session);
+            }
         }
     }
 
@@ -698,24 +721,89 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
 
     /// <summary>
     /// For app exit: stops an active recording the normal way so the audio and transcript are finalized and saved. If that does not
-    /// finish within <paramref name="timeout"/> (a long final pass), the session is stopped as canceled instead; what was captured stays on disk.
+    /// finish within <paramref name="timeout"/> (a long final pass, a stalled device, a stop that hangs) or fails, the session is aborted as
+    /// canceled instead. Whatever happens, no session is left Running, Paused or Finalizing: a last sweep of the store cancels any that remain
+    /// (for example one whose recorder is already gone). What was captured stays on disk.
     /// </summary>
     public async Task StopLiveForExitAsync(TimeSpan timeout)
     {
-        if (this.live is null)
+        var session = this.live ?? this.stopping ?? this.starting;
+        if (session is not null)
         {
-            return;
+            using var cts = new CancellationTokenSource(timeout);
+            try
+            {
+                if (!ReferenceEquals(session, this.live))
+                {
+                    // A start or a stop is already in flight and may never return; there is no graceful path left to wait on.
+                    throw new TimeoutException();
+                }
+
+                await this.StopLiveAsync(cts.Token).WaitAsync(timeout).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                this.RaiseNotice("The recording did not finish saving in time and was stopped as canceled; its audio and text so far are kept.");
+                await this.AbortLiveAsync(session).ConfigureAwait(false);
+            }
         }
 
-        using var cts = new CancellationTokenSource(timeout);
         try
         {
-            await this.StopLiveAsync(cts.Token).WaitAsync(timeout).ConfigureAwait(false);
+            // Idempotent: a tray-only start never opened the store, but a session left Running by an earlier run still has to be closed.
+            await this.store.InitializeAsync(CancellationToken.None).ConfigureAwait(false);
+            await this.MarkRecoverableMeetingsAsync().ConfigureAwait(false);
+            var swept = await this.store.CancelInFlightSessionsAsync("The app was closed while this session was still recording. The audio and text captured so far are kept.", CancellationToken.None).ConfigureAwait(false);
+            if (swept > 0)
+            {
+                System.Diagnostics.Trace.TraceWarning($"Exit canceled {swept} session(s) that were still in flight.");
+            }
         }
-        catch (Exception ex) when (ex is OperationCanceledException or TimeoutException)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            this.RaiseNotice("The recording did not finish saving in time and was stopped as canceled; its audio and text so far are kept.");
-            await this.DiscardLiveAsync().ConfigureAwait(false);
+            System.Diagnostics.Trace.TraceError($"Exit sweep failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// A meeting whose after-Stop pass is pending and whose stereo recording is on disk is finished on the next launch, but only from
+    /// Running, Interrupted or Failed. So such a meeting is left Interrupted by exit, not Canceled (which means the user threw it away).
+    /// </summary>
+    private bool IsRecoverableMeeting(TranscriptDocument? document) =>
+        document is { SourceType: TranscriptSourceType.Meeting } d
+        && FinalPassPending.IsPending(this.store.GetSessionMediaDirectory(d.SessionId))
+        && File.Exists(Path.Combine(this.store.GetSessionMediaDirectory(d.SessionId), "recording-16k-stereo.wav"));
+
+    private async Task MarkRecoverableMeetingsAsync()
+    {
+        var inFlight = new[] { TranscriptSessionStatus.Created, TranscriptSessionStatus.Running, TranscriptSessionStatus.Paused, TranscriptSessionStatus.Finalizing };
+        foreach (var summary in await this.store.ListAsync(0, int.MaxValue, CancellationToken.None).ConfigureAwait(false))
+        {
+            if (summary.SourceType != TranscriptSourceType.Meeting || !inFlight.Contains(summary.Status))
+            {
+                continue;
+            }
+
+            var document = await this.store.LoadAsync(summary.SessionId, CancellationToken.None).ConfigureAwait(false);
+            if (document is not null && this.IsRecoverableMeeting(document))
+            {
+                await this.store.SaveCheckpointAsync(document with { Status = TranscriptSessionStatus.Interrupted, UpdatedAt = DateTimeOffset.UtcNow }, CancellationToken.None).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private async Task AbortLiveAsync(LiveTranscriptionSession session)
+    {
+        Interlocked.CompareExchange(ref this.live, null, session);
+        Interlocked.CompareExchange(ref this.starting, null, session);
+        Interlocked.CompareExchange(ref this.stopping, null, session);
+        try
+        {
+            await session.AbortAsync(TimeSpan.FromSeconds(3), this.IsRecoverableMeeting(session.Host?.Document)).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            System.Diagnostics.Trace.TraceError($"Aborting the recording failed: {ex.Message}");
         }
     }
 
@@ -755,6 +843,11 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await this.DiscardLiveAsync().ConfigureAwait(false);
+        if ((this.stopping ?? this.starting) is { } inFlight)
+        {
+            await this.AbortLiveAsync(inFlight).ConfigureAwait(false);
+        }
+
         // Stop the worker first: it holds the GPU, and the providers' sockets then close quickly instead of waiting on it.
         if (this.nemotronWorker is not null)
         {

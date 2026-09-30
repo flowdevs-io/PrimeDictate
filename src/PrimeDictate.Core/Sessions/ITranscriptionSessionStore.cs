@@ -42,6 +42,12 @@ public interface ITranscriptionSessionStore : IAsyncDisposable
     /// </summary>
     ValueTask<IReadOnlyList<TranscriptSessionSummary>> MarkInterruptedSessionsAsync(CancellationToken cancellationToken);
 
+    /// <summary>
+    /// For app exit: every session still created, running, paused, or finalizing becomes <see cref="TranscriptSessionStatus.Canceled"/> with
+    /// <paramref name="reason"/>. Audio and text stay. Returns how many sessions changed.
+    /// </summary>
+    ValueTask<int> CancelInFlightSessionsAsync(string reason, CancellationToken cancellationToken);
+
     /// <summary>Deletes owned audio and keeps the transcript (transcript-only retention).</summary>
     ValueTask<IReadOnlyList<string>> DeleteOwnedAudioAsync(Guid sessionId, CancellationToken cancellationToken);
 

@@ -136,15 +136,24 @@ public sealed class App : Application
             return;
         }
 
+        // Each step gets its own guard: leaving must not be blocked by a failing step, and a failure while preparing
+        // the shell must not skip finalizing the recording.
         try
         {
             await shell.PrepareExitAsync();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            System.Diagnostics.Trace.TraceError($"Exit preparation failed: {ex}");
+        }
+
+        try
+        {
             await window.Workspace.StopLiveForExitAsync(TimeSpan.FromSeconds(20));
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            // Leaving must not be blocked by a failing step; Cleanup below still releases everything.
-            System.Diagnostics.Trace.TraceError($"Exit preparation failed: {ex}");
+            System.Diagnostics.Trace.TraceError($"Finalizing the recording at exit failed: {ex}");
         }
 
         desktop.Shutdown();

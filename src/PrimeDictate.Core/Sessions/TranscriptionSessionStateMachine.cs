@@ -18,7 +18,7 @@ public static class TranscriptionSessionStateMachine
             TranscriptSessionStatus.Running, TranscriptSessionStatus.Finalizing, TranscriptSessionStatus.Failed,
             TranscriptSessionStatus.Canceled, TranscriptSessionStatus.Interrupted
         ],
-        [TranscriptSessionStatus.Finalizing] = [TranscriptSessionStatus.Completed, TranscriptSessionStatus.Failed, TranscriptSessionStatus.Interrupted],
+        [TranscriptSessionStatus.Finalizing] = [TranscriptSessionStatus.Completed, TranscriptSessionStatus.Failed, TranscriptSessionStatus.Interrupted, TranscriptSessionStatus.Canceled],
         // A rerun with another model starts a new result version on a finished session.
         [TranscriptSessionStatus.Completed] = [TranscriptSessionStatus.Running],
         [TranscriptSessionStatus.Failed] = [TranscriptSessionStatus.Running, TranscriptSessionStatus.Canceled],
