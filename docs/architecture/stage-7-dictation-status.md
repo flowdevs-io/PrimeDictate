@@ -20,7 +20,9 @@ Branch `claude/dictation-parity-4k0tl9`, following `stage-7-parity-plan.md`. "Ra
 
 | Voice commands (commit / discard / history phrases, incl. "ok"/"okay" and "thanks"/"thank you" variants) | `VoiceCommandMatcher.cs`, `VoiceCommands.cs` | Ran: unit tests. Ported from Justin's committed version (b2e6dcc). Dictation only; transcription mode has no hook |
 | Wake word (matching and idle-mic listener, yields the mic to dictation and to transcription sessions via `MicrophoneCoordinator`) | `WakeWord.cs`, `DictationHost.cs` | Ran: unit tests with a fake microphone. Not tried with a real microphone or model |
-| Particle overlay (150 particles on a vector field, scrolling mirrored waveform) | `OverlayVisualizer.cs` (physics, tested), `VisualizerControl.cs` (drawing) | Physics ran; drawing not looked at |
+| Particle overlay (150 particles on a vector field, scrolling mirrored waveform) | `OverlayVisualizer.cs` (physics, tested), `VisualizerControl.cs` (drawing) | Physics ran; drawing seen in an offscreen render |
+| Overlay behavior, after Justin's first Windows run: shown only while dictating (and briefly for a notice or the final words) unless "Keep the overlay on screen" is on; compact = microphone pill, full = fixed-size box with the latest four lines, so neither resizes as words arrive; drag anywhere, the spot is remembered (`OverlayAnchorX/Y`, new app only) and kept on a connected screen; ✕ hides it until the next dictation; not click-through, still never activated | `DictationOverlayWindow.cs`, `Win32Overlay.cs` | Rendered offscreen and looked at; dragging and ✕ not yet tried on Windows |
+| Settings window fits the screen: never taller than the working area, the form scrolls, Save stays in view, long labels wrap | `DictationSettingsWindow.cs`, `ModelDownloadPanel.cs` | Rendered offscreen and looked at |
 
 | Ollama rewrite (loopback only unless the user allows a remote endpoint; failures type the raw text) | `OllamaRewriter.cs` | Ran: unit tests with a fake HTTP handler |
 | Dictation history (SQLite, search, delete, clear; imports WPF `history.json` once, read-only) and window | `DictationHistory.cs`, `DictationHistoryWindow.cs` | Store ran: unit tests. Window not looked at |
@@ -58,5 +60,5 @@ Final-only typing, no clipboard, no live retyping into the target, Enter only af
 - Updater, installers.
 - Wake word uses a Tiny/Base Whisper model when installed, else the dictation model (as WPF does). Moonshine/Whisper.net wake models are not ported.
 - The WPF app's focused-edit-control insertion (`WindowsFocusedTextControl`) and direct injection into the original target.
-- Compact-mode ripple animation and the copy/pin buttons of the WPF overlay, macOS `NSPanel`, Linux X11 hints, saved overlay position.
+- Compact-mode ripple animation and the copy/pin buttons of the WPF overlay, macOS `NSPanel`, Linux X11 hints.
 - First-run onboarding, launch at login, updater, packaging.

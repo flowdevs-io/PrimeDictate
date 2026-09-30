@@ -51,6 +51,14 @@ public sealed class DictationSettings
 
     public bool IsOverlaySticky { get; set; }
 
+    /// <summary>
+    /// Where the user dragged the overlay: the bottom-center point it grows up from, in screen pixels. Null keeps the
+    /// default, a little above the bottom middle of the primary screen. New app only (the WPF overlay did not remember).
+    /// </summary>
+    public int? OverlayAnchorX { get; set; }
+
+    public int? OverlayAnchorY { get; set; }
+
     public List<ReplacementDto> TranscriptReplacements { get; set; } = [];
 
     /// <summary>Opt-in: listen on the idle microphone for the wake phrase and start dictation.</summary>

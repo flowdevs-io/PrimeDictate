@@ -1,6 +1,9 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
+using Avalonia.Platform;
+using Avalonia.Threading;
 using PrimeDictate.Core.Dictation;
 using PrimeDictate.Core.Providers;
 using PrimeDictate.Platforms.Dictation;
@@ -20,24 +23,25 @@ public sealed class DictationSettingsWindow : Window
     private readonly ComboBox micBox = new() { MinWidth = 260 };
     private readonly Slider gain = new() { Minimum = 0.5, Maximum = 4, Width = 200 };
     private readonly NumericUpDown silence = new() { Minimum = 0, Maximum = 30, Increment = 1, FormatString = "0", Width = 120 };
-    private readonly CheckBox audioCues = new() { Content = "Play start and stop sounds" };
+    private readonly CheckBox audioCues = Check("Play start and stop sounds");
     private readonly LaunchAtLogin launch = new();
     private readonly ComboBox deviceBox = new() { ItemsSource = new[] { "Auto (CUDA if ready, else CPU)", "CPU", "CUDA" }, MinWidth = 260 };
-    private readonly CheckBox launchAtLogin = new() { Content = "Start PrimeDictate when I sign in (tray only)" };
-    private readonly CheckBox sendEnter = new() { Content = "Coding mode: press Enter after typing" };
-    private readonly CheckBox returnToStart = new() { Content = "If focus moved, return to the window I started in" };
-    private readonly CheckBox typeWithoutGuard = new() { Content = "Type even when the app cannot check which window is in front" };
-    private readonly CheckBox wakeEnabled = new() { Content = "Wake word: start dictation when I say the phrase (listens on the idle microphone, audio stays in memory)" };
+    private readonly CheckBox launchAtLogin = Check("Start PrimeDictate when I sign in (tray only)");
+    private readonly CheckBox sendEnter = Check("Coding mode: press Enter after typing");
+    private readonly CheckBox returnToStart = Check("If focus moved, return to the window I started in");
+    private readonly CheckBox typeWithoutGuard = Check("Type even when the app cannot check which window is in front");
+    private readonly CheckBox wakeEnabled = Check("Wake word: start dictation when I say the phrase (listens on the idle microphone, audio stays in memory)");
     private readonly TextBox wakePhrase = new() { Width = 260 };
-    private readonly CheckBox voiceCommands = new() { Content = "Voice commands while dictating" };
+    private readonly CheckBox voiceCommands = Check("Voice commands while dictating");
     private readonly TextBox commitPhrase = new() { Width = 260 };
     private readonly TextBox stopPhrase = new() { Width = 260 };
     private readonly TextBox historyPhrase = new() { Width = 260 };
     private readonly ComboBox overlayBox = new() { ItemsSource = new[] { "Compact microphone", "Full panel" } };
-    private readonly CheckBox sticky = new() { Content = "Keep the overlay pinned on screen" };
-    private readonly TextBox replacements = new() { AcceptsReturn = true, MinHeight = 90, PlaceholderText = "spoken phrase => replacement (one per line)" };
+    private readonly CheckBox sticky = Check("Keep the overlay on screen when not dictating");
+    private bool resetOverlayPosition;
+    private readonly TextBox replacements = new() { AcceptsReturn = true, MinHeight = 90, MaxHeight = 220, PlaceholderText = "spoken phrase => replacement (one per line)" };
     private readonly Dictionary<HotkeyAction, (TextBlock Label, HotkeyGesture Gesture)> hotkeys = [];
-    private readonly TextBlock status = new() { TextWrapping = Avalonia.Media.TextWrapping.Wrap, Opacity = 0.75 };
+    private readonly TextBlock status = new() { TextWrapping = Avalonia.Media.TextWrapping.Wrap, Opacity = 0.75, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
     private DictationSettings working;
     private IReadOnlyList<AudioInputDevice> devices = [];
 
@@ -50,8 +54,9 @@ public sealed class DictationSettingsWindow : Window
         this.Width = 560;
         this.SizeToContent = SizeToContent.Height;
         this.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        this.FitToScreen(this.Screens.Primary);
 
-        var panel = new StackPanel { Margin = new Thickness(20), Spacing = 10 };
+        var panel = new StackPanel { Margin = new Thickness(20, 20, 20, 10), Spacing = 10 };
         panel.Children.Add(Row("Model", this.modelBox));
         panel.Children.Add(new TextBlock { Text = "Download another model", FontWeight = Avalonia.Media.FontWeight.SemiBold });
         panel.Children.Add(new ModelDownloadPanel(host, this.RefreshModels));
@@ -85,23 +90,89 @@ public sealed class DictationSettingsWindow : Window
         panel.Children.Add(Row("Discard phrase (stops without typing)", this.stopPhrase));
         panel.Children.Add(Row("History phrase", this.historyPhrase));
         panel.Children.Add(Row("Overlay", this.overlayBox));
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Shows while you dictate: a microphone, or a panel with the words so far. Drag it anywhere; ✕ hides it until the next dictation.",
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            Opacity = 0.7
+        });
         panel.Children.Add(this.sticky);
+        var resetOverlay = new Button { Content = "Move the overlay back to the bottom of the screen" };
+        resetOverlay.Click += (_, _) =>
+        {
+            this.resetOverlayPosition = true;
+            this.status.Text = "The overlay goes back to the bottom of the screen when you save.";
+        };
+        panel.Children.Add(resetOverlay);
         panel.Children.Add(new TextBlock { Text = "Replacements" });
         panel.Children.Add(this.replacements);
-        panel.Children.Add(this.status);
 
-        var save = new Button { Content = "Save", HorizontalAlignment = HorizontalAlignment.Right };
+        // Save and the status line stay in view under the form, which scrolls when it is taller than the screen.
+        var save = new Button { Content = "Save", VerticalAlignment = VerticalAlignment.Center };
         save.Click += (_, _) => this.Save();
-        panel.Children.Add(save);
-        this.Content = new ScrollViewer { Content = panel };
-        this.Opened += async (_, _) => await this.LoadAsync();
+        var footer = new DockPanel { Margin = new Thickness(20, 10, 20, 16) };
+        DockPanel.SetDock(save, Dock.Right);
+        footer.Children.Add(save);
+        footer.Children.Add(this.status);
+        var root = new DockPanel();
+        DockPanel.SetDock(footer, Dock.Bottom);
+        root.Children.Add(footer);
+        root.Children.Add(new ScrollViewer { Content = panel, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
+        this.Content = root;
+        this.Opened += async (_, _) =>
+        {
+            this.FitToScreen(this.Screens.ScreenFromWindow(this));
+            await this.LoadAsync();
+        };
     }
 
-    private static Control Row(string label, Control input) => new StackPanel
+    private static CheckBox Check(string text) => new() { Content = new TextBlock { Text = text, TextWrapping = Avalonia.Media.TextWrapping.Wrap } };
+
+    private static Control Row(string label, Control input)
     {
-        Spacing = 4,
-        Children = { new TextBlock { Text = label }, input }
-    };
+        // Under its label, not centered in the window.
+        input.HorizontalAlignment = HorizontalAlignment.Left;
+        return new StackPanel
+        {
+            Spacing = 4,
+            Children = { new TextBlock { Text = label, TextWrapping = Avalonia.Media.TextWrapping.Wrap }, input }
+        };
+    }
+
+    /// <summary>
+    /// Never taller than the screen the window is on (the whole form is, on a laptop or a scaled screen): the form scrolls
+    /// instead, and once shown the window is moved back inside the screen if it hangs over an edge.
+    /// </summary>
+    private void FitToScreen(Screen? screen)
+    {
+        if (screen is null)
+        {
+            return;
+        }
+
+        var area = screen.WorkingArea;
+        // The working area is in pixels; the title bar and a little air stay outside the client area.
+        this.MaxHeight = Math.Max(320, (area.Height / screen.Scaling) - 80);
+        if (!this.IsVisible)
+        {
+            return;
+        }
+
+        Dispatcher.UIThread.Post(
+            () =>
+            {
+                var frame = this.FrameSize ?? this.ClientSize;
+                var width = (int)(frame.Width * screen.Scaling);
+                var height = (int)(frame.Height * screen.Scaling);
+                var x = Math.Clamp(this.Position.X, area.X, Math.Max(area.X, area.Right - width));
+                var y = Math.Clamp(this.Position.Y, area.Y, Math.Max(area.Y, area.Bottom - height));
+                if (x != this.Position.X || y != this.Position.Y)
+                {
+                    this.Position = new PixelPoint(x, y);
+                }
+            },
+            DispatcherPriority.Background);
+    }
 
     private Control HotkeyRow(HotkeyAction action, string name)
     {
@@ -126,12 +197,14 @@ public sealed class DictationSettingsWindow : Window
 
             label.Text = this.hotkeys[action].Gesture.ToString();
         };
-        return new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Spacing = 10,
-            Children = { new TextBlock { Text = name, MinWidth = 190, VerticalAlignment = VerticalAlignment.Center }, label, change }
-        };
+        // Columns, not a horizontal stack, so "Press the new shortcut..." wraps inside the window instead of running past it.
+        var title = new TextBlock { Text = name, TextWrapping = Avalonia.Media.TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
+        label.TextWrapping = Avalonia.Media.TextWrapping.Wrap;
+        label.MinWidth = 0;
+        label.Margin = new Thickness(10, 0);
+        Grid.SetColumn(label, 1);
+        Grid.SetColumn(change, 2);
+        return new Grid { ColumnDefinitions = new ColumnDefinitions("190,*,Auto"), Children = { title, label, change } };
     }
 
     private void RefreshModels()
@@ -228,6 +301,11 @@ public sealed class DictationSettingsWindow : Window
         s.VoiceHistoryPhrase = this.historyPhrase.Text?.Trim() ?? string.Empty;
         s.OverlayMode = (OverlayStyle)Math.Max(0, this.overlayBox.SelectedIndex);
         s.IsOverlaySticky = this.sticky.IsChecked == true;
+        if (this.resetOverlayPosition)
+        {
+            s.OverlayAnchorX = null;
+            s.OverlayAnchorY = null;
+        }
         s.DictationHotkey = HotkeyDto.From(this.hotkeys[HotkeyAction.ToggleDictation].Gesture);
         s.StopHotkey = HotkeyDto.From(this.hotkeys[HotkeyAction.EmergencyStop].Gesture);
         s.HistoryHotkey = HotkeyDto.From(this.hotkeys[HotkeyAction.ShowHistory].Gesture);

@@ -169,6 +169,14 @@ public sealed class DictationHost : IAsyncDisposable
         }
     }
 
+    /// <summary>Saves where the user dragged the overlay (the new app's settings file only).</summary>
+    public void RememberOverlayAnchor(int x, int y)
+    {
+        this.Settings.OverlayAnchorX = x;
+        this.Settings.OverlayAnchorY = y;
+        this.store.Save(this.Settings);
+    }
+
     /// <summary>First step of leaving: no hotkey or wake word can start a new dictation while the app shuts down.</summary>
     public void StopListeningForExit()
     {

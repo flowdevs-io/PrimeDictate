@@ -45,7 +45,8 @@ public sealed class DictationShell : IAsyncDisposable
 
     public void Start(Application app)
     {
-        this.overlay.Configure(this.host.Settings.OverlayMode, this.host.Settings.IsOverlaySticky);
+        this.ConfigureOverlay();
+        this.overlay.AnchorMoved += (x, y) => this.host.RememberOverlayAnchor(x, y);
         this.BuildTray(app);
         this.host.Notice += message => Dispatcher.UIThread.Post(() => this.OnNotice(message));
         this.host.HistoryRequested += () => Dispatcher.UIThread.Post(this.ShowHistory);
@@ -213,7 +214,13 @@ public sealed class DictationShell : IAsyncDisposable
         }
 
         this.settingsWindow = new DictationSettingsWindow(this.host, this.workspace.MicrophoneSource);
-        this.settingsWindow.Closed += (_, _) => this.overlay.Configure(this.host.Settings.OverlayMode, this.host.Settings.IsOverlaySticky);
+        this.settingsWindow.Closed += (_, _) => this.ConfigureOverlay();
         this.settingsWindow.Show();
+    }
+
+    private void ConfigureOverlay()
+    {
+        var settings = this.host.Settings;
+        this.overlay.Configure(settings.OverlayMode, settings.IsOverlaySticky, settings.OverlayAnchorX, settings.OverlayAnchorY);
     }
 }
