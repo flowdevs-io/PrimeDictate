@@ -21,4 +21,8 @@
     <ProjectReference Include="..\PrimeDictate.Core\PrimeDictate.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="PrimeDictate.Core.Tests" />
+  </ItemGroup>
+
 </Project>

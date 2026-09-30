@@ -83,8 +83,21 @@ recognizer and a stand-in diarizer on Linux, not on Windows with the real worker
    - If a window comes back without word times, that window is redone turn by turn instead: each speaker's talking there
      (gaps under 1 s joined, 0.25 s padding) is sent on its own, and a duplicate word from overlapping turns is hidden on
      the speaker the diarizer covers less. The session note reports each window's and turn's word count.
-   - Microphone lines are "You". Each system word takes the diarizer speaker covering most of it; one-word flickers are
-     smoothed and lines are cut where the speaker changes. Echo removal is the same as in the live view.
+   - Microphone lines are "You". Each system word takes the diarizer speaker covering most of it. One-word flickers are
+     smoothed only among words said without a 1 s pause, so a lone reply between another person's turns keeps its speaker.
+     Echo removal is the same as in the live view, judged per recognized line; the hidden echo words are kept in rows of
+     their own that are not shown.
+   - Rows (`MeetingFinalPass.BuildRows`) are cut from each channel's words, ignoring where the recognizer's windows ended.
+     A row ends where the speaker changes, where the diarizer's turn for that speaker ends (one speaker's segments less than
+     1 s apart count as one turn, since the diarizer leaves 0.3-0.9 s gaps inside a sentence), at a pause of 1 s or more
+     between words, and where the other channel's row starts inside it. That last cut is skipped when it would leave a
+     piece under 0.5 s (a word said as the other side starts or stops), and both sides' starts are taken before cutting,
+     so talking over each other does not shred either row.
+   - The run is marked `SegmentsAreRows`, so the view shows each segment as its own row in start order, as the exports
+     list them. The live view's grouping (same speaker within 5 s joins one row; a short line folds into its speaker's
+     earlier row) is not applied: it would join the turns again and put a folded line ahead of one said before it. The
+     9:14 PM run (build `cbde440`) is the test case: one remote speaker in three diarizer turns had become one row,
+     24.5-46.9 s, around a You line at 40.8 s.
    - Nothing is written until everything succeeded. The rows become a new result version and replace the draft; the draft
      stays stored as the earlier result. The overlap segments are saved as `system-diarization.json` and drive the timeline.
    - The session notes say when the pass started and what it produced or why it failed.

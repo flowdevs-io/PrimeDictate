@@ -154,7 +154,12 @@ public sealed record RecognitionRunInfo(
     string? RuntimeVersion,
     string RequestedBackend,
     string EffectiveBackend,
-    DateTimeOffset StartedAt);
+    DateTimeOffset StartedAt,
+    /// <summary>
+    /// The run already cut its segments where rows end (the after-Stop meeting pass: at speaker changes, pauses and where the
+    /// other side starts talking), so each segment is shown as its own row, as exports list them. Older runs read false.
+    /// </summary>
+    bool SegmentsAreRows = false);
 
 public sealed record TranscriptDocument
 {

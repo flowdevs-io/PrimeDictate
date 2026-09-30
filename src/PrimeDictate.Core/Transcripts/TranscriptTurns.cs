@@ -14,10 +14,17 @@ public static class TranscriptTurns
     /// <summary>
     /// Groups final lines from the same speaker (after merges) that are closer together than <paramref name="gap"/> into one
     /// turn, so short pauses do not start new rows. A live line without a speaker never joins a turn; it is guessed to
-    /// continue the previous speaker when it follows closely.
+    /// continue the previous speaker when it follows closely. A result whose run already cut its lines into rows
+    /// (<see cref="RecognitionRunInfo.SegmentsAreRows"/>) is shown one line per row in start order: joining lines again would
+    /// undo those cuts, and a fragment folded into an earlier row would sit before a line said ahead of it.
     /// </summary>
     public static IReadOnlyList<TranscriptTurn> Group(TranscriptDocument document, TimeSpan gap)
     {
+        if (document.Runs.FirstOrDefault(r => r.ResultVersion == document.ActiveResultVersion) is { SegmentsAreRows: true })
+        {
+            return document.ActiveSegments.Where(s => s.DisplayText.Length > 0).Select(s => new TranscriptTurn([s], null)).ToList();
+        }
+
         var turns = new List<(List<TranscriptSegment> Segments, string? Guess)>();
         TranscriptSegment? previous = null;
         string? previousSpeaker = null;

@@ -210,4 +210,41 @@ public class TranscriptTests
         var turns = TranscriptTurns.Group(doc, TimeSpan.FromSeconds(5));
         Assert.Equal([["m1", "m2"], ["s1"]], turns.Select(t => t.Segments.Select(s => s.Id).ToArray()).ToArray());
     }
+
+    [Fact]
+    public void A_run_that_cut_its_own_rows_is_shown_one_line_per_row_in_start_order()
+    {
+        var doc = NewDocument();
+        foreach (var id in new[] { "local", "speaker-1" })
+        {
+            doc = TranscriptDocumentReducer.Apply(doc, new SpeakerUpdated(doc.SessionId, new TranscriptSpeaker(id, id, null)), Now);
+        }
+
+        doc = TranscriptDocumentReducer.Apply(doc, new SessionStarted(doc.SessionId, Run(1) with { SegmentsAreRows = true }), Now);
+        TranscriptSegment Line(string id, double start, double end, string speaker) =>
+            Segment(id, id, start, end) with { Speakers = [new SpeakerAttribution(speaker, TimeSpan.FromSeconds(start), TimeSpan.FromSeconds(end), null)] };
+        foreach (var segment in new[]
+        {
+            Line("s1", 0, 3, "speaker-1"),
+            Line("s2", 4, 6, "speaker-1"),       // 1 s later, same speaker: the 5 s rule would join it
+            Line("m1", 6.5, 7.5, "local"),
+            Line("s3", 8, 9.5, "speaker-1"),
+            Line("m2", 9.6, 10.4, "local"),
+            Line("s4", 10.5, 10.7, "speaker-1"), // short: the fragment rule would fold it into s3's row, ahead of m2
+            Line("m3", 11, 12, "local")          // becomes a hidden echo below
+        })
+        {
+            doc = TranscriptDocumentReducer.Apply(doc, new SegmentFinalized(doc.SessionId, segment), Now);
+        }
+
+        doc = TranscriptDocumentReducer.EditSegment(doc, "m3", string.Empty, Now);
+        var turns = TranscriptTurns.Group(doc, TimeSpan.FromSeconds(5));
+        Assert.Equal([["s1"], ["s2"], ["m1"], ["s3"], ["m2"], ["s4"]], turns.Select(t => t.Segments.Select(s => s.Id).ToArray()).ToArray());
+        Assert.All(turns, t => Assert.Null(t.GuessedSpeakerId));
+
+        // The same lines from a run that did not cut its own rows are grouped as before.
+        doc = doc with { Runs = [Run(1)] };
+        turns = TranscriptTurns.Group(doc, TimeSpan.FromSeconds(5));
+        Assert.Equal([["s1", "s2"], ["m1"], ["s3", "s4"], ["m2"]], turns.Select(t => t.Segments.Select(s => s.Id).ToArray()).ToArray());
+    }
 }
