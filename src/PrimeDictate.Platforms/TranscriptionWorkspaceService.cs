@@ -441,7 +441,78 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
             return (null, "The Nemotron diarizer file is not installed.");
         }
 
-        // Same choice as the live worker: CUDA when a CUDA build is installed and not switched off, then CPU.
+        var (overlay, error) = await this.RunDiarizerAsync(setup, stereo, directory, cancellationToken).ConfigureAwait(false);
+        overlay?.Save(directory);
+        return (overlay, error);
+    }
+
+    /// <summary>True when Nemotron and its diarizer are installed, so a finished meeting can get a final pass with speaker labels.</summary>
+    public bool FinalPassAvailable => this.nemotron.Any(n => n.Files.DiarizerPath is not null);
+
+    /// <summary>
+    /// The second pass of a two-pass meeting: reads the saved stereo recording with Nemotron and the whole-recording
+    /// diarizer and replaces the live draft with the final transcript, speaker labels and overlap. The notes say what
+    /// happened and are saved. A failure leaves the draft as it was.
+    /// </summary>
+    public async Task<FinalPassResult?> RunFinalPassAsync(SessionDocumentHost host, IProgress<double>? progress, CancellationToken cancellationToken)
+    {
+        async Task NoteAsync(string text)
+        {
+            host.AddNote(text);
+            await host.CheckpointAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+
+        var document = host.Document;
+        var directory = this.store.GetSessionMediaDirectory(document.SessionId);
+        var stereo = Path.Combine(directory, "recording-16k-stereo.wav");
+        var choice = this.AvailableModels().FirstOrDefault(m => m.ModelId.StartsWith("nemotron:", StringComparison.Ordinal) && m.DetectsSpeakers);
+        var setup = choice is null ? null : this.nemotron.FirstOrDefault(n => $"nemotron:{n.Asr.Id}" == choice.ModelId);
+        if (document.SourceType != TranscriptSourceType.Meeting || document.Status != TranscriptSessionStatus.Completed || !File.Exists(stereo) || choice is null || setup is null)
+        {
+            await NoteAsync("Final pass with speaker labels was not run: it needs a finished meeting with a stereo recording and Nemotron with its diarizer installed.").ConfigureAwait(false);
+            return null;
+        }
+
+        if (document.Speakers.Any(s => s.Id is not ("local" or "remote")))
+        {
+            await NoteAsync("Final pass with speaker labels was not run: this meeting already has speaker labels from a live diarized pass.").ConfigureAwait(false);
+            return null;
+        }
+
+        try
+        {
+            await NoteAsync($"Improving the transcript with speaker labels after Stop (running). The live text stays as the draft until it is done.").ConfigureAwait(false);
+            await this.ProviderAsync(choice, cancellationToken).ConfigureAwait(false); // starts the worker if it is not running
+            var worker = this.nemotronWorker ?? throw new InvalidOperationException("The Nemotron worker is not running.");
+            await using var asr = new NemotronProvider(worker, choice.ModelId, false);
+            var result = await new MeetingFinalPass(this.scheduler).RunAsync(
+                host,
+                stereo,
+                asr,
+                async ct => await this.RunDiarizerAsync(setup, stereo, directory, ct).ConfigureAwait(false),
+                choice.Language ?? this.Language,
+                directory,
+                progress,
+                cancellationToken).ConfigureAwait(false);
+            await NoteAsync($"Final pass ({asr.Runtime.EffectiveBackend}): {result.MicrophoneLines} lines from the microphone, {result.SystemLines} from the system audio, {result.SpeakerCount} system speakers, {result.OverlapSeconds:0.#} s of overlapping speech. These rows replace the live draft, which is kept as the earlier result."
+                + (result.DiarizerProblem is { } problem ? $" Speakers could not be told apart: {problem}" : string.Empty)).ConfigureAwait(false);
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            await NoteAsync("Final pass canceled, so the live draft is kept.").ConfigureAwait(false);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            await NoteAsync($"Final pass failed, so the live draft is kept: {ex.Message}").ConfigureAwait(false);
+            return null;
+        }
+    }
+
+    /// <summary>Diarizes the system channel with the same device choice as the live worker, falling back to the CPU worker.</summary>
+    private async Task<(DiarizationOverlay? Overlay, string? Error)> RunDiarizerAsync(NemotronSetup setup, string stereo, string directory, CancellationToken cancellationToken)
+    {
         var attempts = new List<(string Worker, string Device)>();
         if (setup.CudaWorkerPath is not null && this.nemotronPreference != "cpu")
         {
@@ -461,7 +532,6 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
             }
         }
 
-        overlay?.Save(directory);
         return (overlay, error);
     }
 
