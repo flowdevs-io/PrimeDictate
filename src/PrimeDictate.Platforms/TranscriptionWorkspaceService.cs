@@ -529,10 +529,30 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     {
         var sessions = await this.ListSessionsAsync(cancellationToken).ConfigureAwait(false);
         return sessions
-            .Where(x => x.SourceType == TranscriptSourceType.Meeting && x.Status == TranscriptSessionStatus.Completed && FinalPassPending.IsPending(this.store.GetSessionMediaDirectory(x.SessionId)))
+            .Where(x => x.SourceType == TranscriptSourceType.Meeting && x.Status is TranscriptSessionStatus.Completed or TranscriptSessionStatus.Interrupted or TranscriptSessionStatus.Failed && FinalPassPending.IsPending(this.store.GetSessionMediaDirectory(x.SessionId)))
             .OrderByDescending(x => x.CreatedAt)
             .Select(x => x.SessionId)
             .ToList();
+    }
+
+    /// <summary>
+    /// A recording the app lost (crash, exit, capture fault) still has its audio on disk. Marks it Completed with the length of
+    /// that audio, so the after-Stop pass can transcribe it like any other meeting.
+    /// </summary>
+    private async Task FinishCutShortRecordingAsync(SessionDocumentHost host, string stereo, CancellationToken cancellationToken)
+    {
+        var probe = await this.decoder.ProbeAsync(stereo, cancellationToken).ConfigureAwait(false);
+        var duration = probe.Duration ?? TimeSpan.Zero;
+        if (host.Document.Status == TranscriptSessionStatus.Failed)
+        {
+            host.SetStatus(TranscriptSessionStatus.Running);
+        }
+
+        host.SetStatus(TranscriptSessionStatus.Finalizing);
+        host.Apply(new SessionCompleted(host.Document.SessionId, duration));
+        host.Modify(d => d with { Duration = duration });
+        host.AddNote($"This recording was cut short (the app stopped or capture failed). Its saved audio is {(int)duration.TotalMinutes}:{duration.Seconds:00} long, so the transcript is being made from that.");
+        await host.CheckpointAsync(CancellationToken.None).ConfigureAwait(false);
     }
 
     private async Task<FinalPassResult?> RunFinalPassCoreAsync(SessionDocumentHost host, IProgress<double>? progress, CancellationToken cancellationToken)
@@ -546,6 +566,12 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         var document = host.Document;
         var directory = this.store.GetSessionMediaDirectory(document.SessionId);
         var stereo = Path.Combine(directory, "recording-16k-stereo.wav");
+        if (document.SourceType == TranscriptSourceType.Meeting && document.Status is TranscriptSessionStatus.Interrupted or TranscriptSessionStatus.Failed && File.Exists(stereo))
+        {
+            await this.FinishCutShortRecordingAsync(host, stereo, cancellationToken).ConfigureAwait(false);
+            document = host.Document;
+        }
+
         var choice = this.AvailableModels().FirstOrDefault(m => m.ModelId.StartsWith("nemotron:", StringComparison.Ordinal) && m.DetectsSpeakers);
         var setup = choice is null ? null : this.nemotron.FirstOrDefault(n => $"nemotron:{n.Asr.Id}" == choice.ModelId);
         if (document.SourceType != TranscriptSourceType.Meeting || document.Status != TranscriptSessionStatus.Completed || !File.Exists(stereo) || choice is null || setup is null)

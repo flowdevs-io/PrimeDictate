@@ -60,6 +60,8 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
     private readonly Channel<Item> queue = Channel.CreateUnbounded<Item>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
     private readonly CancellationTokenSource stopSignal = new();
     private IAsyncDisposable? micLease;
+    private static readonly TimeSpan CaptureStopTimeout = TimeSpan.FromSeconds(30);
+
     private IAudioCaptureLease? capture;
     private WavFileWriter? writer;
     private bool keepStereo;
@@ -239,7 +241,23 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         }
 
         await this.StopCaptureAsync().ConfigureAwait(false);
-        await this.captureTask!.ConfigureAwait(false);
+        try
+        {
+            // The capture loop ends once the lease is disposed; if it does not, Stop still completes and keeps the audio so far.
+            await this.captureTask!.WaitAsync(CaptureStopTimeout).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            this.failure ??= new TimeoutException("The audio capture did not stop in time.");
+            this.Error?.Invoke("The audio capture did not stop in time. What was recorded so far is kept.");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            this.failure ??= ex;
+        }
+
+        // The recording is safe on disk from here, whatever recognition does next.
+        this.writer?.Flush();
         this.queue.Writer.TryComplete();
         await this.inferenceTask!.ConfigureAwait(false);
 
@@ -407,6 +425,12 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
             // Disk full or file lock. Keep the transcript so far and stop safely.
             this.failure = ex;
             this.Error?.Invoke("Recording stopped because the audio file could not be written.");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Nothing else may end the loop unseen: a fault here used to leave a silent, never-finishing recording.
+            this.failure = ex;
+            this.Error?.Invoke($"Recording stopped unexpectedly ({ex.GetType().Name}). What was recorded so far is kept; press Stop to save it.");
         }
         finally
         {
