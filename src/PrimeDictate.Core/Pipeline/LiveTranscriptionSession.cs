@@ -171,7 +171,8 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
             await this.Host.CheckpointAsync(cancellationToken).ConfigureAwait(false);
             this.timeline.BeginInterval(now);
             this.inferenceTask = Task.Run(this.InferenceLoopAsync, CancellationToken.None);
-            this.captureTask = Task.Run(this.CaptureLoopAsync, CancellationToken.None);
+            var startedCapture = this.capture!;
+            this.captureTask = Task.Run(() => this.CaptureLoopAsync(startedCapture), CancellationToken.None);
         }
         catch
         {
@@ -338,9 +339,9 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         }
     }
 
-    private async Task CaptureLoopAsync()
+    // The lease is passed in: a very quick Stop can clear this.capture before the task body first runs.
+    private async Task CaptureLoopAsync(IAudioCaptureLease lease)
     {
-        var lease = this.capture!;
         var resampler = new StreamingResampler(lease.Format.SampleRate, AudioFormat.SpeechTimeline.SampleRate);
         var rightResampler = this.keepStereo ? new StreamingResampler(lease.Format.SampleRate, AudioFormat.SpeechTimeline.SampleRate) : null;
         if (this.options.AutoGain && this.options.Source != TranscriptSourceType.Microphone)
