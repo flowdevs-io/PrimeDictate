@@ -74,12 +74,18 @@ public sealed class DictationSettings
 
     public string VoiceHistoryPhrase { get; set; } = VoiceCommandProcessor.DefaultHistoryPhrase;
 
+    /// <summary>
+    /// Phrases that run a command on this computer while dictating. Same shape as the WPF app's list, so imported commands
+    /// keep their On state (the user chose them there). Commands added in this app start Off.
+    /// </summary>
+    public List<VoiceShellCommand> VoiceShellCommands { get; set; } = [];
+
     public VoiceCommandOptions ToVoiceCommandOptions() => new(
         this.EnableVoiceCommands,
         this.VoiceDictationPhrase?.Trim() ?? string.Empty,
         this.VoiceStopPhrase?.Trim() ?? string.Empty,
         this.VoiceHistoryPhrase?.Trim() ?? string.Empty,
-        []);
+        (this.VoiceShellCommands ?? []).Where(c => c is not null).ToList());
 
     public bool EnableOllamaPostProcessing { get; set; }
 

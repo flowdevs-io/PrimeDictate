@@ -59,7 +59,8 @@ public sealed class DictationHost : IAsyncDisposable
             injector ?? new SharpHookTextInjector(),
             microphone,
             voiceCommands ?? new VoiceCommandProcessor(() => this.Settings.ToVoiceCommandOptions()),
-            rewriter: new OllamaRewriter(() => this.Settings.ToOllamaOptions(), report: message => this.Notice?.Invoke(message)));
+            rewriter: new OllamaRewriter(() => this.Settings.ToOllamaOptions(), report: message => this.Notice?.Invoke(message)),
+            shellRunner: new ProcessVoiceShellCommandRunner());
         this.Controller.Notice += message => this.Notice?.Invoke(message);
         this.Controller.HistoryRequested += () => this.HistoryRequested?.Invoke();
         this.Controller.Committed += this.OnCommitted;

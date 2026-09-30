@@ -299,6 +299,135 @@ public sealed class DictationLoopTests
         public override DateTimeOffset GetUtcNow() => DateTimeOffset.UtcNow;
     }
 
+    private static readonly VoiceCommandOptions ShellOptionsBase = new(true, "thank you", "potato farmer", "show me the money", []);
+
+    private static async Task<(List<DictationCommit> Commits, FakeInjector Injector, FakeShellRunner Runner)> DictateAsync(
+        string transcript,
+        VoiceShellCommand[] commands,
+        FakeShellRunner? runner = null,
+        bool withRunner = true)
+    {
+        runner ??= new FakeShellRunner();
+        var source = new FakeSource();
+        var inj = new FakeInjector();
+        var commits = new List<DictationCommit>();
+        var processor = new VoiceCommandProcessor(() => ShellOptionsBase with { ShellCommands = commands });
+        await using var controller = new DictationController(
+            source, () => new FakeProvider(transcript), new FakeGuard(), inj, voiceCommands: processor, shellRunner: withRunner ? runner : null);
+        controller.Options = new DictationOptions { AutoCommitSilence = TimeSpan.Zero };
+        controller.Committed += commits.Add;
+        await controller.ToggleAsync();
+        source.Lease!.Push(Tone(1.0));
+        await WaitFor(() => controller.IsRecording);
+        await controller.ToggleAsync();
+        return (commits, inj, runner);
+    }
+
+    [Fact]
+    public async Task Shell_command_runs_the_saved_command_and_stop_types_nothing()
+    {
+        var saved = new VoiceShellCommand { Phrase = "open notes", Command = "notepad.exe C:\\todo.txt", Enabled = true };
+        var (commits, inj, runner) = await DictateAsync("please rm -rf everything open notes", [saved]);
+
+        // The runner receives the command exactly as saved, never words from the transcript.
+        Assert.Same(saved, Assert.Single(runner.Ran));
+        Assert.Equal("notepad.exe C:\\todo.txt", runner.Ran[0].Command);
+        Assert.Empty(inj.Typed);
+        var commit = Assert.Single(commits);
+        Assert.Equal(DictationDeliveryStatus.CommandExecuted, commit.Status);
+        Assert.Equal("Voice command: open notes", commit.Transcript);
+    }
+
+    [Fact]
+    public async Task Shell_command_with_continue_types_the_words_that_remain()
+    {
+        var saved = new VoiceShellCommand { Phrase = "open notes", Command = "notepad", CompletionBehavior = VoiceShellCommandCompletionBehavior.Continue };
+        var (commits, inj, runner) = await DictateAsync("open notes remember the milk", [saved]);
+
+        Assert.Single(runner.Ran);
+        Assert.Equal(["remember the milk"], inj.Typed);
+        Assert.Equal([DictationDeliveryStatus.CommandExecuted, DictationDeliveryStatus.Injected], commits.Select(c => c.Status).ToArray());
+    }
+
+    [Fact]
+    public async Task Shell_command_with_continue_and_nothing_left_types_nothing()
+    {
+        var saved = new VoiceShellCommand { Phrase = "open notes", Command = "notepad", CompletionBehavior = VoiceShellCommandCompletionBehavior.Continue };
+        var (_, inj, runner) = await DictateAsync("open notes", [saved]);
+
+        Assert.Single(runner.Ran);
+        Assert.Empty(inj.Typed);
+    }
+
+    [Fact]
+    public async Task Disabled_or_unmatched_shell_commands_never_run_and_the_text_is_typed()
+    {
+        var off = new VoiceShellCommand { Phrase = "open notes", Command = "notepad", Enabled = false };
+        var (_, inj, runner) = await DictateAsync("open notes today", [off]);
+        Assert.Empty(runner.Ran);
+        Assert.Equal(["open notes today"], inj.Typed);
+    }
+
+    [Fact]
+    public async Task Shell_command_failure_is_reported_and_nothing_is_typed()
+    {
+        var saved = new VoiceShellCommand { Phrase = "open notes", Command = "notepad", CompletionBehavior = VoiceShellCommandCompletionBehavior.Continue };
+        var (commits, inj, _) = await DictateAsync("open notes hello", [saved], new FakeShellRunner { Fail = true });
+
+        Assert.Empty(inj.Typed);
+        var commit = Assert.Single(commits);
+        Assert.Equal(DictationDeliveryStatus.CommandFailed, commit.Status);
+        Assert.Equal("cannot start", commit.Error);
+    }
+
+    [Fact]
+    public async Task Without_a_runner_the_phrase_is_just_dictated_text()
+    {
+        var saved = new VoiceShellCommand { Phrase = "open notes", Command = "notepad" };
+        var (_, inj, runner) = await DictateAsync("open notes", [saved], withRunner: false);
+        Assert.Empty(runner.Ran);
+        Assert.Equal(["open notes"], inj.Typed);
+    }
+
+    [Fact]
+    public async Task A_live_preview_never_runs_a_shell_command()
+    {
+        var saved = new VoiceShellCommand { Phrase = "open notes", Command = "notepad" };
+        var runner = new FakeShellRunner();
+        var source = new FakeSource();
+        var partials = new List<string>();
+        var processor = new VoiceCommandProcessor(() => ShellOptionsBase with { ShellCommands = [saved] });
+        await using var controller = new DictationController(
+            source, () => new FakeProvider("open notes"), new FakeGuard(), new FakeInjector(), voiceCommands: processor, shellRunner: runner);
+        controller.Options = new DictationOptions { AutoCommitSilence = TimeSpan.Zero };
+        controller.PartialTranscript += (_, t) => partials.Add(t);
+        await controller.ToggleAsync();
+        source.Lease!.Push(Tone(1.0));
+        await WaitFor(() => partials.Count > 0);
+
+        Assert.Empty(runner.Ran);
+        await controller.DiscardAsync();
+        Assert.Empty(runner.Ran);
+    }
+
+    private sealed class FakeShellRunner : IVoiceShellCommandRunner
+    {
+        public List<VoiceShellCommand> Ran { get; } = [];
+
+        public bool Fail { get; init; }
+
+        public VoiceShellCommandResult Run(VoiceShellCommand command)
+        {
+            if (this.Fail)
+            {
+                throw new InvalidOperationException("cannot start");
+            }
+
+            this.Ran.Add(command);
+            return new VoiceShellCommandResult(42);
+        }
+    }
+
     private sealed class StopWordCommands : IVoiceCommandProcessor
     {
         public VoiceCommandResult Apply(string transcript) =>
