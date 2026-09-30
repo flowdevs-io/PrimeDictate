@@ -17,6 +17,11 @@ public sealed class NemotronLogTests
     [InlineData("[asr] model=.nemotron-3.5-asr-streaming-0.6b.q8_0.gguf head=rnnt backend=CUDA0 diarization=on", true)]
     [InlineData("[nemo-speech] serve session started", true)]
     [InlineData("[diar] loaded Nemotron-3-Diarization.q8_0.gguf on CUDA0", true)]
+    [InlineData("[ctc-dbg] frame=12 id=40 piece=hello prob=0.98", false)]
+    [InlineData("[boost] phrase=acme", false)]
+    [InlineData("[unknown] anything", false)]
+    [InlineData("[timing] encoder 120 ms", true)]
+    [InlineData("[memstats] cuda 5073 MiB", true)]
     [InlineData("hello there this is what somebody said", false)]
     [InlineData("[asr] transcript: as far as your credits go", false)]
     [InlineData("[asr] partial hypothesis 'yeah now'", false)]
@@ -26,6 +31,19 @@ public sealed class NemotronLogTests
     [InlineData(null, false)]
     public void Only_the_workers_own_status_lines_are_kept(string? line, bool kept) =>
         Assert.Equal(kept, NemotronLog.Filter(line) is not null);
+
+    [Fact]
+    public void The_debug_variable_that_prints_word_pieces_is_removed_from_a_childs_environment()
+    {
+        var info = new System.Diagnostics.ProcessStartInfo("x");
+        info.Environment["NEMO_SPEECH_CTC_DEBUG"] = "1";
+        info.Environment["KEEP_ME"] = "1";
+
+        NemotronLog.ScrubEnvironment(info);
+
+        Assert.False(info.Environment.ContainsKey("NEMO_SPEECH_CTC_DEBUG"));
+        Assert.True(info.Environment.ContainsKey("KEEP_ME"));
+    }
 
     [Fact]
     public void Long_lines_are_cut_short()

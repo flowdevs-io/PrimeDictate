@@ -5,7 +5,7 @@ namespace PrimeDictate.Platforms.Nemotron;
 /// <summary>
 /// A small, rotated log of what the speech worker and the diarizer say about themselves (device, model load, errors),
 /// so a stall or crash can be explained afterwards. Transcripts stay out of it: only stderr lines that start with one of
-/// the worker's own bracketed prefixes are kept, lines that look like they carry recognized text are dropped, and every
+/// an exact list of the worker's own bracketed prefixes are kept, lines that look like they carry recognized text are dropped, and every
 /// line is cut short. Written to <c>%LocalAppData%\PrimeDictate\logs\nemo-worker.log</c>; two files of at most 1 MB.
 /// </summary>
 public static class NemotronLog
@@ -14,7 +14,27 @@ public static class NemotronLog
     private const int MaxLine = 240;
     private static readonly object Gate = new();
 
-    private static readonly Regex Prefixed = new(@"^\[[a-z][a-z0-9_.-]{0,24}\]", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    /// <summary>
+    /// The only prefixes kept, checked against the worker source at the pinned commit: none of them prints recognized text.
+    /// Left out on purpose: <c>[ctc-dbg]</c> (prints word pieces for every frame when NEMO_SPEECH_CTC_DEBUG is set) and
+    /// <c>[boost]</c> (echoes our own phrases).
+    /// </summary>
+    private static readonly string[] AllowedPrefixes =
+    [
+        "[nemo-speech]", "[model]", "[asr]", "[pnc]", "[itn]", "[text_normalization]", "[timing]", "[memstats]", "[diar]", "[flashlight]"
+    ];
+
+    /// <summary>Environment variables that make the worker print recognized text; removed from every child process.</summary>
+    public static readonly string[] TextRevealingVariables = ["NEMO_SPEECH_CTC_DEBUG"];
+
+    /// <summary>Removes the variables in <see cref="TextRevealingVariables"/> from a child's environment.</summary>
+    public static void ScrubEnvironment(System.Diagnostics.ProcessStartInfo info)
+    {
+        foreach (var name in TextRevealingVariables)
+        {
+            info.Environment.Remove(name);
+        }
+    }
 
     /// <summary>Words that mark a line as possibly containing what was said, in the JSON the worker speaks or in plain logs.</summary>
     private static readonly Regex LooksLikeSpeech = new("transcript|\"text\"|\"delta\"|\"words\"|text=|delta=|partial|hypothesis|utterance", RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -33,7 +53,7 @@ public static class NemotronLog
         }
 
         var trimmed = line.Trim();
-        if (!Prefixed.IsMatch(trimmed) || LooksLikeSpeech.IsMatch(trimmed))
+        if (!AllowedPrefixes.Any(prefix => trimmed.StartsWith(prefix, StringComparison.Ordinal)) || LooksLikeSpeech.IsMatch(trimmed))
         {
             return null;
         }

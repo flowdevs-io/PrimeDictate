@@ -70,6 +70,7 @@ public static class NemotronDiarizer
                 info.Environment["PATH"] = string.Join(Path.PathSeparator, extra.Append(current ?? string.Empty));
             }
 
+            NemotronLog.ScrubEnvironment(info);
             using var process = Process.Start(info) ?? throw new InvalidOperationException("The diarizer did not start.");
             ChildProcessJob.TryAdd(process);
             var source = $"[diarizer pid={process.Id} {device}]";

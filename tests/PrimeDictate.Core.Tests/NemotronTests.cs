@@ -641,11 +641,27 @@ public sealed class NemotronTests : IDisposable
         Assert.Equal(1, session.Restarts);
         Assert.Single(notices);
         Assert.Contains("sent again", notices[0]);
-        lock (bytes)
+        // Everything the stalled connection was given was replayed into the new one (the server counts asynchronously).
+        var replayDeadline = DateTime.UtcNow.AddSeconds(5);
+        long stalledBytes, replayedBytes;
+        do
         {
-            // Everything the stalled connection was given was replayed into the new one.
-            Assert.True(bytes[1] >= bytes[0], $"replayed {bytes[1]} of {bytes[0]} bytes");
+            lock (bytes)
+            {
+                stalledBytes = bytes[0];
+                replayedBytes = bytes.Count > 1 ? bytes[1] : 0;
+            }
+
+            if (replayedBytes >= stalledBytes)
+            {
+                break;
+            }
+
+            await Task.Delay(50);
         }
+        while (DateTime.UtcNow < replayDeadline);
+
+        Assert.True(replayedBytes >= stalledBytes, $"replayed {replayedBytes} of {stalledBytes} bytes");
 
         // The new connection works: speech gets text and the final's speaker is kept apart from earlier numbering.
         for (var i = 0; i < 5; i++)

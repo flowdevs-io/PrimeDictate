@@ -149,6 +149,7 @@ public sealed class NemotronWorker : IAsyncDisposable, INemotronEndpoint
             info.Environment["PATH"] = string.Join(Path.PathSeparator, extra.Append(current ?? string.Empty));
         }
 
+        NemotronLog.ScrubEnvironment(info);
         info.Environment["NEMO_SPEECH_HTTP_API_KEY"] = key;
         var process = Process.Start(info) ?? throw new NemotronException("worker-missing", "The Nemotron worker could not be started.");
         // A crash or force-kill of the app must not leave a worker holding the GPU.
