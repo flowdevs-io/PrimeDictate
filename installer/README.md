@@ -1,6 +1,8 @@
 # Windows installers (WiX / MSI)
 
-Installers are native **x64** and **ARM64** Windows Installer packages (`.msi`) built with the [WiX Toolset](https://wixtoolset.org/) **through NuGet** (`WixToolset.Sdk`). You only need the **.NET 8 SDK**; you do **not** install WiX separately.
+Installers are native **x64** and **ARM64** Windows Installer packages (`.msi`) built with the [WiX Toolset](https://wixtoolset.org/) **through NuGet** (`WixToolset.Sdk`). You only need the **.NET 10 SDK** (pinned in `global.json`); you do **not** install WiX separately.
+
+The installers package the Windows WPF app (`PrimeDictate.csproj`, `PrimeDictate.exe`). The cross-platform app under `src/` is not in them yet.
 
 The **online** MSI installs the PrimeDictate app payload only. Model acquisition happens inside PrimeDictate's first-run setup and Settings window.
 
@@ -45,20 +47,33 @@ PrimeDictate publishes to winget from the same tagged release pipeline as the MS
 
 ### Maintainer flow (recommended)
 
-1. Ensure `Directory.Build.props` has the intended release version (for example `3.2.0`).
-2. Push release commit to `main`.
-3. Create and push tag `v<version>` (for example `v3.2.0`).
+1. Bump `Directory.Build.props` to the release version (`Version`, `AssemblyVersion`, `FileVersion`; for example `6.0.0`) and add the version to `RELEASE_NOTES.md`.
+2. Push the "Release <version>" commit to `main`. Merging into `main` publishes nothing by itself.
+3. Create and push tag `v<version>` (for example `v6.0.0`).
 4. The `build.yml` tag run will:
-   - build x64 and ARM64 publish payloads + online MSIs,
+   - build x64 and ARM64 publish payloads + online MSIs, signed when the Azure Key Vault secrets are set,
    - attach both MSIs and checksum files to the matching GitHub Release,
+   - pack and push the Chocolatey package (it then waits in Chocolatey moderation),
    - generate and validate winget manifests from those MSI artifacts,
-   - submit a winget PR when `WINGET_CREATE_GITHUB_TOKEN` is configured.
+   - submit a winget PR when `WINGET_CREATE_GITHUB_TOKEN` is configured (it then goes through winget validation and moderation).
 
 If `WINGET_CREATE_GITHUB_TOKEN` is missing, the workflow still builds assets and publishes to GitHub Releases, but skips winget submission.
 
+The winget and Chocolatey steps never fail the release, so a green run can still hide a warning: check both steps' logs after every release.
+
+### When the winget step warns
+
+`The forked repository could not be synced with the upstream commits` means the `winget-pkgs` fork that the token submits from (`CakeRepository/winget-pkgs`) has fallen behind and the token cannot sync it, typically because upstream changed workflow files, which needs the `workflow` scope. Sync the fork with an account that has that scope, then resubmit without rebuilding (below):
+
+```powershell
+gh repo sync CakeRepository/winget-pkgs --source microsoft/winget-pkgs --branch master
+```
+
+This happened for 6.0.0: the fork was 27,575 commits behind.
+
 ### winget resubmission (no rebuild)
 
-Use this when winget reviewers request metadata changes for an existing version.
+Use this when winget reviewers request metadata changes for an existing version, or when the tag run's winget step warned.
 
 1. Run `build.yml` with `workflow_dispatch`.
 2. Set `submit_winget_only=true`.
