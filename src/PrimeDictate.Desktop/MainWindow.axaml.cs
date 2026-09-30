@@ -48,6 +48,8 @@ public sealed partial class MainWindow : Window
     private bool stickToBottom = true;
     private bool scrollingProgrammatically;
 
+    public TranscriptionWorkspaceService Workspace => this.workspace;
+
     public MainWindow()
     {
         this.InitializeComponent();

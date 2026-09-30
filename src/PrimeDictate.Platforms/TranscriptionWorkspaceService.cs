@@ -84,6 +84,11 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
 
     public AppDataPaths Paths => this.paths;
 
+    /// <summary>Shared with dictation so a meeting and a dictation never hold the microphone at once.</summary>
+    public MicrophoneCoordinator Microphone => this.microphone;
+
+    public IAudioSource? MicrophoneSource => this.audioSource;
+
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
         await this.store.InitializeAsync(cancellationToken).ConfigureAwait(false);
