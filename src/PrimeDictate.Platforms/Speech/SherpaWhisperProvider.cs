@@ -5,19 +5,18 @@ using SherpaOnnx;
 namespace PrimeDictate.Platforms.Speech;
 
 /// <summary>
-/// Whisper through sherpa-onnx as a windowed provider. Each window (at most 30 s) yields one segment
+/// A sherpa-onnx offline model (Whisper, Parakeet or Moonshine) as a windowed provider. Each window (at most 30 s) yields one segment
 /// whose timing covers the window, so provenance is <see cref="TimingProvenance.ApproximateChunk"/>.
 /// The recognizer loads on first use and is serialized, because instances are not thread-safe.
 /// </summary>
-public sealed class SherpaWhisperProvider : ITranscriptionProvider
+public abstract class SherpaOfflineProvider : ITranscriptionProvider
 {
-    private readonly InstalledWhisperModel model;
     private readonly SemaphoreSlim gate = new(1, 1);
     private OfflineRecognizer? recognizer;
 
-    public SherpaWhisperProvider(InstalledWhisperModel model)
+    protected SherpaOfflineProvider(string modelId, IReadOnlyList<string> languages)
     {
-        this.model = model;
+        this.ModelId = modelId;
         this.Capabilities = new TranscriptionProviderCapabilities(
             SupportsFiles: true,
             LiveMode: LiveRecognitionMode.BufferedWindows,
@@ -25,12 +24,12 @@ public sealed class SherpaWhisperProvider : ITranscriptionProvider
             CombinedDiarization: false,
             MaxSpeakers: null,
             MaxWindow: TimeSpan.FromSeconds(30),
-            Languages: model.IsEnglishOnly ? ["en"] : ["auto"],
+            Languages: languages,
             RequiredSampleRate: 16_000);
         this.Runtime = new EffectiveRuntime("sherpa-onnx", "1.13.0", "cpu", "cpu", null);
     }
 
-    public string ModelId => this.model.ModelId;
+    public string ModelId { get; }
 
     public TranscriptionProviderCapabilities Capabilities { get; }
 
@@ -63,7 +62,7 @@ public sealed class SherpaWhisperProvider : ITranscriptionProvider
     }
 
     public ValueTask<IStreamingRecognitionSession> StartStreamingAsync(string? language, bool diarize, CancellationToken cancellationToken) =>
-        throw new NotSupportedException("Whisper ONNX runs as Buffered Live; native streaming is not available.");
+        throw new NotSupportedException("This model runs as Buffered Live; native streaming is not available.");
 
     public async ValueTask DisposeAsync()
     {
@@ -96,6 +95,9 @@ public sealed class SherpaWhisperProvider : ITranscriptionProvider
         }
     }
 
+    /// <summary>Fills in the model files and type for this model family. Common settings are already applied. <c>ref</c> because the sherpa config types are structs: a by-value copy would silently drop every setting.</summary>
+    protected abstract void Configure(ref OfflineRecognizerConfig config, string? language);
+
     private OfflineRecognizer Load(string? language)
     {
         var config = new OfflineRecognizerConfig();
@@ -104,13 +106,62 @@ public sealed class SherpaWhisperProvider : ITranscriptionProvider
         config.ModelConfig.Debug = 0;
         config.ModelConfig.Provider = "cpu";
         config.ModelConfig.NumThreads = InferenceThreads.Default;
-        config.ModelConfig.Tokens = this.model.Tokens;
-        config.ModelConfig.Whisper.Encoder = this.model.Encoder;
-        config.ModelConfig.Whisper.Decoder = this.model.Decoder;
-        // English-only models must be told "en"; multilingual models detect the language when it is empty.
-        config.ModelConfig.Whisper.Language = this.model.IsEnglishOnly ? "en" : (language is null or "auto" ? string.Empty : language.Split('-')[0].ToLowerInvariant());
-        config.ModelConfig.Whisper.Task = "transcribe";
+        this.Configure(ref config, language);
         return new OfflineRecognizer(config);
+    }
+}
+
+/// <summary>Whisper through sherpa-onnx.</summary>
+public sealed class SherpaWhisperProvider(InstalledWhisperModel model)
+    : SherpaOfflineProvider(model.ModelId, model.IsEnglishOnly ? ["en"] : ["auto"])
+{
+    protected override void Configure(ref OfflineRecognizerConfig config, string? language)
+    {
+        config.ModelConfig.Tokens = model.Tokens;
+        config.ModelConfig.Whisper.Encoder = model.Encoder;
+        config.ModelConfig.Whisper.Decoder = model.Decoder;
+        // English-only models must be told "en"; multilingual models detect the language when it is empty.
+        config.ModelConfig.Whisper.Language = model.IsEnglishOnly ? "en" : (language is null or "auto" ? string.Empty : language.Split('-')[0].ToLowerInvariant());
+        config.ModelConfig.Whisper.Task = "transcribe";
+    }
+}
+
+/// <summary>NVIDIA Parakeet TDT (NeMo transducer) through sherpa-onnx. v3 is multilingual and detects the language itself.</summary>
+public sealed class SherpaParakeetProvider(InstalledSpeechModel model)
+    : SherpaOfflineProvider(model.ModelId, model.IsEnglishOnly ? ["en"] : ["auto"])
+{
+    protected override void Configure(ref OfflineRecognizerConfig config, string? language)
+    {
+        config.ModelConfig.Tokens = Path.Combine(model.Directory, "tokens.txt");
+        config.ModelConfig.Transducer.Encoder = Path.Combine(model.Directory, "encoder.int8.onnx");
+        config.ModelConfig.Transducer.Decoder = Path.Combine(model.Directory, "decoder.int8.onnx");
+        config.ModelConfig.Transducer.Joiner = Path.Combine(model.Directory, "joiner.int8.onnx");
+        config.ModelConfig.ModelType = "nemo_transducer";
+        config.DecodingMethod = "greedy_search";
+        config.MaxActivePaths = 4;
+    }
+}
+
+/// <summary>Moonshine v1 (four ONNX stages) and v2 (encoder plus merged decoder) through sherpa-onnx, CPU only.</summary>
+public sealed class SherpaMoonshineProvider(InstalledSpeechModel model)
+    : SherpaOfflineProvider(model.ModelId, ["en"])
+{
+    protected override void Configure(ref OfflineRecognizerConfig config, string? language)
+    {
+        var files = SpeechModelLocator.ResolveMoonshine(model.Directory)
+            ?? throw new FileNotFoundException($"The Moonshine model folder is incomplete: {model.Directory}");
+        config.ModelConfig.Tokens = files.Tokens;
+        config.ModelConfig.Moonshine.Encoder = files.Encoder;
+        if (files.MergedDecoder is not null)
+        {
+            config.ModelConfig.Moonshine.MergedDecoder = files.MergedDecoder;
+        }
+        else
+        {
+            config.ModelConfig.Moonshine.Preprocessor = files.Preprocessor!;
+            config.ModelConfig.Moonshine.UncachedDecoder = files.UncachedDecoder!;
+            config.ModelConfig.Moonshine.CachedDecoder = files.CachedDecoder!;
+        }
     }
 }
 

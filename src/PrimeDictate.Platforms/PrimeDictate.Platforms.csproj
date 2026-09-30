@@ -14,6 +14,7 @@
     <!-- WASAPI loopback for Windows system-audio capture; the adapter is guarded by OperatingSystem.IsWindows(). -->
     <PackageReference Include="NAudio.Wasapi" Version="2.3.0" />
     <PackageReference Include="org.k2fsa.sherpa.onnx" Version="1.13.0" />
+    <PackageReference Include="SharpHook" Version="7.1.1" />
   </ItemGroup>
 
   <ItemGroup>
