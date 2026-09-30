@@ -151,6 +151,8 @@ public sealed class NemotronWorker : IAsyncDisposable, INemotronEndpoint
 
         info.Environment["NEMO_SPEECH_HTTP_API_KEY"] = key;
         var process = Process.Start(info) ?? throw new NemotronException("worker-missing", "The Nemotron worker could not be started.");
+        // A crash or force-kill of the app must not leave a worker holding the GPU.
+        ChildProcessJob.TryAdd(process);
         var worker = new NemotronWorker(process, port, key, files.DiarizerPath is not null, device);
         // Drain output so a full pipe can never stall the worker. Only the backend it reports is kept; the rest
         // is dropped because it may echo audio metadata.

@@ -286,7 +286,12 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
                     }
                 }
 
-                this.nemotronWorker ??= await this.StartNemotronWorkerAsync(setup, cancellationToken).ConfigureAwait(false);
+                if (this.nemotronWorker is null)
+                {
+                    this.nemotronWorker = await this.StartNemotronWorkerAsync(setup, cancellationToken).ConfigureAwait(false);
+                    await NemotronRealtimeSession.WarmUpAsync(this.nemotronWorker.BaseAddress, this.nemotronWorker.ApiKey, this.nemotronWorker.HasDiarizer, cancellationToken).ConfigureAwait(false);
+                }
+
                 this.nemotronWorkerPreference = this.nemotronPreference;
                 this.nemotronWorkerKey = model.ModelId;
                 provider = new NemotronProvider(this.nemotronWorker, model.ModelId, model.DetectsSpeakers);

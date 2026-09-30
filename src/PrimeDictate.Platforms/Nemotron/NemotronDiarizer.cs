@@ -71,6 +71,7 @@ public static class NemotronDiarizer
             }
 
             using var process = Process.Start(info) ?? throw new InvalidOperationException("The diarizer did not start.");
+            ChildProcessJob.TryAdd(process);
             using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             limit.CancelAfter(timeout);
             var output = process.StandardOutput.ReadToEndAsync(limit.Token);

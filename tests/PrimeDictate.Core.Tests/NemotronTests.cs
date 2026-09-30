@@ -467,7 +467,7 @@ public sealed class NemotronTests : IDisposable
     }
 
     /// <summary>Counts audio bytes per connection; connection 1 optionally never answers (the wedge in NeMo-Speech.cpp#48).</summary>
-    private static (HttpListener Listener, Uri Base, List<long> AudioBytes) StartCountingServer(bool wedgeFirst, bool rejectLanguage = false, List<string>? texts = null)
+    private static (HttpListener Listener, Uri Base, List<long> AudioBytes) StartCountingServer(bool wedgeFirst, bool rejectLanguage = false, List<string>? texts = null, bool wedgeAll = false)
     {
         var port = FreePort.Next();
         var listener = new HttpListener();
@@ -489,7 +489,7 @@ public sealed class NemotronTests : IDisposable
                     return;
                 }
 
-                var wedged = wedgeFirst && n == 0;
+                var wedged = wedgeAll || (wedgeFirst && n == 0);
                 var slot = n++;
                 lock (bytes)
                 {
@@ -639,6 +639,12 @@ public sealed class NemotronTests : IDisposable
 
         Assert.Equal(1, session.Restarts);
         Assert.Single(notices);
+        Assert.Contains("sent again", notices[0]);
+        lock (bytes)
+        {
+            // Everything the stalled connection was given was replayed into the new one.
+            Assert.True(bytes[1] >= bytes[0], $"replayed {bytes[1]} of {bytes[0]} bytes");
+        }
 
         // The new connection works: speech gets text and the final's speaker is kept apart from earlier numbering.
         for (var i = 0; i < 5; i++)
@@ -664,6 +670,50 @@ public sealed class NemotronTests : IDisposable
         {
             Assert.True(bytes.Count >= 2 && bytes[1] > 0, "audio should flow on the replacement connection");
         }
+    }
+
+    [Fact]
+    public async Task Warm_up_sends_a_short_non_silent_stream_and_a_commit_then_finishes()
+    {
+        var texts = new List<string>();
+        var (listener, uri, bytes) = StartCountingServer(false, texts: texts);
+        using var _ = listener;
+
+        await NemotronRealtimeSession.WarmUpAsync(uri, "k", diarize: true, default);
+
+        lock (bytes)
+        {
+            Assert.True(bytes[0] >= 2 * 16_000 * 2, $"sent {bytes[0]} bytes");
+        }
+
+        lock (texts)
+        {
+            Assert.Contains(texts, t => t.Contains("input_audio_buffer.commit"));
+        }
+    }
+
+    [Fact]
+    public async Task Audio_that_stalls_the_worker_twice_in_a_row_is_dropped_instead_of_replayed_forever()
+    {
+        var (listener, uri, _) = StartCountingServer(false, wedgeAll: true);
+        using var _ = listener;
+        await using var session = await NemotronRealtimeSession.ConnectAsync(uri, "k", diarize: true, default, TimeSpan.FromMilliseconds(400));
+        var notices = new List<string>();
+        session.Notice += notices.Add;
+        var tone = Enumerable.Range(0, 1600).Select(i => 0.3f * MathF.Sin(i * 0.05f)).ToArray();
+
+        long seq = 0, offset = 0;
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        while (session.Restarts < 2 && DateTime.UtcNow < deadline)
+        {
+            await session.WriteAsync(Frame(tone, offset, seq++), default);
+            offset += 1600;
+            await Task.Delay(50);
+        }
+
+        Assert.Equal(2, session.Restarts);
+        Assert.Contains("sent again", notices[0]);
+        Assert.Contains("again on the same audio", notices[1]);
     }
 
     private static string? FakeWorker(string dir, bool cudaFails)
