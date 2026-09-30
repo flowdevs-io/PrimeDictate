@@ -828,7 +828,7 @@ public sealed partial class MainWindow : Window
         this.EndJob();
         this.Say(target?.Document.Status == TranscriptSessionStatus.Completed ? "Saved." : $"Stopped: {target?.Document.Status}. What was captured is kept.");
         await this.ReloadSessionsAsync(target?.Document.SessionId);
-        if (target is { Document.SourceType: TranscriptSourceType.Meeting } finalPassTarget && this.twoPassPlanned && target.Document.Status == TranscriptSessionStatus.Completed)
+        if (target is { Document.SourceType: TranscriptSourceType.Meeting } finalPassTarget && this.twoPassPlanned && target.Document.Status is TranscriptSessionStatus.Completed or TranscriptSessionStatus.Failed)
         {
             await this.RunSafelyAsync(() => this.FinalPassAsync(finalPassTarget));
         }
