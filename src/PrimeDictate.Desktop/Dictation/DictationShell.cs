@@ -8,6 +8,7 @@ using Avalonia.Threading;
 using PrimeDictate.Core.Dictation;
 using PrimeDictate.Platforms;
 using PrimeDictate.Platforms.Dictation;
+using PrimeDictate.Platforms.Speech;
 using PrimeDictate.Platforms.Input;
 
 namespace PrimeDictate.Desktop.Dictation;
@@ -66,6 +67,11 @@ public sealed class DictationShell : IAsyncDisposable
             this.OnNotice(unavailable);
         }
 
+        if (OnnxRuntimeDevice.FellBack || OnnxRuntimeDevice.IsCuda)
+        {
+            this.OnNotice(OnnxRuntimeDevice.Summary);
+        }
+
         if (this.host.IsFirstRun)
         {
             new DictationOnboardingWindow(this.host, this.ShowSettings).Show();
@@ -74,6 +80,19 @@ public sealed class DictationShell : IAsyncDisposable
         this.host.StartHotkeys();
         this.host.StartWakeWord();
         this.overlay.SetState(DictationState.Idle);
+    }
+
+    /// <summary>Raised when the user picks Exit in the tray menu. The app decides how to leave (see <c>App.ExitAsync</c>).</summary>
+    public event Action? ExitRequested;
+
+    /// <summary>Stops listening and drops an in-progress dictation without typing it, so nothing reaches another app while exiting.</summary>
+    public async Task PrepareExitAsync()
+    {
+        this.host.StopListeningForExit();
+        if (this.host.Controller is { State: not DictationState.Idle } controller)
+        {
+            await Task.Run(controller.DiscardAsync);
+        }
     }
 
     public ValueTask DisposeAsync()
@@ -100,8 +119,8 @@ public sealed class DictationShell : IAsyncDisposable
         statsItem.Click += (_, _) => this.ShowStats();
         var settingsItem = new NativeMenuItem("Dictation settings...");
         settingsItem.Click += (_, _) => this.ShowSettings();
-        var quitItem = new NativeMenuItem("Quit PrimeDictate");
-        quitItem.Click += (_, _) => this.lifetime.Shutdown();
+        var quitItem = new NativeMenuItem("Exit PrimeDictate");
+        quitItem.Click += (_, _) => this.ExitRequested?.Invoke();
         this.tray.Menu = [this.toggleItem, workspaceItem, historyItem, statsItem, settingsItem, new NativeMenuItemSeparator(), quitItem];
         this.tray.Clicked += (_, _) => this.showWorkspace();
         this.tray.Icon = TrayIconRenderer.Create(this.CurrentTrayState());

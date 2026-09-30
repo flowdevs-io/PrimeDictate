@@ -632,6 +632,29 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// For app exit: stops an active recording the normal way so the audio and transcript are finalized and saved. If that does not
+    /// finish within <paramref name="timeout"/> (a long final pass), the session is stopped as canceled instead; what was captured stays on disk.
+    /// </summary>
+    public async Task StopLiveForExitAsync(TimeSpan timeout)
+    {
+        if (this.live is null)
+        {
+            return;
+        }
+
+        using var cts = new CancellationTokenSource(timeout);
+        try
+        {
+            await this.StopLiveAsync(cts.Token).WaitAsync(timeout).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or TimeoutException)
+        {
+            this.RaiseNotice("The recording did not finish saving in time and was stopped as canceled; its audio and text so far are kept.");
+            await this.DiscardLiveAsync().ConfigureAwait(false);
+        }
+    }
+
     public async Task DiscardLiveAsync()
     {
         var session = Interlocked.Exchange(ref this.live, null);

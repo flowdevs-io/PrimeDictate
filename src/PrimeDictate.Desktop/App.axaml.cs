@@ -3,12 +3,21 @@ using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media.Imaging;
+using PrimeDictate.Core.Dictation;
+using PrimeDictate.Core.Storage;
 using PrimeDictate.Desktop.Dictation;
+using PrimeDictate.Platforms.Speech;
+using PrimeDictate.Platforms.Startup;
 
 namespace PrimeDictate.Desktop;
 
 public sealed class App : Application
 {
+    /// <summary>The single-instance guard of this process, set by <c>Program</c>; null for one-shot runs.</summary>
+    internal static SingleInstance? Instance { get; set; }
+
+    private int exiting;
+
     public override void Initialize() => AvaloniaXamlLoader.Load(this);
 
     public override void OnFrameworkInitializationCompleted()
@@ -22,6 +31,13 @@ public sealed class App : Application
                 Avalonia.Threading.Dispatcher.UIThread.Post(() => desktop.Shutdown());
                 base.OnFrameworkInitializationCompleted();
                 return;
+            }
+
+            // ONNX Runtime is one library per process: the GPU build must be in place before any speech model is created.
+            if (!IsSmokeRun(desktop.Args))
+            {
+                var saved = new DictationSettingsStore(AppDataPaths.Default).Load().Settings.OnnxDevice;
+                OnnxRuntimeDevice.Configure(OnnxRuntimeDevice.Effective(saved));
             }
 
             var window = new MainWindow();
@@ -74,13 +90,30 @@ public sealed class App : Application
     {
         var shell = new DictationShell(desktop, window.Workspace, () => ShowWorkspace(window));
         shell.Start(this);
-        desktop.Exit += (_, _) => shell.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        shell.ExitRequested += () => _ = this.ExitAsync(desktop, window, shell);
+        desktop.Exit += (_, _) => this.Cleanup(window, shell);
+        Instance?.StartListening(command =>
+        {
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                if (command == SingleInstance.QuitCommand)
+                {
+                    _ = this.ExitAsync(desktop, window, shell);
+                }
+                else
+                {
+                    ShowWorkspace(window);
+                }
+            });
+            return Task.CompletedTask;
+        });
 
         // Dictation lives in the tray, so on Windows and macOS closing the window hides it. Linux desktops
         // without a tray host would leave no way back, so there closing quits.
         if (CanHideToTray)
         {
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            window.HidesOnClose = true;
             window.Closing += (_, e) =>
             {
                 if (e.CloseReason == WindowCloseReason.WindowClosing)
@@ -90,6 +123,39 @@ public sealed class App : Application
                 }
             };
         }
+    }
+
+    /// <summary>
+    /// The one clean way out (tray Exit, <c>--quit</c>): an active meeting recording is stopped the normal way and saved, an active
+    /// dictation is discarded (it must never type into another app while the app is leaving), then workers are stopped and the app ends.
+    /// </summary>
+    private async Task ExitAsync(IClassicDesktopStyleApplicationLifetime desktop, MainWindow window, DictationShell shell)
+    {
+        if (Interlocked.Exchange(ref this.exiting, 1) == 1)
+        {
+            return;
+        }
+
+        try
+        {
+            await shell.PrepareExitAsync();
+            await window.Workspace.StopLiveForExitAsync(TimeSpan.FromSeconds(20));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // Leaving must not be blocked by a failing step; Cleanup below still releases everything.
+            System.Diagnostics.Trace.TraceError($"Exit preparation failed: {ex}");
+        }
+
+        desktop.Shutdown();
+    }
+
+    private void Cleanup(MainWindow window, DictationShell shell)
+    {
+        shell.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        // A window that was never shown never raises Closed, so the workspace (and with it the speech worker) is released here.
+        window.Workspace.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(10));
+        Instance?.Dispose();
     }
 
     private static void ShowWorkspace(MainWindow window)

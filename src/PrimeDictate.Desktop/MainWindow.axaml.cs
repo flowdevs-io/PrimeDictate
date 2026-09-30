@@ -115,10 +115,22 @@ public sealed partial class MainWindow : Window
         this.AddHandler(DragDrop.DragOverEvent, (_, e) => e.DragEffects = e.DataTransfer.Contains(DataFormat.File) ? DragDropEffects.Copy : DragDropEffects.None);
         this.AddHandler(DragDrop.DropEvent, this.OnDrop);
         this.Opened += async (_, _) => await this.InitializeWorkspaceAsync();
-        this.Closing += (_, _) => this.workspace.DiscardLiveAsync().GetAwaiter().GetResult();
+        this.Closing += (_, e) =>
+        {
+            // With hide-to-tray a click on the window's close button only hides it, so a recording must keep running.
+            if (this.HidesOnClose && e.CloseReason == WindowCloseReason.WindowClosing)
+            {
+                return;
+            }
+
+            this.workspace.StopLiveForExitAsync(TimeSpan.FromSeconds(20)).GetAwaiter().GetResult();
+        };
         // Closing the window ends the speech worker too; left running it keeps the GPU's memory.
         this.Closed += (_, _) => this.workspace.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(10));
     }
+
+    /// <summary>True when closing the window only hides it (the app lives in the tray).</summary>
+    public bool HidesOnClose { get; set; }
 
     /// <summary>Selects the newest session; used by the smoke screenshot.</summary>
     public void SelectFirstSession() => this.SessionList.SelectedIndex = this.SessionList.ItemCount > 0 ? 0 : -1;

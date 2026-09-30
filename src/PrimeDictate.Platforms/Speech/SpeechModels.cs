@@ -43,6 +43,7 @@ public static class SpeechModelCatalog
         Whisper("small", "Small Multilingual", "Higher multilingual accuracy, more compute.", 639_387_718),
         new(LegacyBackend.Parakeet, "parakeet-tdt-0.6b-v3", "Parakeet TDT 0.6B v3", "NVIDIA Parakeet, fast and accurate local transcription; multilingual.", 710L * 1024 * 1024, "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8", true),
         new(LegacyBackend.Parakeet, "parakeet-tdt-0.6b-v2", "Parakeet TDT 0.6B v2", "The earlier English Parakeet release.", 690L * 1024 * 1024, "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"),
+        new(LegacyBackend.Parakeet, "parakeet-tdt-0.6b-v2-fp16", "Parakeet TDT 0.6B v2 (fp16, for the GPU)", "English Parakeet in half precision. Made for CUDA; large and slower on the CPU.", 1_120_982_957, "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16"),
         new(LegacyBackend.Moonshine, "moonshine-tiny-v2-en", "Moonshine Tiny v2 (English)", "Very small and fast English model.", 83_886_080, "sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27", true),
         new(LegacyBackend.Moonshine, "moonshine-base-en", "Moonshine Base (English) v1", "The original Moonshine model.", 250_807_309, "sherpa-onnx-moonshine-base-en-int8")
     ];
@@ -72,8 +73,19 @@ public static class SpeechModelLocator
         _ => WhisperOnnxModelLocator.TryResolve(directory, out _)
     };
 
-    public static bool IsParakeet(string directory) =>
-        new[] { "encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt" }.All(f => File.Exists(Path.Combine(directory, f)));
+    public static bool IsParakeet(string directory) => ParakeetPrecision(directory, preferHalf: false) is not null;
+
+    /// <summary>
+    /// <c>int8</c> or <c>fp16</c>, whichever complete file set the folder has. int8 is preferred on the CPU and fp16 on CUDA
+    /// (which has no int8 kernels for most operators); the other set is used when it is the only one. Null when neither is complete.
+    /// </summary>
+    public static string? ParakeetPrecision(string directory, bool preferHalf)
+    {
+        static bool Complete(string dir, string precision) =>
+            new[] { $"encoder.{precision}.onnx", $"decoder.{precision}.onnx", $"joiner.{precision}.onnx", "tokens.txt" }.All(f => File.Exists(Path.Combine(dir, f)));
+        var order = preferHalf ? new[] { "fp16", "int8" } : ["int8", "fp16"];
+        return order.FirstOrDefault(p => Complete(directory, p));
+    }
 
     /// <summary>Accepts the v2 layout (encoder + merged decoder) first, then the v1 four-stage layout, as the WPF catalog does.</summary>
     public static MoonshineFiles? ResolveMoonshine(string directory)
@@ -114,7 +126,7 @@ public static class SpeechModelLocator
             var dir = Path.Combine(modelsRoot, option.SubFolder, option.InstallDirectoryName);
             if (IsValid(option, dir))
             {
-                found.Add(new InstalledSpeechModel(option.Backend, option.Id, option.DisplayName, Path.GetFullPath(dir), option.Id is "parakeet-tdt-0.6b-v2" || option.Id.EndsWith("-en", StringComparison.Ordinal)));
+                found.Add(new InstalledSpeechModel(option.Backend, option.Id, option.DisplayName, Path.GetFullPath(dir), option.Id is "parakeet-tdt-0.6b-v2" or "parakeet-tdt-0.6b-v2-fp16" || option.Id.EndsWith("-en", StringComparison.Ordinal)));
             }
         }
 
