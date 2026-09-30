@@ -2,7 +2,7 @@ using PrimeDictate.Core.Transcripts;
 
 namespace PrimeDictate.Core.Pipeline;
 
-/// <summary>What to do with a microphone line that overlaps system audio: hide all of it, or replace it with only the words that are the user's own.</summary>
+/// <summary>What to do with a microphone line that overlaps system audio: hide all of it, or keep it with the echoed words marked hidden, so the row shows only the user's own words.</summary>
 public sealed record EchoVerdict(bool HideAll, TranscriptSegment? Trimmed);
 
 /// <summary>
@@ -58,12 +58,12 @@ public static class EchoMatcher
     /// Word-level echo removal. The microphone often picks up the tail of what the speakers said and then the user's own
     /// words in the same line ("as far as your credits go, yeah now totally"). Words that continue a run of at least
     /// <see cref="MinRun"/> matching words in an overlapping system line are dropped; the rest stay as the microphone
-    /// line, which then starts at its first kept word. Returns null when the line should stay untouched: no overlap, no
+    /// line, which then starts at its first kept word. Nothing is deleted. Returns null when the line should stay untouched: no overlap, no
     /// echo, or the user already edited it.
     /// </summary>
     public static EchoVerdict? Judge(TranscriptSegment mic, IEnumerable<TranscriptSegment> system)
     {
-        if (mic.EditedText is not null)
+        if (mic.EditedText is not null || mic.HasHiddenWords)
         {
             return null;
         }
@@ -133,16 +133,11 @@ public static class EchoMatcher
             return new EchoVerdict(true, null);
         }
 
-        var start = kept[0].Start;
-        var stop = kept[^1].End < start ? start : kept[^1].End;
+        // The recognized text and every word stay stored; the echo words are only marked hidden.
         return new EchoVerdict(false, mic with
         {
-            RawText = string.Join(' ', kept.Select(w => w.Text)),
-            Words = kept,
-            Start = start,
-            End = stop,
-            Revision = mic.Revision + 1,
-            Speakers = mic.Speakers.Select(a => a with { Start = start, End = stop }).ToList()
+            Words = words.Select((w, i) => echo[i] ? w with { Hidden = true } : w).ToList(),
+            Revision = mic.Revision + 1
         });
     }
 

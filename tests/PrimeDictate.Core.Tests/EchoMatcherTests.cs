@@ -29,12 +29,27 @@ public sealed class EchoMatcherTests
         Assert.NotNull(verdict);
         Assert.False(verdict.HideAll);
         var trimmed = verdict.Trimmed!;
-        Assert.Equal("yeah now totally", trimmed.RawText);
-        Assert.Equal(3, trimmed.Words!.Count);
-        Assert.Equal(TimeSpan.FromSeconds(8.0 + (6 * 0.35)), trimmed.Start);
-        Assert.Equal(mic.End, trimmed.End);
-        Assert.Equal(trimmed.Start, trimmed.Speakers[0].Start);
+        // Nothing is deleted: the recognized text and all nine words are still there, six of them marked hidden.
+        Assert.Equal(mic.RawText, trimmed.RawText);
+        Assert.Equal(9, trimmed.Words!.Count);
+        Assert.Equal(6, trimmed.Words.Count(w => w.Hidden));
+        Assert.Equal("yeah now totally", trimmed.DisplayText);
+        Assert.Equal(TimeSpan.FromSeconds(8.0 + (6 * 0.35)), trimmed.DisplayStart);
+        Assert.Equal(mic.End, trimmed.DisplayEnd);
+        Assert.Equal(mic.Start, trimmed.Start);
         Assert.True(trimmed.Revision > mic.Revision);
+
+        // Applying it to a document replaces the stored words and the row shows only the user's own.
+        var doc = TestData.NewDocument();
+        doc = TranscriptDocumentReducer.Apply(doc, new SegmentFinalized(doc.SessionId, mic), TestData.Now);
+        doc = TranscriptDocumentReducer.Apply(doc, new SegmentFinalized(doc.SessionId, trimmed), TestData.Now);
+        var stored = Assert.Single(doc.ActiveSegments);
+        Assert.Equal("yeah now totally", stored.DisplayText);
+        Assert.Equal(mic.RawText, stored.RawText);
+
+        // A user edit wins, and a second look at a line that already has hidden words changes nothing.
+        Assert.Null(EchoMatcher.Judge(trimmed, [system]));
+        Assert.Equal("mine", (trimmed with { EditedText = "mine" }).DisplayText);
     }
 
     [Fact]
