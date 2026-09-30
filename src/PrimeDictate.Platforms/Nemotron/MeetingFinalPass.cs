@@ -141,7 +141,7 @@ public sealed class MeetingFinalPass(ModelLeaseScheduler scheduler)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var startSample = (long)(turn.Start * 16_000);
-                var length = (int)Math.Min(systemPcm.Count - startSample, (long)((turn.End - turn.Start) * 16_000));
+                var length = (int)Math.Min(systemPcm!.Count - startSample, (long)((turn.End - turn.Start) * 16_000));
                 var index = turnCounter++;
                 var st = stats[1];
                 st.Windows++;
