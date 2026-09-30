@@ -1,7 +1,8 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Publishes a self-contained Windows build to artifacts\<rid>\publish.
+    Publishes the self-contained Windows build of the Avalonia app (src\PrimeDictate.Desktop, output PrimeDictate.exe)
+    to artifacts\<rid>\publish. The WPF app at the repo root is legacy and is not published here.
 #>
 param(
     [string] $Configuration = "Release",
@@ -39,7 +40,7 @@ try {
         $msbuildProps += "-p:InformationalVersion=$InformationalVersion"
     }
 
-    dotnet publish .\PrimeDictate.csproj `
+    dotnet publish .\src\PrimeDictate.Desktop\PrimeDictate.Desktop.csproj `
         -c $Configuration `
         -r $RuntimeIdentifier `
         --self-contained true `

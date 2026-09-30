@@ -21,10 +21,10 @@
             Id="ScPrimeDictateStartup"
             Name="PrimeDictate"
             Target="[INSTALLFOLDER]PrimeDictate.exe"
-            Arguments="--from-login"
+            Arguments="--background"
             WorkingDirectory="INSTALLFOLDER"
             Icon="AppIcon"
-            Description="Start PrimeDictate when Windows starts." />
+            Description="Start PrimeDictate in the tray when you sign in." />
         <RemoveFile Id="RemovePrimeDictateStartupShortcut" Name="PrimeDictate.lnk" On="uninstall" />
         <RegistryValue
             Root="HKLM"

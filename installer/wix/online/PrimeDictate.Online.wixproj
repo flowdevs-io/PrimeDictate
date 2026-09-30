@@ -7,6 +7,8 @@
     <IntermediateOutputPath>obj\$(InstallerPlatform)\$(Configuration)\</IntermediateOutputPath>
     <OutputName>PrimeDictate-$(Version)-Windows-$(InstallerPlatform)-Online</OutputName>
     <Cultures>en-US</Cultures>
+    <!-- ICE60 flags unversioned native files (e_sqlite3.dll); they are plain files and need no language. -->
+    <SuppressIces>ICE60</SuppressIces>
     <PublishDir Condition="'$(PublishDir)' == ''">$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)', '..\..\..\artifacts\$(RuntimeIdentifier)\publish'))</PublishDir>
     <ProductVersion>$(Version).0</ProductVersion>
     <DefineConstants>ProductVersion=$(ProductVersion)</DefineConstants>

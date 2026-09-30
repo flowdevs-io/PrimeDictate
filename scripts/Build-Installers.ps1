@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Publishes the app and builds WiX online MSIs using only the .NET SDK.
+  Publishes the Avalonia app (srcPrimeDictate.Desktop) and builds WiX online MSIs using only the .NET SDK.
 
 .PARAMETER Installer
     Online (ships the app payload only; models are downloaded or browsed from first-run setup). The offline installer is currently not built by this helper.
@@ -13,7 +13,7 @@
   Reuse existing artifacts\<rid>\publish directories without running dotnet publish.
 
 .NOTES
-  Requires .NET 8 SDK. WiX Toolset is restored via NuGet (WixToolset.Sdk); no separate WiX install needed.
+  Requires the .NET SDK pinned in global.json. WiX Toolset is restored via NuGet (WixToolset.Sdk); no separate WiX install needed.
 #>
 param(
     [ValidateSet("Online")]
@@ -78,6 +78,22 @@ function Get-InstallerPlatform {
     }
 }
 
+# What the self-contained publish of the Avalonia app (src\PrimeDictate.Desktop) must contain besides the .NET runtime:
+# Avalonia and its Win32 backend, Skia and ANGLE, then the natives the app loads at runtime (miniaudio capture, ONNX Runtime and
+# sherpa-onnx speech, the SharpHook global hook, SQLite). A missing one only fails on the machine that lacks it, so check here.
+$script:AppPayloadFiles = @(
+    "Avalonia.Base.dll",
+    "Avalonia.Controls.dll",
+    "Avalonia.Win32.dll",
+    "libSkiaSharp.dll",
+    "av_libglesv2.dll",
+    "miniaudio.dll",
+    "onnxruntime.dll",
+    "sherpa-onnx-c-api.dll",
+    "uiohook.dll",
+    "e_sqlite3.dll"
+)
+
 function Test-SelfContainedPublishOutput {
     param([string] $PublishDir)
 
@@ -88,10 +104,8 @@ function Test-SelfContainedPublishOutput {
         "hostfxr.dll",
         "hostpolicy.dll",
         "coreclr.dll",
-        "System.Private.CoreLib.dll",
-        "PresentationFramework.dll",
-        "WindowsBase.dll"
-    )
+        "System.Private.CoreLib.dll"
+    ) + $script:AppPayloadFiles
 
     foreach ($file in $requiredFiles) {
         $path = Join-Path $PublishDir $file
@@ -115,11 +129,11 @@ function Test-MsiContainsSelfContainedRuntime {
         "hostpolicy.dll",
         "coreclr.dll",
         "System.Private.CoreLib.dll",
-        "PresentationFramework.dll",
-        "WindowsBase.dll"
-    )
+        "PrimeDictate.exe",
+        "PrimeDictate.dll"
+    ) + $script:AppPayloadFiles
 
-    $installer = New-Object -ComObject WindowsInstaller.Installer
+    $installer =New-Object -ComObject WindowsInstaller.Installer
     $database = $null
     $view = $null
     try {

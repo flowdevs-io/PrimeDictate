@@ -92,6 +92,9 @@ public sealed class DictationShell : IAsyncDisposable
         this.overlay.SetState(DictationState.Idle);
     }
 
+    /// <summary>The update command for the tray's "Check for updates..." item. Set before Start; null leaves the item out.</summary>
+    public PrimeDictate.Desktop.Updates.IUpdateMenu? UpdateMenu { get; set; }
+
     /// <summary>Raised when the user picks Exit in the tray menu. The app decides how to leave (see <c>App.ExitAsync</c>).</summary>
     public event Action? ExitRequested;
 
@@ -145,8 +148,21 @@ public sealed class DictationShell : IAsyncDisposable
         settingsItem.Click += (_, _) => this.ShowSettings();
         var quitItem = new NativeMenuItem("Exit PrimeDictate");
         quitItem.Click += (_, _) => this.ExitRequested?.Invoke();
-        // The updater's "Check for updates…" item goes just before Exit.
-        this.tray.Menu = [this.toggleItem, this.recordItem, workspaceItem, historyItem, statsItem, settingsItem, new NativeMenuItemSeparator(), quitItem];
+        this.tray.Menu = [this.toggleItem, this.recordItem, workspaceItem, historyItem, statsItem, settingsItem];
+        if (this.UpdateMenu is { } updates)
+        {
+            var updateItem = new NativeMenuItem(updates.MenuText);
+            updateItem.Click += async (_, _) => await updates.CheckNowAsync();
+            updates.MenuChanged += () =>
+            {
+                updateItem.Header = updates.MenuText;
+                updateItem.IsEnabled = updates.MenuEnabled;
+            };
+            this.tray.Menu.Items.Add(updateItem);
+        }
+
+        this.tray.Menu.Items.Add(new NativeMenuItemSeparator());
+        this.tray.Menu.Items.Add(quitItem);
         this.tray.Clicked += (_, _) => this.showWorkspace();
         this.tray.Icon = TrayIconRenderer.Create(this.CurrentTrayState());
         this.tray.ToolTipText = "PrimeDictate: ready";

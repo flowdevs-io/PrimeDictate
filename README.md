@@ -281,7 +281,7 @@ PrimeDictate normalizes unsupported saved Whisper.net hardware settings at start
 - GPU appears only when supported local Whisper.net GPU runtime support is present.
 - NPU appears only for supported GGML models with the required sidecars.
 
-### Experimental Qualcomm QNN path
+### Experimental Qualcomm QNN path (legacy WPF app only; not in the 6.1.0 installers)
 
 The Qualcomm backend is experimental and intended for native Windows ARM64 builds on supported Snapdragon X devices.
 
@@ -345,7 +345,7 @@ For installer-specific details, see `installer/README.md`.
 
 Tagged pushes that match `vX.Y.Z` build the app, produce release assets, and publish to GitHub Releases. Merging into `main` alone publishes nothing.
 
-The release pipeline packages the Windows WPF app (`PrimeDictate.exe`). The cross-platform app under `src/` is in the repository but not in the installers yet.
+From 6.1.0 the release pipeline packages the Avalonia app in `src/PrimeDictate.Desktop` as `PrimeDictate.exe`: one app for dictation and for transcription and meetings. The WPF app at the repository root is legacy: it still builds but is not packaged, so the Qualcomm QNN path described below is only in that legacy app.
 
 In practice, the release pipeline keeps three public distribution channels aligned:
 

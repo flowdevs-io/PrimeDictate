@@ -3,7 +3,7 @@
   <Fragment>
     <Icon Id="AppIcon" SourceFile="!(bindpath.assets)\PrimeDictate.ico" />
     <Property Id="ARPPRODUCTICON" Value="AppIcon" />
-    <Property Id="ARPCOMMENTS" Value="Local Whisper dictation with global hotkey capture and live transcription updates." />
+    <Property Id="ARPCOMMENTS" Value="Local dictation with a global hotkey, plus transcription and meeting capture." />
     <Property Id="ARPCONTACT" Value="clientsupport@flowdevs.io" />
     <Property Id="ARPHELPLINK" Value="https://www.flowdevs.io" />
     <Property Id="ARPURLINFOABOUT" Value="https://www.flowdevs.io" />

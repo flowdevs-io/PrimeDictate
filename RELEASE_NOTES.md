@@ -1,3 +1,26 @@
+# PrimeDictate 6.1.0
+
+## Highlights
+
+- One app. The installers now ship the new PrimeDictate that does both jobs in one process: hotkey dictation from the tray, and the transcription and meeting workspace (recordings, speaker timeline, sessions). It is still `PrimeDictate.exe`, so shortcuts, winget, Chocolatey and the updater keep working, and 6.1.0 upgrades 6.0.0 in place.
+- Your setup carries over. The new app reads the 6.0.0 settings and history once (it never rewrites them), keeps the same model folders under `%LocalAppData%\PrimeDictate\models`, and keeps the lifetime stats.
+- Launch at login is one thing again. The installer's Startup shortcut now starts PrimeDictate in the tray (`--background`), and the app's "Start PrimeDictate when I sign in" checkbox turns that same shortcut on or off for you without administrator rights. `LAUNCHATLOGIN=0` still leaves it out; the checkbox then uses a per-user startup entry instead. The 6.0.0 per-user startup entries are cleaned up on first start.
+- Record a meeting from the tray. "Record meeting" starts a microphone and system-audio recording in the workspace; the same item stops it. The main window shows dictation status and opens history, stats and Settings, and there is one Settings window for dictation and for transcription and meetings.
+- Same models everywhere. Dictation and transcription pick from the same installed models, including Whisper.net (ggml) models on the GPU (CUDA or Vulkan); one loaded copy of a model is shared by both.
+- Voice shell commands run again in dictation (never in transcription). Commands from 6.0.0 keep their on/off state; new ones start off.
+- Updates: "Check for updates..." in the tray menu, plus an automatic check at most once a day. Nothing installs without your OK, the MSI is verified against its published SHA-256 first, and PrimeDictate closes the normal way (an active meeting recording is saved) before Windows Installer starts.
+
+## Not in 6.1.0 yet
+
+The old app is not packaged any more, so these are gone until they are ported:
+
+- Qualcomm QNN and AI Hub NPU models on ARM64 (Whisper, Moonshine and the QNN runtime). The ARM64 installer runs the CPU models natively.
+- Inserting text straight into the focused edit control. Dictation types the final text with simulated keystrokes, as before, and still never pastes through the clipboard.
+- The overlay's copy and pin buttons and the compact-mode ripple.
+- There is no setting to turn off the automatic update check yet.
+
+The old WPF app stays in the repository and still builds; it is just not shipped.
+
 # PrimeDictate 6.0.0
 
 ## Highlights
