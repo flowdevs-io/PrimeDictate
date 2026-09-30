@@ -54,9 +54,14 @@ public sealed class MeetingFinalPass(ModelLeaseScheduler scheduler)
         var resultVersion = host.Document.Runs.Count == 0 ? 1 : host.Document.Runs.Max(r => r.ResultVersion) + 1;
         var (overlay, diarizerProblem) = await diarize(cancellationToken).ConfigureAwait(false);
         var diar = overlay?.Segments ?? [];
-        // With diarizer turns, each turn is transcribed on its own, so its words carry the turn's speaker and time by construction.
-        var byTurns = diar.Count > 0;
-        var systemPcm = byTurns ? new List<short>() : null;
+        // Long windows give the recognizer the most context; each word then takes the diarizer speaker at its time. Only a window
+        // that comes back without word times is redone turn by turn (needs the audio, so it is kept when a diarizer ran).
+        var keepPcm = diar.Count > 0;
+        var systemPcm = keepPcm ? new List<short>() : null;
+        var fallbackWindows = new List<(double Start, double End)>();
+        var turnCounter = 0;
+        var turnReport = new List<string>();
+        var windowReport = new List<string>();
 
         var max = asr.Capabilities.MaxWindow ?? TimeSpan.FromSeconds(28);
         var chunkOptions = new SpeechChunkerOptions { MaxChunk = max - TimeSpan.FromSeconds(2) < TimeSpan.FromSeconds(5) ? max : max - TimeSpan.FromSeconds(2) };
@@ -96,6 +101,11 @@ public sealed class MeetingFinalPass(ModelLeaseScheduler scheduler)
                 }
 
                 stats[channel].Sent++;
+                if (channel == 1 && windowReport.Count < 30)
+                {
+                    windowReport.Add($"{chunk.Start.TotalSeconds:0.0}-{(chunk.Start + chunk.Duration).TotalSeconds:0.0}s window: {recognized.Sum(r => r.Words?.Count ?? r.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length)} words");
+                }
+
                 stats[channel].Words += recognized.Sum(r => r.Words?.Count ?? r.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length);
                 if (channel == 0)
                 {
@@ -105,9 +115,16 @@ public sealed class MeetingFinalPass(ModelLeaseScheduler scheduler)
                 else
                 {
                     var mapped = SegmentMapper.Map(recognized, $"fs{index}", chunk.StartSample, chunk.Duration, resultVersion, 1, SegmentState.Final).ToList();
-                    for (var k = 0; k < mapped.Count; k++)
+                    if (keepPcm && mapped.Any(m => m.Words is not { Count: > 0 }))
                     {
-                        system.AddRange(SplitBySpeaker(mapped[k], $"fs{index}.{k}", diar, resultVersion));
+                        fallbackWindows.Add((chunk.Start.TotalSeconds, (chunk.Start + chunk.Duration).TotalSeconds));
+                    }
+                    else
+                    {
+                        for (var k = 0; k < mapped.Count; k++)
+                        {
+                            system.AddRange(SplitBySpeaker(mapped[k], $"fs{index}.{k}", diar, resultVersion));
+                        }
                     }
                 }
 
@@ -118,17 +135,14 @@ public sealed class MeetingFinalPass(ModelLeaseScheduler scheduler)
             }
         }
 
-        var turnReport = new List<string>();
-        async Task RecognizeTurnsAsync()
+        async Task RecognizeTurnsAsync(IReadOnlyList<Turn> turns)
         {
-            var turns = Turns(diar, systemPcm!.Count / 16_000d, asr.Capabilities.MaxWindow ?? TimeSpan.FromSeconds(28));
-            var k = 0;
             foreach (var turn in turns)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var startSample = (long)(turn.Start * 16_000);
                 var length = (int)Math.Min(systemPcm.Count - startSample, (long)((turn.End - turn.Start) * 16_000));
-                var index = k++;
+                var index = turnCounter++;
                 var st = stats[1];
                 st.Windows++;
                 stats[1] = st;
@@ -186,15 +200,12 @@ public sealed class MeetingFinalPass(ModelLeaseScheduler scheduler)
             for (var channel = 0; channel < 2; channel++)
             {
                 var samples = AudioConversion.SelectChannel(frame.Samples.Span, frame.Format.Channels, channel);
-                if (channel == 1 && byTurns)
+                if (channel == 1 && keepPcm)
                 {
-                    // Kept whole: the system channel is cut at the diarizer's turns after decoding, not at silences.
                     foreach (var v in samples)
                     {
                         systemPcm!.Add((short)Math.Clamp(v * 32767f, -32768f, 32767f));
                     }
-
-                    continue;
                 }
 
                 await RecognizeAsync(channel, chunkers[channel].Add(samples)).ConfigureAwait(false);
@@ -204,14 +215,16 @@ public sealed class MeetingFinalPass(ModelLeaseScheduler scheduler)
         }
 
         await RecognizeAsync(0, chunkers[0].Flush()).ConfigureAwait(false);
-        if (byTurns)
+        await RecognizeAsync(1, chunkers[1].Flush()).ConfigureAwait(false);
+        if (fallbackWindows.Count > 0)
         {
-            await RecognizeTurnsAsync().ConfigureAwait(false);
+            var turns = fallbackWindows.SelectMany(w => Turns(
+                diar.Select(d => new DiarizationSegment(d.Speaker, Math.Max(d.Start, w.Start), Math.Min(d.End, w.End))).Where(d => d.End - d.Start > 0.1).ToList(),
+                systemPcm!.Count / 16_000d,
+                asr.Capabilities.MaxWindow ?? TimeSpan.FromSeconds(28))).ToList();
+            await RecognizeTurnsAsync(turns).ConfigureAwait(false);
             HideDuplicatesAcrossSpeakers(system, diar);
-        }
-        else
-        {
-            await RecognizeAsync(1, chunkers[1].Flush()).ConfigureAwait(false);
+            turnReport.Insert(0, $"{fallbackWindows.Count} window(s) had no word times and were redone by speaker turn");
         }
 
         // Everything worked: place the new result in one go, so the draft stays on screen until the final rows replace it.
@@ -262,7 +275,7 @@ public sealed class MeetingFinalPass(ModelLeaseScheduler scheduler)
         string Report(string name, int c) => stats[c].Samples == 0
             ? $"{name}: no audio"
             : $"{name}: rms {Math.Sqrt(stats[c].Squares / stats[c].Samples) * 32768:0}, peak {stats[c].Peak * 32768:0}, {stats[c].Sent} of {stats[c].Windows} windows sent, {stats[c].Words} words";
-        return new FinalPassResult(resultVersion, mic.Count, system.Count, speakers, overlay?.OverlapSeconds ?? 0, overlay, diarizerProblem, $"{Report("microphone", 0)}; {Report("system", 1)}" + (turnReport.Count > 0 ? $"; system turns: {string.Join(", ", turnReport)}" : string.Empty));
+        return new FinalPassResult(resultVersion, mic.Count, system.Count, speakers, overlay?.OverlapSeconds ?? 0, overlay, diarizerProblem, $"{Report("microphone", 0)}; {Report("system", 1)}" + (windowReport.Count > 0 ? $"; system windows: {string.Join(", ", windowReport)}" : string.Empty) + (turnReport.Count > 0 ? $"; system turns: {string.Join(", ", turnReport)}" : string.Empty));
     }
 
     /// <summary>

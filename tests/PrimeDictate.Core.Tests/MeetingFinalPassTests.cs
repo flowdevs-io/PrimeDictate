@@ -87,7 +87,7 @@ public sealed class MeetingFinalPassTests : IDisposable
             var t = i / 16_000d;
             var tone = MathF.Sin(i * 0.07f);
             samples[i * 2] = t is >= 9 and < 11 ? 0.4f * tone : 0f;
-            samples[(i * 2) + 1] = t is >= 2 and < 5 ? 0.2f * tone : t is >= 5.4 and < 8 ? 0.1f * tone : 0f;
+            samples[(i * 2) + 1] = t is >= 2 and < 5 ? 0.2f * tone : t is >= 5.6 and < 8 ? 0.1f * tone : 0f;
         }
 
         writer.Write(samples);
@@ -129,14 +129,14 @@ public sealed class MeetingFinalPassTests : IDisposable
         var mic = lines.Single(l => l.Id.StartsWith("fm", StringComparison.Ordinal));
         Assert.All(mic.Words!, w => Assert.StartsWith("m", w.Text));
         Assert.InRange(mic.Start.TotalSeconds, 8.9, 9.6);
-        var system = lines.Where(l => l.Id.StartsWith("ft", StringComparison.Ordinal)).OrderBy(l => l.Start).ToList();
+        var system = lines.Where(l => l.Id.StartsWith("fs", StringComparison.Ordinal)).OrderBy(l => l.Start).ToList();
         Assert.Equal(["speaker-1", "speaker-2"], system.Select(l => l.Speakers[0].SpeakerId));
         // Each word lands on the diarizer segment of its own speaker, at the time it was spoken.
         Assert.All(system[0].Words!, w => Assert.StartsWith("a", w.Text));
         Assert.All(system[1].Words!, w => Assert.StartsWith("b", w.Text));
         Assert.All(system[0].Words!, w => Assert.InRange(w.Start.TotalSeconds, 1.7, 5.2));
-        Assert.All(system[1].Words!, w => Assert.InRange(w.Start.TotalSeconds, 5.1, 8.5));
-        Assert.InRange(system[0].Words!.Count, 6, 7);
+        Assert.All(system[1].Words!, w => Assert.InRange(w.Start.TotalSeconds, 5.4, 8.5));
+        Assert.Equal(6, system[0].Words!.Count);
         Assert.Equal(["You", "Speaker 1", "Speaker 2"], new[] { "local", "speaker-1", "speaker-2" }.Select(id => doc.Speakers.Single(s => s.Id == id).Name));
 
         // The live draft is still stored as version 1.
@@ -299,7 +299,7 @@ public sealed class SystemChannelTests : IDisposable
     }
 
     [Fact]
-    public async Task Words_heard_by_two_overlapping_turns_are_shown_once()
+    public async Task A_window_without_word_times_is_redone_by_turn_and_shared_words_are_shown_once()
     {
         Directory.CreateDirectory(this.root);
         var path = Path.Combine(this.root, "stereo.wav");
@@ -322,7 +322,7 @@ public sealed class SystemChannelTests : IDisposable
 
         // Speaker 3 talks 2-5 s, speaker 4 talks 4-8 s: they overlap for a second, and both turns hear that second.
         var result = await new MeetingFinalPass(new ModelLeaseScheduler()).RunAsync(
-            host, path, new MeetingFinalPassTests.ChannelProvider([]), _ => Task.FromResult<(DiarizationOverlay?, string?)>((new DiarizationOverlay([new("speaker_3", 2.0, 5.0), new("speaker_4", 4.0, 8.0)]), null)), "en-US", this.root, null, default);
+            host, path, new NoWordsForLongWindows(), _ => Task.FromResult<(DiarizationOverlay?, string?)>((new DiarizationOverlay([new("speaker_3", 2.0, 5.0), new("speaker_4", 4.0, 8.0)]), null)), "en-US", this.root, null, default);
 
         await store.DisposeAsync();
         SqliteConnection.ClearAllPools();
@@ -333,6 +333,64 @@ public sealed class SystemChannelTests : IDisposable
         Assert.InRange(visible.Count, 11, 14);
         Assert.Contains(rows.SelectMany(r => r.Words!), w => w.Hidden);
         Assert.Contains("system turns:", result.ChannelReport);
+        Assert.Contains("redone by speaker turn", result.ChannelReport);
+    }
+
+    /// <summary>Like the faithful recognizer, but a long window comes back as text only, with no word times.</summary>
+    private sealed class NoWordsForLongWindows : ITranscriptionProvider
+    {
+        private readonly MeetingFinalPassTests.ChannelProvider inner = new([]);
+
+        public string ModelId => this.inner.ModelId;
+
+        public TranscriptionProviderCapabilities Capabilities => this.inner.Capabilities;
+
+        public EffectiveRuntime Runtime => this.inner.Runtime;
+
+        public ValueTask<IReadOnlyList<RecognizedSegment>> RecognizeWindowAsync(ReadOnlyMemory<float> samples, string? language, CancellationToken cancellationToken) =>
+            samples.Length > 9 * 16_000
+                ? ValueTask.FromResult<IReadOnlyList<RecognizedSegment>>([new RecognizedSegment(TimeSpan.Zero, TimeSpan.FromSeconds(samples.Length / 16_000d), "some words", null, null, null, TimingProvenance.ApproximateChunk)])
+                : this.inner.RecognizeWindowAsync(samples, language, cancellationToken);
+
+        public ValueTask<IStreamingRecognitionSession> StartStreamingAsync(string? language, bool diarize, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    [Fact]
+    public async Task A_short_turn_between_two_long_ones_keeps_its_words_because_the_recognizer_saw_the_whole_window()
+    {
+        Directory.CreateDirectory(this.root);
+        var path = Path.Combine(this.root, "stereo.wav");
+        using (var writer = new WavFileWriter(path, 16_000, 2))
+        {
+            var samples = new float[10 * 16_000 * 2];
+            for (var i = 0; i < 10 * 16_000; i++)
+            {
+                samples[(i * 2) + 1] = 0.1f * MathF.Sin(i * 0.07f);
+            }
+
+            writer.Write(samples);
+        }
+
+        var store = SqliteTranscriptionSessionStore.Create(new AppDataPaths(this.root));
+        await store.InitializeAsync(CancellationToken.None);
+        var doc = NewDocument() with { SourceType = TranscriptSourceType.Meeting, Duration = TimeSpan.FromSeconds(10) };
+        doc = TranscriptDocumentReducer.Apply(doc, new SessionStarted(doc.SessionId, Run(1, "whisper-onnx/tiny.en")), Now);
+        var host = new SessionDocumentHost(doc, store);
+        var calls = new List<string>();
+
+        var result = await new MeetingFinalPass(new ModelLeaseScheduler()).RunAsync(
+            host, path, new MeetingFinalPassTests.ChannelProvider(calls), _ => Task.FromResult<(DiarizationOverlay?, string?)>((new DiarizationOverlay([new("speaker_1", 0.0, 5.0), new("speaker_2", 5.0, 6.4), new("speaker_3", 6.4, 10.0)]), null)), "en-US", this.root, null, default);
+
+        await store.DisposeAsync();
+        SqliteConnection.ClearAllPools();
+        var rows = host.Document.ActiveSegments.Where(l => l.Id.StartsWith("fs", StringComparison.Ordinal)).OrderBy(l => l.Start).ToList();
+        Assert.Equal(["speaker-1", "speaker-2", "speaker-3"], rows.Select(r => r.Speakers[0].SpeakerId));
+        Assert.Equal(1, calls.Count(c => c == "system")); // one recognizer call saw all ten seconds
+        Assert.Equal(3, rows[1].Words!.Count);
+        Assert.All(rows[1].Words!, w => Assert.InRange(w.Start.TotalSeconds, 4.9, 6.6));
+        Assert.Contains("system windows:", result.ChannelReport);
     }
 
     [Fact]
