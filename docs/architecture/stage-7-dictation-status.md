@@ -2,6 +2,8 @@
 
 Branch `claude/dictation-parity-4k0tl9`, following `stage-7-parity-plan.md`. "Ran" means executed on Linux in a container; "Compiled only" means it builds but has not been run on that OS.
 
+**Status (2026-09-30):** merged into `main` (PR #3). Release 6.0.0 ships the WPF app; this app is not in the installers yet. Hotkey and wake-word dictation, the overlay and the settings window were first run on Windows the same day (see the Windows notes below). Before it can replace the WPF app it still needs Whisper.net models (the WPF backend Justin uses), an updater and its own installer.
+
 ## Done
 
 | Piece | Where | Verified |

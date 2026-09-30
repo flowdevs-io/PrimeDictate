@@ -4,7 +4,7 @@ This file orients coding agents and future maintainers. It is not an end-user ma
 
 ## Purpose
 
-**PrimeDictate** is a .NET 8 **Windows** app with a **WPF tray shell** and **first-run onboarding**. It:
+**PrimeDictate** is a .NET 10 **Windows** app with a **WPF tray shell** and **first-run onboarding**. It is what the installers ship (6.0.0 and later). A cross-platform successor lives under `src/` (see the layout table) and is not packaged yet. The WPF app:
 
 1. Listens for a **global** hotkey (`Ctrl+Shift+Space` / SharpHook) to start and stop capture.
 2. Records from the **default** Windows input device using **WASAPI** (NAudio `WasapiCapture`), normalizing to **16 kHz, 16-bit, mono** PCM.
@@ -24,11 +24,16 @@ This file orients coding agents and future maintainers. It is not an end-user ma
 | `WhisperTextInjectionPipeline.cs` | Transcription orchestration, logging, and final-only text injection. |
 | `WindowsInputHelpers.cs` | Foreground-window guard for final injection and optional Windows Mouse Sonar pulse. |
 | `TranscriptionOverlayWindow.xaml` | Non-activating live transcript overlay; placement is user-configurable. |
-| `PrimeDictate.csproj` | Target `net8.0`; NAudio, SharpHook, sherpa-onnx. |
+| `PrimeDictate.csproj` | The WPF app. Target `net10.0-windows` (SDK pinned in `global.json`); NAudio, SharpHook, sherpa-onnx; references `src/PrimeDictate.Core`. |
 | `Directory.Build.props` | Shared assembly/file `Version` (installers read this too). |
-| `scripts/Publish-Windows.ps1` | Self-contained `win-x64` publish to `artifacts/win-x64/publish`. |
-| `scripts/Build-Installers.ps1` | Publishes then builds WiX `.wixproj` targets (NuGet `WixToolset.Sdk`) to MSIs in `artifacts/installer`. |
-| `installer/wix/` | WiX: offline MSI bundles the default Whisper ONNX files + Start Menu shortcut; online MSI uses `WixQuietExec` to run `DownloadModel.cmd`; `Branding.wxs` + `PrimeDictate.ico` for ARP/exe icon. |
+| `scripts/Publish-Windows.ps1` | Self-contained publish of the WPF app for one runtime (`win-x64` or `win-arm64`) to `artifacts/<rid>/publish`. |
+| `scripts/Build-Installers.ps1` | Publishes then builds the online WiX `.wixproj` (NuGet `WixToolset.Sdk`) to x64 and ARM64 MSIs in `artifacts/installer`. |
+| `installer/wix/` | WiX: `online/` is the shipped MSI (app payload only; models are downloaded in the app), with Start Menu and optional launch-at-login shortcuts; `offline/` is not built. `Branding.wxs` + `PrimeDictate.ico` for ARP/exe icon. |
+| `src/PrimeDictate.Core` | Portable core used by both apps: transcript model, SQLite session store, pipeline, dictation controller, audio and provider contracts. |
+| `src/PrimeDictate.Platforms` | Platform adapters: microphone capture (miniaudio; WASAPI loopback for system audio), speech providers (sherpa-onnx, Nemotron), hotkeys, typing, the meeting final pass. |
+| `src/PrimeDictate.Desktop` | The cross-platform Avalonia app: transcription workspace, meetings, dictation. Not in the installers yet. |
+| `tests/PrimeDictate.Core.Tests` | xUnit tests for Core and Platforms: `dotnet test tests/PrimeDictate.Core.Tests`. |
+| `docs/architecture/` | Design notes and status per stage; `meeting-v1-acceptance.md` is the Meeting v1 test. |
 
 ## Conventions to preserve
 
@@ -45,6 +50,7 @@ This file orients coding agents and future maintainers. It is not an end-user ma
 - **org.k2fsa.sherpa.onnx** for ONNX speech recognition runtimes and managed bindings.
 - **NAudio** for capture and resampling.
 - **SharpHook** for the global hook and `EventSimulator`.
+- Under `src/`: **Avalonia** (the new app), **SoundFlow** (miniaudio capture) and **Microsoft.Data.Sqlite** (session store and dictation history).
 
 **TextCopy** is not used; do not add it back unless you implement a clipboard strategy that is demonstrably free of the paste/restore race.
 
@@ -62,15 +68,21 @@ The tray/onboarding milestone is now implemented:
 1. **Host process**: WPF tray host (`App.xaml`) with notification icon, Settings/Exit menu, live transcript overlay, and Ready/Listening/Processing tooltip state.
 2. **User settings**: Persisted under `%LocalAppData%\PrimeDictate\settings.json`; loaded at startup and applied to `GlobalHotkeyListener`.
 3. **First run**: Missing/incomplete settings show `SettingsWindow` before normal tray-only behavior.
-4. **WiX launch option**: Offline and online packages include finish-page launch checkbox to start `PrimeDictate.exe`.
+4. **Installers**: online MSIs only (x64, ARM64). They do not launch the app from the finish page; launch at login is on by default and `LAUNCHATLOGIN=0` turns it off.
 5. **Preserved invariants**: hook-thread offload, foreground-window guard, overlay-only live preview, ONNX model-folder validation, and final-only target `SimulateTextEntry` baseline remain intact.
 
 ## Build and test hints
 
-- **Windows installers**: See [installer/README.md](installer/README.md). Offline MSIs require `models\whisper\sherpa-onnx-whisper-base.en\base.en-encoder.int8.onnx`, `base.en-decoder.int8.onnx`, and `base.en-tokens.txt` on the maintainer machine. Online MSIs download and extract that same ONNX model after install.
+- **Windows installers**: See [installer/README.md](installer/README.md). CI builds the online x64 and ARM64 MSIs; users download a model in the app's first-run setup or Settings.
 - Run from the **repository root** so `./models/whisper/<model folder>` can be discovered during development when models are staged in the repo-local `models` tree.
 - A running `PrimeDictate.exe` from `dotnet run` can **lock the apphost**; stop the process if `MSB3021` / copy-to-output fails.
 - Linter: project should build with **0 warnings** under default SDK analysis when possible; platform-specific API use should stay behind `OperatingSystem` checks or documented trade-offs.
+
+## Releases
+
+- Merging into `main` publishes nothing. A release is a "Release X.Y.Z" commit on `main` that bumps `Directory.Build.props` (`Version`, `AssemblyVersion`, `FileVersion`), then a pushed `vX.Y.Z` tag.
+- The tag run of `.github/workflows/build.yml` builds and signs the WPF app, publishes the GitHub Release (x64 and ARM64 MSIs with checksums), pushes the Chocolatey package (then Chocolatey moderation) and opens a winget-pkgs PR (then winget validation and moderation). Details and fixes: [installer/README.md](installer/README.md).
+- Never merge to `main`, tag a release or change signing without the owner's explicit go-ahead.
 
 ## Out of scope (unless explicitly requested)
 

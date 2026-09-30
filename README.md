@@ -343,7 +343,9 @@ For installer-specific details, see `installer/README.md`.
 
 ## Release and Distribution
 
-Tagged pushes that match `vX.Y.Z` build the app, produce release assets, and publish to GitHub Releases.
+Tagged pushes that match `vX.Y.Z` build the app, produce release assets, and publish to GitHub Releases. Merging into `main` alone publishes nothing.
+
+The release pipeline packages the Windows WPF app (`PrimeDictate.exe`). The cross-platform app under `src/` is in the repository but not in the installers yet.
 
 In practice, the release pipeline keeps three public distribution channels aligned:
 
@@ -360,7 +362,7 @@ If you only want to install or evaluate PrimeDictate, you can stop reading here.
 - Direct x64 MSI asset: `https://github.com/flowdevs-io/PrimeDictate/releases/download/vX.Y.Z/PrimeDictate-Setup-vX.Y.Z-x64.msi`
 - Direct ARM64 MSI asset: `https://github.com/flowdevs-io/PrimeDictate/releases/download/vX.Y.Z/PrimeDictate-Setup-vX.Y.Z-arm64.msi`
 
-If signing secrets are unavailable, the release flow still publishes unsigned assets instead of failing before upload.
+If signing secrets are unavailable, the release flow still publishes unsigned assets instead of failing before upload. If they are set but signing fails (for example an expired secret), the run stops before anything is published.
 
 ### winget
 
@@ -373,6 +375,8 @@ For resubmission without rebuilding binaries, use `workflow_dispatch` with:
 
 - `submit_winget_only=true`
 - `target_version=X.Y.Z`
+
+The winget step never fails the release, so check its log after each tag run. If it could not sync the submitting fork, see "When the winget step warns" in `installer/README.md`.
 
 ### Chocolatey
 

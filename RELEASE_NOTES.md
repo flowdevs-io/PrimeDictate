@@ -1,3 +1,21 @@
+# PrimeDictate 6.0.0
+
+## Highlights
+
+- Runs on .NET 10. The x64 and ARM64 installers stay self-contained and signed, so nothing extra needs installing.
+- Wake word: "ok" and "okay" are treated the same, and "thanks" / "thank you" variants are recognized.
+- Voice commands: more spoken variants of a command phrase are removed from the typed text.
+- New particle visualizer in the overlay and a redrawn tray icon.
+- `--show` and `--workspace` open the workspace window.
+- Under the hood the app now builds on the portable PrimeDictate core, shared with the upcoming cross-platform app. That app is in the repository but not in these installers yet.
+
+# PrimeDictate 5.1.0
+
+## Highlights
+
+- Added optional wake-word dictation start.
+- Polished the dark UI shells.
+
 # PrimeDictate 5.0.0
 
 ## Highlights
