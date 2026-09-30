@@ -249,11 +249,13 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         catch (TimeoutException)
         {
             this.failure ??= new TimeoutException("The audio capture did not stop in time.");
+            Diagnostics.AppLog.Event("capture", "The audio capture did not stop within 30 s of Stop.");
             this.Error?.Invoke("The audio capture did not stop in time. What was recorded so far is kept.");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             this.failure ??= ex;
+            Diagnostics.AppLog.Fault("capture-stop", ex);
         }
 
         // The recording is safe on disk from here, whatever recognition does next.
@@ -418,18 +420,21 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         catch (AudioSourceException ex)
         {
             this.failure = ex;
+            Diagnostics.AppLog.Fault("capture", ex);
             this.Error?.Invoke(ex.Message);
         }
         catch (IOException ex)
         {
             // Disk full or file lock. Keep the transcript so far and stop safely.
             this.failure = ex;
+            Diagnostics.AppLog.Fault("capture", ex);
             this.Error?.Invoke("Recording stopped because the audio file could not be written.");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // Nothing else may end the loop unseen: a fault here used to leave a silent, never-finishing recording.
             this.failure = ex;
+            Diagnostics.AppLog.Fault("capture", ex);
             this.Error?.Invoke($"Recording stopped unexpectedly ({ex.GetType().Name}). What was recorded so far is kept; press Stop to save it.");
         }
         finally

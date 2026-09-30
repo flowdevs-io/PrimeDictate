@@ -133,6 +133,9 @@ public sealed class RecordOnlyCaptureTests : IDisposable
         await session.StopAsync(default).WaitAsync(TimeSpan.FromSeconds(20));
 
         Assert.Contains(errors, e => e.Contains("stopped unexpectedly", StringComparison.Ordinal));
+        var log = File.ReadAllText(PrimeDictate.Core.Diagnostics.AppLog.FilePath);
+        Assert.Contains("[capture] System.InvalidOperationException: boom", log);
+        Assert.Contains("ReadFramesAsync", log); // the stack trace names where it happened
         Assert.Equal(TranscriptSessionStatus.Failed, session.Host!.Document.Status);
         Assert.True(new FileInfo(Assert.Single(session.Host.Document.Audio).Path).Length > 10 * 1600 * 2 * 2 - 1);
         await store.DisposeAsync();

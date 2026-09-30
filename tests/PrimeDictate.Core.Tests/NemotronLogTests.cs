@@ -7,7 +7,11 @@ internal static class LogSandbox
 {
     /// <summary>Keeps every test that starts a worker from writing to the developer's real log folder.</summary>
     [ModuleInitializer]
-    internal static void Init() => NemotronLog.Directory = Path.Combine(Path.GetTempPath(), "primedictate-tests-logs");
+    internal static void Init()
+    {
+        NemotronLog.Directory = Path.Combine(Path.GetTempPath(), "primedictate-tests-logs");
+        PrimeDictate.Core.Diagnostics.AppLog.Directory = Path.Combine(Path.GetTempPath(), "primedictate-tests-logs");
+    }
 }
 
 [Collection("nemotron-log")]
