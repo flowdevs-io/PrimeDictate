@@ -149,9 +149,16 @@ public sealed class NemotronWorker : IAsyncDisposable, INemotronEndpoint
             info.Environment["PATH"] = string.Join(Path.PathSeparator, extra.Append(current ?? string.Empty));
         }
 
+        NemotronLog.ScrubEnvironment(info);
         info.Environment["NEMO_SPEECH_HTTP_API_KEY"] = key;
         var process = Process.Start(info) ?? throw new NemotronException("worker-missing", "The Nemotron worker could not be started.");
+        // A crash or force-kill of the app must not leave a worker holding the GPU.
+        ChildProcessJob.TryAdd(process);
         var worker = new NemotronWorker(process, port, key, files.DiarizerPath is not null, device);
+        var source = $"[worker pid={process.Id} {device}]";
+        NemotronLog.Event(source, $"started {Path.GetFileName(executablePath)}");
+        process.EnableRaisingEvents = true;
+        process.Exited += (_, _) => NemotronLog.Event(source, $"exited with code {SafeExitCode(process)}");
         // Drain output so a full pipe can never stall the worker. Only the backend it reports is kept; the rest
         // is dropped because it may echo audio metadata.
         void Inspect(string? line)
@@ -171,7 +178,11 @@ public sealed class NemotronWorker : IAsyncDisposable, INemotronEndpoint
         }
 
         process.OutputDataReceived += (_, e) => Inspect(e.Data);
-        process.ErrorDataReceived += (_, e) => Inspect(e.Data);
+        process.ErrorDataReceived += (_, e) =>
+        {
+            Inspect(e.Data);
+            NemotronLog.WorkerLine(source, e.Data);
+        };
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 
@@ -190,6 +201,18 @@ public sealed class NemotronWorker : IAsyncDisposable, INemotronEndpoint
         {
             await worker.DisposeAsync().ConfigureAwait(false);
             throw;
+        }
+    }
+
+    private static string SafeExitCode(Process process)
+    {
+        try
+        {
+            return process.ExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+        catch (InvalidOperationException)
+        {
+            return "unknown";
         }
     }
 

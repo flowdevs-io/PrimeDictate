@@ -54,7 +54,12 @@ public sealed record WordTiming(
     double? Confidence,
     TimingProvenance Provenance,
     /// <summary>Speaker the recognizer gave this word, when it tags words. Sessions saved before this field have none.</summary>
-    string? SpeakerId = null);
+    string? SpeakerId = null,
+    /// <summary>
+    /// The word is not shown: the microphone picked it up from the speakers. The recognized text and the word stay stored,
+    /// so a wrong call can be undone.
+    /// </summary>
+    bool Hidden = false);
 
 /// <summary>A speaker's share of a segment; several entries represent overlap or uncertainty.</summary>
 public sealed record SpeakerAttribution(string SpeakerId, TimeSpan Start, TimeSpan End, double? Confidence);
@@ -90,7 +95,15 @@ public sealed record TranscriptSegment
     /// <summary>Which recognition run produced this segment.</summary>
     public int ResultVersion { get; init; } = 1;
 
-    public string DisplayText => this.EditedText ?? this.RawText;
+    /// <summary>What the row shows: the user's edit, else the recognized text without any words hidden as microphone echo.</summary>
+    public string DisplayText => this.EditedText ?? (this.HasHiddenWords ? string.Join(' ', this.Words!.Where(w => !w.Hidden).Select(w => w.Text)) : this.RawText);
+
+    public bool HasHiddenWords => this.Words?.Any(w => w.Hidden) == true;
+
+    /// <summary>Start of the first word that is shown; the segment start when nothing is hidden.</summary>
+    public TimeSpan DisplayStart => this.EditedText is null && this.HasHiddenWords ? this.Words!.FirstOrDefault(w => !w.Hidden)?.Start ?? this.Start : this.Start;
+
+    public TimeSpan DisplayEnd => this.EditedText is null && this.HasHiddenWords ? this.Words!.LastOrDefault(w => !w.Hidden)?.End ?? this.End : this.End;
 
     public bool IsEdited => this.EditedText is not null && !string.Equals(this.EditedText, this.RawText, StringComparison.Ordinal);
 }

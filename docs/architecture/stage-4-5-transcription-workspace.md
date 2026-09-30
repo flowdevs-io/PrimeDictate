@@ -66,3 +66,25 @@ line from each side can overlap in time and keeps its own row. If the second str
 falls back to one mixed stream and records a note. `LiveSessionOptions.SeparateMeetingChannels = false` forces the
 mixed stream. Not yet checked: whether the real worker serves two concurrent realtime sockets, and how much GPU
 memory a second session adds.
+
+## Meetings: two passes (draft, then final)
+
+With a fast model live (today the Whisper ONNX models; Parakeet and Moonshine are not ported yet) and Nemotron plus its
+diarizer installed, a Meeting is recorded in two passes. This is a design note; it has been run only against a stand-in
+recognizer and a stand-in diarizer on Linux, not on Windows with the real worker.
+
+1. **Live draft.** The chosen model transcribes mixed audio in windows as before. The recording is saved as stereo
+   (left microphone, right system audio). The status line and the recording indicator say the text is a draft.
+2. **Final pass after Stop** (`MeetingFinalPass`, checkbox "Meetings: speaker labels after Stop"):
+   - `nemo-speech diarize` runs over the system channel (mono `.wav`, `--model`, `--device`, `--format json`), giving
+     speaker segments that are consistent across the whole meeting and may overlap.
+   - Each channel is cut into speech chunks and sent to Nemotron's file API without its own diarization (per-window
+     diarization numbers speakers from 1 in every request, so it cannot keep a person the same across windows).
+   - Microphone lines are "You". Each system word takes the diarizer speaker covering most of it; one-word flickers are
+     smoothed and lines are cut where the speaker changes. Echo removal is the same as in the live view.
+   - Nothing is written until everything succeeded. The rows become a new result version and replace the draft; the draft
+     stays stored as the earlier result. The overlap segments are saved as `system-diarization.json` and drive the timeline.
+   - The session notes say when the pass started and what it produced or why it failed.
+
+Live Nemotron (two streams) stays available; it is chosen by picking a Nemotron model, and it keeps the existing
+after-Stop timeline redraw.

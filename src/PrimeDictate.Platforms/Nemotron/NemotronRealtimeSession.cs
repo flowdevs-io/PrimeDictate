@@ -55,6 +55,15 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
     private string partial = string.Empty;
     private TaskCompletionSource allCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+    /// <summary>
+    /// Everything sent since the oldest commit that has not been answered yet: audio blocks and the commit messages
+    /// between them. A replacement connection is fed this, so a stall loses nothing unless the same audio stalls twice.
+    /// </summary>
+    private readonly List<(byte[]? Audio, bool Commit)> unanswered = new();
+
+    private int replaysInARow;
+    private volatile bool gotOutput;
+
     private readonly string? language;
 
     private NemotronRealtimeSession(Uri baseAddress, string apiKey, bool diarize, TimeSpan stallTimeout, string? language)
@@ -108,6 +117,37 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
 
         session.watchdog = Task.Run(() => session.WatchdogAsync(session.lifetime.Token), CancellationToken.None);
         return session;
+    }
+
+    /// <summary>
+    /// Runs a short throwaway stream through a freshly started worker so its first real commit is not the one that pays for
+    /// loading GPU kernels, which can freeze every stream for several seconds. Best effort: a failure changes nothing.
+    /// The audio is faint noise, never exact zeros (long zero runs wedge the worker, NeMo-Speech.cpp#48).
+    /// </summary>
+    public static async Task WarmUpAsync(Uri baseAddress, string apiKey, bool diarize, CancellationToken cancellationToken)
+    {
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        limit.CancelAfter(TimeSpan.FromSeconds(60));
+        try
+        {
+            await using var session = await ConnectAsync(baseAddress, apiKey, diarize, limit.Token, TimeSpan.FromSeconds(60)).ConfigureAwait(false);
+            var random = new Random(7);
+            var noise = new float[16_000];
+            for (var i = 0; i < noise.Length; i++)
+            {
+                noise[i] = (float)((random.NextDouble() - 0.5) * 0.1);
+            }
+
+            for (var second = 0; second < 2; second++)
+            {
+                await session.WriteAsync(AudioFrame.CopyFrom(noise, AudioFormat.SpeechTimeline, second, second * 16_000L), limit.Token).ConfigureAwait(false);
+            }
+
+            await session.CompleteAsync(limit.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is NemotronException or OperationCanceledException or WebSocketException or IOException)
+        {
+        }
     }
 
     private async Task OpenAsync(CancellationToken cancellationToken)
@@ -208,6 +248,7 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
             }
 
             this.pendingCommitStarts.Enqueue(start / 16_000d);
+            this.unanswered.Add((null, true));
             this.allCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             this.partial = string.Empty;
         }
@@ -281,6 +322,11 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
         var bytes = new byte[this.block.Count * 2];
         AudioConversion.FloatToPcm16(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(this.block), bytes);
         this.block.Clear();
+        lock (this.sync)
+        {
+            this.unanswered.Add((bytes, false));
+        }
+
         await this.ioGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -359,6 +405,7 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
     /// <summary>Any text from the worker proves the stream is alive.</summary>
     private void NoteOutput()
     {
+        this.gotOutput = true;
         lock (this.sync)
         {
             this.voicedSinceOutput = 0;
@@ -368,10 +415,12 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
     private bool IsStalled()
     {
         var now = Environment.TickCount64;
+        // The first answer of a fresh worker can be slow (GPU kernels compile on first use), so it gets more time.
+        var patience = this.gotOutput ? 1.0 : 3.0;
         lock (this.sync)
         {
-            var speechStalled = this.voicedSinceOutput >= 2 && now - this.voicedSinceTicks >= this.stallTimeout.TotalMilliseconds;
-            var commitStalled = this.pendingCommitStarts.Count > 0 && now - this.oldestPendingTicks >= this.stallTimeout.TotalMilliseconds * 2;
+            var speechStalled = this.voicedSinceOutput >= 2 && now - this.voicedSinceTicks >= this.stallTimeout.TotalMilliseconds * patience;
+            var commitStalled = this.pendingCommitStarts.Count > 0 && now - this.oldestPendingTicks >= this.stallTimeout.TotalMilliseconds * 2 * patience;
             return speechStalled || commitStalled;
         }
     }
@@ -395,9 +444,11 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
     }
 
     /// <summary>
-    /// Replaces a connection that stopped answering. Text the old stream never returned is dropped (its provisional
-    /// lines are cleared), the timeline offsets are untouched because they come from sample positions, and speaker
-    /// numbers continue above the highest one seen so a restarted worker cannot merge two different people.
+    /// Replaces a connection that stopped answering. The audio the old stream never answered is sent again to the new
+    /// one, so nothing is lost. If the same audio wedges the worker a second time in a row, it is dropped instead (its
+    /// provisional lines are cleared) so one bad stretch cannot loop forever. The timeline offsets are untouched because
+    /// they come from sample positions, and speaker numbers continue above the highest one seen so a restarted worker
+    /// cannot merge two different people.
     /// </summary>
     private async Task RestartAsync(CancellationToken cancellationToken)
     {
@@ -422,25 +473,42 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
 
             this.cancel.Dispose();
             this.cancel = new CancellationTokenSource();
+            List<(byte[]? Audio, bool Commit)> replay;
+            var replaying = false;
             lock (this.sync)
             {
-                while (this.pendingCommitStarts.Count > 0)
+                replaying = this.replaysInARow == 0 && this.unanswered.Count > 0;
+                this.replaysInARow++;
+                if (replaying)
                 {
-                    var offset = this.pendingCommitStarts.Dequeue();
-                    this.EmitEmptyFinal(this.completedCount++, offset);
+                    // Keep the commits and the open utterance as they are; the new stream will answer them.
+                    replay = [.. this.unanswered];
+                    this.partial = string.Empty;
+                    this.oldestPendingTicks = Environment.TickCount64;
+                }
+                else
+                {
+                    replay = [];
+                    this.unanswered.Clear();
+                    while (this.pendingCommitStarts.Count > 0)
+                    {
+                        var offset = this.pendingCommitStarts.Dequeue();
+                        this.EmitEmptyFinal(this.completedCount++, offset);
+                    }
+
+                    if (this.utteranceStartSample is { } open)
+                    {
+                        this.EmitEmptyFinal(this.utteranceIndex, open / 16_000d);
+                    }
+
+                    this.completedCount = Math.Max(this.completedCount, this.utteranceIndex + 1);
+                    this.utteranceIndex = this.completedCount;
+                    this.utteranceStartSample = null;
+                    this.partial = string.Empty;
+                    this.allCompleted.TrySetResult();
                 }
 
-                if (this.utteranceStartSample is { } open)
-                {
-                    this.EmitEmptyFinal(this.utteranceIndex, open / 16_000d);
-                }
-
-                this.completedCount = Math.Max(this.completedCount, this.utteranceIndex + 1);
-                this.utteranceIndex = this.completedCount;
-                this.utteranceStartSample = null;
-                this.partial = string.Empty;
                 this.voicedSinceOutput = 0;
-                this.allCompleted.TrySetResult();
                 this.speakerBase = this.maxSpeaker;
             }
 
@@ -450,8 +518,35 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(15));
             await this.OpenAsync(timeout.Token).ConfigureAwait(false);
+            double replayedSeconds = 0;
+            foreach (var (audio, commit) in replay)
+            {
+                if (commit)
+                {
+                    await this.SendTextAsync(this.socket, """{"type":"input_audio_buffer.commit"}""", timeout.Token).ConfigureAwait(false);
+                }
+                else
+                {
+                    await this.socket.SendAsync(audio!, WebSocketMessageType.Binary, true, timeout.Token).ConfigureAwait(false);
+                    replayedSeconds += audio!.Length / 2 / 16_000d;
+                }
+            }
+
+            if (replaying)
+            {
+                lock (this.sync)
+                {
+                    // The watchdog must judge the replayed audio like fresh audio.
+                    this.voicedSinceOutput = replayedSeconds;
+                    this.voicedSinceTicks = Environment.TickCount64;
+                    this.oldestPendingTicks = Environment.TickCount64;
+                }
+            }
+
             this.Restarts++;
-            this.Notice?.Invoke("Speech recognition stopped answering and was restarted. Audio in the last few seconds was not transcribed, and speaker numbers may restart.");
+            this.Notice?.Invoke(replaying
+                ? $"Speech recognition stopped answering and was restarted. The last {replayedSeconds:0.#} s of audio were sent again, so nothing should be missing. Speaker numbers may restart."
+                : "Speech recognition stopped answering again on the same audio and was restarted. Audio in the last few seconds was not transcribed, and speaker numbers may restart.");
         }
         catch (Exception ex) when (ex is NemotronException or OperationCanceledException or WebSocketException)
         {
@@ -620,6 +715,14 @@ public sealed class NemotronRealtimeSession : IStreamingRecognitionSession, IStr
                 this.pendingCommitStarts.Dequeue();
             }
 
+            // The answered commit and everything before it no longer needs replaying.
+            var answered = this.unanswered.FindIndex(e => e.Commit);
+            if (answered >= 0)
+            {
+                this.unanswered.RemoveRange(0, answered + 1);
+            }
+
+            this.replaysInARow = 0;
             if (this.pendingCommitStarts.Count == 0)
             {
                 this.allCompleted.TrySetResult();

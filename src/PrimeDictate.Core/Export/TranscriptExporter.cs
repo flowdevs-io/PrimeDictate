@@ -88,7 +88,7 @@ public static class TranscriptExporter
             var speaker = SpeakerName(document, segment);
             if (options.IncludeTimestamps)
             {
-                sb.Append('[').Append(FormatTimecode(segment.Start, srt: false)).Append("] ");
+                sb.Append('[').Append(FormatTimecode(segment.DisplayStart, srt: false)).Append("] ");
             }
 
             if (speaker.Length > 0)
@@ -123,7 +123,7 @@ public static class TranscriptExporter
 
             if (options.IncludeTimestamps)
             {
-                sb.Append('`').Append(FormatTimecode(segment.Start, srt: false)).Append("` ");
+                sb.Append('`').Append(FormatTimecode(segment.DisplayStart, srt: false)).Append("` ");
             }
 
             sb.Append(EscapeMarkdown(Text(segment, options.Text).Trim())).Append("\n\n");
@@ -165,8 +165,8 @@ public static class TranscriptExporter
                 continue;
             }
 
-            var start = segment.Start;
-            var end = segment.End > segment.Start ? segment.End : segment.Start + TimeSpan.FromMilliseconds(500);
+            var start = segment.DisplayStart;
+            var end = segment.DisplayEnd > start ? segment.DisplayEnd : start + TimeSpan.FromMilliseconds(500);
             var speaker = SpeakerName(document, segment);
             if (speaker.Length > 0)
             {

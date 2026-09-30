@@ -112,6 +112,8 @@ public sealed partial class MainWindow : Window
         this.AddHandler(DragDrop.DropEvent, this.OnDrop);
         this.Opened += async (_, _) => await this.InitializeWorkspaceAsync();
         this.Closing += (_, _) => this.workspace.DiscardLiveAsync().GetAwaiter().GetResult();
+        // Closing the window ends the speech worker too; left running it keeps the GPU's memory.
+        this.Closed += (_, _) => this.workspace.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(10));
     }
 
     /// <summary>Selects the newest session; used by the smoke screenshot.</summary>
@@ -189,6 +191,11 @@ public sealed partial class MainWindow : Window
 
             this.RecordButton.IsEnabled = this.workspace.CanRecord && this.models.Count > 0;
             this.ImportButton.IsEnabled = this.models.Count > 0;
+            this.FinalPassBox.IsEnabled = this.workspace.FinalPassAvailable;
+            if (!this.workspace.FinalPassAvailable)
+            {
+                this.FinalPassBox.IsChecked = false;
+            }
             this.StatusText.Text = notes.Count == 0 ? "Ready." : string.Join(" ", notes);
         }
         catch (Exception ex) when (ex is IOException or InvalidOperationException or Microsoft.Data.Sqlite.SqliteException or UnauthorizedAccessException)
@@ -251,22 +258,13 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>Redraws a finished meeting's speaker timeline from the whole-file diarizer, so overlapping speech shows.</summary>
-    private async Task RefineTimelineAsync(Guid sessionId)
+    private async Task RefineTimelineAsync(SessionDocumentHost target)
     {
-        var (overlay, reason) = await this.workspace.BuildOverlayAsync(sessionId, CancellationToken.None);
-        if (this.host is not { } current || current.Document.SessionId != sessionId)
+        var overlay = await this.workspace.RefineSpeakerTimelineAsync(target, CancellationToken.None);
+        if (overlay is not null && ReferenceEquals(this.host, target))
         {
-            return;
+            this.Timeline.SetOverlay(overlay.MapTo(target.Document));
         }
-
-        if (overlay is null)
-        {
-            current.AddNote($"Speaker timeline was not redrawn: {reason}");
-            return;
-        }
-
-        this.Timeline.SetOverlay(overlay.MapTo(current.Document));
-        current.AddNote($"Speaker timeline redrawn from the diarizer: {overlay.SpeakerCount} system speakers, {overlay.OverlapSeconds:0.#} s of overlapping speech.");
     }
 
     private void OnDocumentChanged(TranscriptDocument _)
@@ -651,6 +649,7 @@ public sealed partial class MainWindow : Window
         this.RecordButton.IsEnabled = !active && this.workspace.CanRecord;
         this.SourceBox.IsEnabled = !active;
         this.AutoGainBox.IsEnabled = !active;
+        this.FinalPassBox.IsEnabled = !active && this.workspace.FinalPassAvailable;
         this.StopButton.IsVisible = active && canStop;
         this.StopButton.Content = this.live is null ? "Cancel" : "Stop";
         this.ModelBox.IsEnabled = !active;
@@ -687,7 +686,9 @@ public sealed partial class MainWindow : Window
             };
             this.live = await this.workspace.StartLiveAsync(model, null, AudioRetention.KeepAudio, $"{(mode == TranscriptSourceType.Microphone ? "Recording" : "Meeting")} {DateTime.Now:g}", CancellationToken.None, mode, null, this.AutoGainBox.IsChecked == true);
             this.recordingLabel = label;
-            this.RecordingIndicator.Text = "● Recording " + label;
+            // With a fast model live and Nemotron available, the live text is a draft and Stop starts the final pass.
+            this.twoPassPlanned = mode == TranscriptSourceType.Meeting && this.FinalPassBox.IsChecked == true && this.workspace.FinalPassAvailable && !model.ModelId.StartsWith("nemotron:", StringComparison.Ordinal);
+            this.RecordingIndicator.Text = "● Recording " + label + (this.twoPassPlanned ? " (draft text, speaker labels after Stop)" : string.Empty);
             this.RecordingIndicator.IsVisible = true;
             this.live.Error += this.Say;
             this.live.LevelChanged += level => Dispatcher.UIThread.Post(() => this.LevelText.Text = $"Level {new string('█', (int)Math.Min(20, level * 60))}");
@@ -701,7 +702,9 @@ public sealed partial class MainWindow : Window
             this.Timeline.FollowLive();
             this.Attach(this.live.Host!);
             await this.ReloadSessionsAsync(this.live.Host!.Document.SessionId);
-            this.Say("Recording. Text appears as you speak; gray lines can still change.");
+            this.Say(this.twoPassPlanned
+                ? "Recording. This live text is a draft: after Stop, Nemotron re-reads the recording and adds speaker labels."
+                : "Recording. Text appears as you speak; gray lines can still change.");
         }
         catch (MicrophoneBusyException ex)
         {
@@ -758,11 +761,50 @@ public sealed partial class MainWindow : Window
         this.EndJob();
         this.Say(target?.Document.Status == TranscriptSessionStatus.Completed ? "Saved." : $"Stopped: {target?.Document.Status}. What was captured is kept.");
         await this.ReloadSessionsAsync(target?.Document.SessionId);
-        if (target is { Document.SourceType: TranscriptSourceType.Meeting } meeting && meeting.Document.Status == TranscriptSessionStatus.Completed)
+        if (target is { Document.SourceType: TranscriptSourceType.Meeting } finalPassTarget && this.twoPassPlanned && target.Document.Status == TranscriptSessionStatus.Completed)
+        {
+            await this.RunSafelyAsync(() => this.FinalPassAsync(finalPassTarget));
+        }
+        else if (target is { Document.SourceType: TranscriptSourceType.Meeting } meeting)
         {
             this.Say("Saved. Redrawing the speaker timeline…");
-            await this.RunSafelyAsync(() => this.RefineTimelineAsync(meeting.Document.SessionId));
+            await this.RunSafelyAsync(() => this.RefineTimelineAsync(meeting));
             this.Say("Saved.");
+        }
+    }
+
+    private bool twoPassPlanned;
+
+    /// <summary>Second pass of a two-pass meeting: the final transcript with speaker labels replaces the live draft.</summary>
+    private async Task FinalPassAsync(SessionDocumentHost target)
+    {
+        this.jobCancel = new CancellationTokenSource();
+        this.SetJobUi(active: true, canStop: true);
+        this.Progress.IsIndeterminate = false;
+        this.Progress.Value = 0;
+        this.Say("Draft saved. Improving it with speaker labels…");
+        try
+        {
+            var progress = new Progress<double>(f => this.Progress.Value = f);
+            var result = await this.workspace.RunFinalPassAsync(target, progress, this.jobCancel.Token);
+            if (result is not null && ReferenceEquals(this.host, target))
+            {
+                this.Timeline.SetOverlay(result.Overlay?.MapTo(target.Document));
+                this.Say($"Final transcript ready: {result.SpeakerCount} speakers on the system audio, {result.OverlapSeconds:0.#} s of overlapping speech.");
+            }
+            else
+            {
+                this.Say("Kept the live draft. The session notes say why the final pass did not replace it.");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            this.Say("Canceled. The live draft is kept.");
+        }
+        finally
+        {
+            this.EndJob();
+            await this.ReloadSessionsAsync(target.Document.SessionId);
         }
     }
 
