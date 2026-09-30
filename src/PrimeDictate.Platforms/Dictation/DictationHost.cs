@@ -24,6 +24,7 @@ public sealed class DictationHost : IAsyncDisposable
     private SherpaOfflineProvider? wakeProvider;
     private string? wakeProviderId;
     private string? providerId;
+    private string? lastModelNotice;
     private bool disposed;
 
     public DictationHost(
@@ -50,8 +51,9 @@ public sealed class DictationHost : IAsyncDisposable
             return;
         }
 
+        var microphoneSource = new DefaultMicrophoneFallback(audio, message => this.Notice?.Invoke(message));
         this.Controller = new DictationController(
-            audio,
+            microphoneSource,
             this.GetProvider,
             this.guard,
             injector ?? new SharpHookTextInjector(),
@@ -62,7 +64,7 @@ public sealed class DictationHost : IAsyncDisposable
         this.Controller.HistoryRequested += () => this.HistoryRequested?.Invoke();
         this.Controller.Committed += this.OnCommitted;
         this.Controller.Options = this.Settings.ToOptions();
-        this.Wake = new WakeWordListener(audio, this.TranscribeWakeAsync);
+        this.Wake = new WakeWordListener(microphoneSource, this.TranscribeWakeAsync);
         microphone.Register(this.Wake);
         this.Wake.Notice += message => this.Notice?.Invoke(message);
         this.Wake.WakeDetected += () => _ = Task.Run(this.StartFromWakeAsync);
@@ -134,6 +136,7 @@ public sealed class DictationHost : IAsyncDisposable
             }
             catch (Exception ex)
             {
+                Core.Diagnostics.AppLog.Fault("hotkeys", ex);
                 this.Notice?.Invoke(OperatingSystem.IsMacOS()
                     ? $"Global hotkeys need Accessibility permission (System Settings, Privacy and Security). {ex.Message}"
                     : $"Global hotkeys could not start: {ex.Message}");
@@ -147,6 +150,7 @@ public sealed class DictationHost : IAsyncDisposable
     public void ApplySettings(DictationSettings settings, bool persist = true)
     {
         this.Settings = settings;
+        Volatile.Write(ref this.lastModelNotice, null);
         if (this.Controller is not null)
         {
             this.Controller.Options = settings.ToOptions();
@@ -163,6 +167,14 @@ public sealed class DictationHost : IAsyncDisposable
         {
             this.store.Save(settings);
         }
+    }
+
+    /// <summary>Saves where the user dragged the overlay (the new app's settings file only).</summary>
+    public void RememberOverlayAnchor(int x, int y)
+    {
+        this.Settings.OverlayAnchorX = x;
+        this.Settings.OverlayAnchorY = y;
+        this.store.Save(this.Settings);
     }
 
     /// <summary>First step of leaving: no hotkey or wake word can start a new dictation while the app shuts down.</summary>
@@ -257,21 +269,21 @@ public sealed class DictationHost : IAsyncDisposable
         var model = installed.FirstOrDefault(m => m.ModelId == wanted);
         if (model is null)
         {
-            if (wanted is not null)
-            {
-                this.Notice?.Invoke($"The selected {this.Settings.TranscriptionBackend} model ({this.Settings.SelectedModelId}) is not installed. Download it in Settings, or pick another.");
-            }
-
+            var missing = $"The selected {this.Settings.TranscriptionBackend} model ({this.Settings.SelectedModelId}) is not installed";
             model = installed.FirstOrDefault();
             if (model is null)
             {
+                if (wanted is not null)
+                {
+                    this.ModelNotice($"{missing}. Download it in Settings, or pick another.");
+                }
+
                 return null;
             }
 
-            if (wanted is null)
-            {
-                this.Notice?.Invoke($"No dictation model is selected; using {model.DisplayName}.");
-            }
+            this.ModelNotice(wanted is null
+                ? $"No dictation model is selected; using {model.DisplayName}."
+                : $"{missing}, so {model.DisplayName} is used. Download it in Settings, or pick another.");
         }
 
         lock (this.providerSync)
@@ -284,6 +296,18 @@ public sealed class DictationHost : IAsyncDisposable
             }
 
             return this.provider;
+        }
+    }
+
+    /// <summary>
+    /// The model is looked up for every dictation and, with the wake word on, for every stretch of speech it checks, so a
+    /// problem is said once (again after Settings change), not every second over the overlay.
+    /// </summary>
+    private void ModelNotice(string message)
+    {
+        if (Interlocked.Exchange(ref this.lastModelNotice, message) != message)
+        {
+            this.Notice?.Invoke(message);
         }
     }
 

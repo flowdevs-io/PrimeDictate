@@ -10,10 +10,10 @@ namespace PrimeDictate.Desktop.Dictation;
 public sealed class ModelDownloadPanel : StackPanel
 {
     private readonly DictationHost host;
-    private readonly ComboBox choice = new() { MinWidth = 280 };
-    private readonly Button start = new() { Content = "Download" };
-    private readonly Button cancel = new() { Content = "Cancel", IsVisible = false };
-    private readonly ProgressBar bar = new() { Minimum = 0, Maximum = 1, IsVisible = false, MinWidth = 280 };
+    private readonly ComboBox choice = new() { HorizontalAlignment = HorizontalAlignment.Stretch };
+    private readonly Button start = new() { Content = "Download", Margin = new Avalonia.Thickness(8, 0, 0, 0) };
+    private readonly Button cancel = new() { Content = "Cancel", IsVisible = false, Margin = new Avalonia.Thickness(8, 0, 0, 0) };
+    private readonly ProgressBar bar = new() { Minimum = 0, Maximum = 1, IsVisible = false };
     private readonly TextBlock text = new() { TextWrapping = Avalonia.Media.TextWrapping.Wrap, Opacity = 0.8 };
     private CancellationTokenSource? running;
 
@@ -27,7 +27,10 @@ public sealed class ModelDownloadPanel : StackPanel
         this.choice.SelectedIndex = 0;
         this.start.Click += async (_, _) => await this.RunAsync(installed);
         this.cancel.Click += (_, _) => this.running?.Cancel();
-        this.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { this.choice, this.start, this.cancel } });
+        // The list takes what is left of the row (the model names are long), so the buttons stay inside the window.
+        Grid.SetColumn(this.start, 1);
+        Grid.SetColumn(this.cancel, 2);
+        this.Children.Add(new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), Children = { this.choice, this.start, this.cancel } });
         this.Children.Add(this.bar);
         this.Children.Add(this.text);
     }
