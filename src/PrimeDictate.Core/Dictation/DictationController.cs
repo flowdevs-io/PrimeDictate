@@ -188,6 +188,7 @@ public sealed class DictationController : IAsyncDisposable
                 await micLease.DisposeAsync().ConfigureAwait(false);
             }
 
+            Diagnostics.AppLog.Event("dictation", $"Dictation did not start: {ex.Message}");
             this.Notice?.Invoke(ex.Message);
             return;
         }
@@ -478,6 +479,12 @@ public sealed class DictationController : IAsyncDisposable
         }
 
         var result = TranscriptDelivery.Deliver(transcript, s.Target, this.guard, this.injector, this.options);
+        if (result.Status != DictationDeliveryStatus.Injected)
+        {
+            // Why it was not typed (the guard's or the injector's reason); never the transcript itself.
+            Diagnostics.AppLog.Event("dictation", $"Not typed ({result.Status}): {result.Error}");
+        }
+
         this.Committed?.Invoke(new DictationCommit(
             s.Id,
             this.time.GetUtcNow().UtcDateTime,

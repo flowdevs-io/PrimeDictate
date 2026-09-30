@@ -14,12 +14,13 @@ using SfAudioFormat = SoundFlow.Structs.AudioFormat;
 namespace PrimeDictate.Platforms.Audio;
 
 /// <summary>
-/// Microphone capture through miniaudio (via SoundFlow): CoreAudio on macOS, PulseAudio or ALSA
-/// on Linux. Windows dictation keeps its NAudio/WASAPI path.
+/// Microphone capture through miniaudio (via SoundFlow): WASAPI on Windows, CoreAudio on macOS, PulseAudio or ALSA
+/// on Linux. Dictation, the wake word and meetings all record through it.
 /// </summary>
 /// <remarks>
 /// Device IDs are device names, because miniaudio's native IDs are not stable across
-/// enumerations. Frames are copied out of the native callback before they are queued.
+/// enumerations. On Windows a WPF-saved endpoint id is also accepted and looked up by its name.
+/// Frames are copied out of the native callback before they are queued.
 /// </remarks>
 public sealed class MiniAudioCaptureSource : IAudioSource, IDisposable
 {
@@ -63,7 +64,13 @@ public sealed class MiniAudioCaptureSource : IAudioSource, IDisposable
         DeviceInfo? device = null;
         if (deviceId is not null)
         {
-            var match = this.engine.CaptureDevices.Where(d => d.Name == deviceId).ToArray();
+            var name = deviceId;
+            if (OperatingSystem.IsWindows() && WindowsAudioEndpoints.IsEndpointId(deviceId))
+            {
+                name = WindowsAudioEndpoints.FriendlyName(deviceId) ?? deviceId;
+            }
+
+            var match = this.engine.CaptureDevices.Where(d => d.Name == name).ToArray();
             if (match.Length == 0)
             {
                 throw new AudioSourceException(AudioSourceErrorKind.DeviceRemoved, "The selected microphone is not connected.");

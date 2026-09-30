@@ -42,6 +42,13 @@ Final-only typing, no clipboard, no live retyping into the target, Enter only af
 ## Platform behavior
 
 - **Windows**: full guard, restore-to-start-target, `SendInput` typing. Needs a real test.
+  - The microphone opens through miniaudio (WASAPI), which lists devices by name. A microphone saved by the WPF app is a
+    Windows endpoint id, so it is looked up by the name Windows gives it; one that no longer exists falls back to the
+    default microphone, as the WPF app does, with one notice and an `app.log` line. Before this, dictation and the wake
+    word never opened a microphone for a WPF user whose saved device was gone (Justin's case). Checked on his PC: the
+    wake listener opened the default microphone 3 s after launch.
+  - `app.log` also records why dictation did not start, why a transcript was not typed, when the wake word stops
+    listening, and hook failures. Never recognized text.
 - **macOS, Linux**: no foreground check exists yet, so dictation does **not** type unless the user turns on "Type even when the app cannot check which window is in front". This follows the parity plan. macOS also needs Accessibility permission for hotkeys; Wayland has no global hotkeys and the app says so.
 - Closing the main window hides it to the tray on Windows and macOS; on Linux it quits (no guaranteed tray host).
 
