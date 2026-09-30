@@ -1,3 +1,4 @@
+using PrimeDictate.Core.Dictation;
 using PrimeDictate.Core.Audio;
 using PrimeDictate.Core.Coordination;
 using PrimeDictate.Core.Export;
@@ -29,6 +30,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     private readonly MicrophoneCoordinator microphone = new();
     private readonly IAudioDecoder decoder;
     private readonly Dictionary<string, InstalledWhisperModel> whisperModels = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, InstalledSpeechModel> onnxModels = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ITranscriptionProvider> providers = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim providerGate = new(1, 1);
     private NemotronWorker? nemotronWorker;
@@ -168,10 +170,17 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     public IReadOnlyList<SpeechModelChoice> AvailableModels()
     {
         this.whisperModels.Clear();
+        this.onnxModels.Clear();
         var choices = new List<SpeechModelChoice>();
         foreach (var model in WhisperOnnxModelLocator.Discover(this.paths.ModelsDirectory))
         {
             this.whisperModels[model.ModelId] = model;
+            choices.Add(new SpeechModelChoice(model.ModelId, model.DisplayName, model.IsEnglishOnly ? "en" : null, false, null));
+        }
+
+        foreach (var model in SpeechModelLocator.Discover(this.paths.ModelsDirectory).Where(m => m.Backend is LegacyBackend.Parakeet or LegacyBackend.Moonshine))
+        {
+            this.onnxModels[model.ModelId] = model;
             choices.Add(new SpeechModelChoice(model.ModelId, model.DisplayName, model.IsEnglishOnly ? "en" : null, false, null));
         }
 
@@ -190,6 +199,23 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         }
 
         return choices;
+    }
+
+    /// <summary>
+    /// The model that gives the live draft of a two-pass meeting. Nemotron is reserved for the final pass, so when it is
+    /// the chosen model the draft comes from Parakeet if installed, else a Whisper model (English-only first, for speed).
+    /// Any other choice is used as it is. Null when nothing but Nemotron is installed.
+    /// </summary>
+    public static SpeechModelChoice? LiveDraftModel(SpeechModelChoice selected, IReadOnlyList<SpeechModelChoice> available)
+    {
+        if (!selected.ModelId.StartsWith("nemotron:", StringComparison.Ordinal))
+        {
+            return selected;
+        }
+
+        return available.FirstOrDefault(m => m.ModelId.StartsWith("parakeet", StringComparison.Ordinal))
+            ?? available.FirstOrDefault(m => m.ModelId.StartsWith("whisper", StringComparison.Ordinal) && m.Language == "en")
+            ?? available.FirstOrDefault(m => m.ModelId.StartsWith("whisper", StringComparison.Ordinal));
     }
 
     private List<NemotronSetup> FindNemotron()
@@ -277,6 +303,10 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
             if (this.whisperModels.TryGetValue(model.ModelId, out var whisper))
             {
                 provider = new SherpaWhisperProvider(whisper);
+            }
+            else if (this.onnxModels.TryGetValue(model.ModelId, out var onnx))
+            {
+                provider = onnx.Backend == LegacyBackend.Parakeet ? new SherpaParakeetProvider(onnx) : new SherpaMoonshineProvider(onnx);
             }
             else if (this.nemotron.FirstOrDefault(n => $"nemotron:{n.Asr.Id}" == model.ModelId) is { } setup)
             {

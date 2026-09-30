@@ -684,10 +684,16 @@ public sealed partial class MainWindow : Window
                 TranscriptSourceType.Meeting => "microphone and system audio",
                 _ => "microphone"
             };
+            var twoPass = mode == TranscriptSourceType.Meeting && this.FinalPassBox.IsChecked == true && this.workspace.FinalPassAvailable;
+            if (twoPass && TranscriptionWorkspaceService.LiveDraftModel(model, this.models) is { } draft)
+            {
+                model = draft;
+            }
+
             this.live = await this.workspace.StartLiveAsync(model, null, AudioRetention.KeepAudio, $"{(mode == TranscriptSourceType.Microphone ? "Recording" : "Meeting")} {DateTime.Now:g}", CancellationToken.None, mode, null, this.AutoGainBox.IsChecked == true);
             this.recordingLabel = label;
             // With a fast model live and Nemotron available, the live text is a draft and Stop starts the final pass.
-            this.twoPassPlanned = mode == TranscriptSourceType.Meeting && this.FinalPassBox.IsChecked == true && this.workspace.FinalPassAvailable && !model.ModelId.StartsWith("nemotron:", StringComparison.Ordinal);
+            this.twoPassPlanned = twoPass && !model.ModelId.StartsWith("nemotron:", StringComparison.Ordinal);
             this.RecordingIndicator.Text = "● Recording " + label + (this.twoPassPlanned ? " (draft text, speaker labels after Stop)" : string.Empty);
             this.RecordingIndicator.IsVisible = true;
             this.live.Error += this.Say;
