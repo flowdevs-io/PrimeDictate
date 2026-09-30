@@ -181,7 +181,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
             choices.Add(new SpeechModelChoice(model.ModelId, model.DisplayName, model.IsEnglishOnly ? "en" : null, false, null));
         }
 
-        foreach (var model in SpeechModelLocator.Discover(this.paths.ModelsDirectory).Where(m => m.Backend is LegacyBackend.Parakeet or LegacyBackend.Moonshine))
+        foreach (var model in SpeechModelLocator.Discover(this.paths.ModelsDirectory).Where(m => m.Backend is LegacyBackend.Parakeet or LegacyBackend.Moonshine or LegacyBackend.WhisperNet))
         {
             this.onnxModels[model.ModelId] = model;
             choices.Add(new SpeechModelChoice(model.ModelId, model.DisplayName, model.IsEnglishOnly ? "en" : null, false, null));
@@ -210,6 +210,39 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     /// Any other choice is used as it is. Null when nothing but Nemotron is installed.
     /// </summary>
     /// <summary>"No live text": the meeting is only recorded, and the final pass transcribes it after Stop.</summary>
+    /// <summary>
+    /// The model the picker starts on: the one dictation is set to (so a user upgrading from the WPF app gets the same model), else
+    /// Whisper.net Large V3 Turbo when it is installed, else the first in the list. Returns -1 for an empty list.
+    /// </summary>
+    public static int DefaultModelIndex(IReadOnlyList<SpeechModelChoice> available, string? dictationModelId)
+    {
+        if (available.Count == 0)
+        {
+            return -1;
+        }
+
+        foreach (var wanted in new[] { dictationModelId, "whisper-net:large-v3-turbo" })
+        {
+            if (wanted is null)
+            {
+                continue;
+            }
+
+            for (var i = 0; i < available.Count; i++)
+            {
+                if (string.Equals(available[i].ModelId, wanted, StringComparison.Ordinal))
+                {
+                    return i;
+                }
+            }
+        }
+
+        return 0;
+    }
+
+    /// <summary>The model id dictation is set to (from the WPF file or this app's settings), or null.</summary>
+    public string? DictationModelId() => new DictationSettingsStore(this.paths).Load().Settings.ResolveModelId();
+
     public static SpeechModelChoice RecordOnly { get; } = new(RecordOnlyProvider.Id, "Record only", null, false, null);
 
     public static SpeechModelChoice? LiveDraftModel(SpeechModelChoice selected, IReadOnlyList<SpeechModelChoice> available)
@@ -317,7 +350,12 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
             }
             else if (this.onnxModels.TryGetValue(model.ModelId, out var onnx))
             {
-                provider = onnx.Backend == LegacyBackend.Parakeet ? new SherpaParakeetProvider(onnx) : new SherpaMoonshineProvider(onnx);
+                provider = onnx.Backend switch
+                {
+                    LegacyBackend.WhisperNet => new WhisperNetProvider(onnx),
+                    LegacyBackend.Parakeet => new SherpaParakeetProvider(onnx),
+                    _ => new SherpaMoonshineProvider(onnx)
+                };
             }
             else if (this.nemotron.FirstOrDefault(n => $"nemotron:{n.Asr.Id}" == model.ModelId) is { } setup)
             {

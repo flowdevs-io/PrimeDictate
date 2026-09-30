@@ -36,8 +36,10 @@ public sealed class App : Application
             // ONNX Runtime is one library per process: the GPU build must be in place before any speech model is created.
             if (!IsSmokeRun(desktop.Args))
             {
-                var saved = new DictationSettingsStore(AppDataPaths.Default).Load().Settings.OnnxDevice;
-                OnnxRuntimeDevice.Configure(OnnxRuntimeDevice.Effective(saved));
+                var savedSettings = new DictationSettingsStore(AppDataPaths.Default).Load().Settings;
+                OnnxRuntimeDevice.Configure(OnnxRuntimeDevice.Effective(savedSettings.OnnxDevice));
+                // Whisper.net picks its native build once too, before the first model loads.
+                WhisperNetRuntime.Configure(WhisperNetRuntime.Effective(savedSettings));
             }
 
             var window = new MainWindow();

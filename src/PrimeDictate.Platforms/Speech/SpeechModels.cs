@@ -3,6 +3,7 @@ using PrimeDictate.Core.Dictation;
 namespace PrimeDictate.Platforms.Speech;
 
 /// <summary>An installed speech model of any family, as dictation sees it.</summary>
+/// <remarks><see cref="Directory"/> is the model folder, except for Whisper.net where it is the path of the ggml <c>.bin</c> file.</remarks>
 public sealed record InstalledSpeechModel(LegacyBackend Backend, string Id, string DisplayName, string Directory, bool IsEnglishOnly)
 {
     /// <summary>Stable id such as <c>whisper-onnx:base.en</c> or <c>parakeet-onnx:parakeet-tdt-0.6b-v3</c>.</summary>
@@ -19,13 +20,19 @@ public sealed record ModelDownloadOption(
     string Description,
     long ApproximateBytes,
     string InstallDirectoryName,
-    bool Recommended = false)
+    bool Recommended = false,
+    string? FileName = null)
 {
+    /// <summary>True for a model that is one file (Whisper.net ggml <c>.bin</c>) rather than an archive that unpacks to a folder.</summary>
+    public bool IsSingleFile => this.FileName is not null;
+
     public string SubFolder => SpeechModelLocator.SubFolder(this.Backend);
 
     public string ArchiveFileName => $"{this.InstallDirectoryName}.tar.bz2";
 
-    public Uri DownloadUri => new($"https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/{this.ArchiveFileName}");
+    public Uri DownloadUri => this.FileName is { } file
+        ? new($"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{file}")
+        : new($"https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/{this.ArchiveFileName}");
 
     public string ModelId => $"{SpeechModelLocator.Prefix(this.Backend)}:{this.Id}";
 }
@@ -45,10 +52,21 @@ public static class SpeechModelCatalog
         new(LegacyBackend.Parakeet, "parakeet-tdt-0.6b-v2", "Parakeet TDT 0.6B v2", "The earlier English Parakeet release.", 690L * 1024 * 1024, "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"),
         new(LegacyBackend.Parakeet, "parakeet-tdt-0.6b-v2-fp16", "Parakeet TDT 0.6B v2 (fp16, for the GPU)", "English Parakeet in half precision. Made for CUDA; large and slower on the CPU.", 1_120_982_957, "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16"),
         new(LegacyBackend.Moonshine, "moonshine-tiny-v2-en", "Moonshine Tiny v2 (English)", "Very small and fast English model.", 83_886_080, "sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27", true),
-        new(LegacyBackend.Moonshine, "moonshine-base-en", "Moonshine Base (English) v1", "The original Moonshine model.", 250_807_309, "sherpa-onnx-moonshine-base-en-int8")
+        new(LegacyBackend.Moonshine, "moonshine-base-en", "Moonshine Base (English) v1", "The original Moonshine model.", 250_807_309, "sherpa-onnx-moonshine-base-en-int8"),
+        GgmlWhisper("large-v3-turbo", "Large V3 Turbo (GGML, Whisper.net)", "The fastest Whisper V3 option. Runs on the GPU (CUDA or Vulkan) when available.", 1_618_426_976),
+        GgmlWhisper("large-v3", "Large V3 (GGML, Whisper.net)", "The highest-accuracy Whisper V3 model. Runs on the GPU when available.", 4_277_163_902, recommended: true),
+        GgmlWhisper("base.en", "Base English (GGML, Whisper.net)", "Standard English GGML model.", 147_964_352),
+        GgmlWhisper("tiny.en", "Tiny English (GGML, Whisper.net)", "Very small English GGML model.", 77_720_256)
     ];
 
-    public static string FormatSize(long bytes) => $"{bytes / (1024d * 1024d):N0} MB";
+    public static string FormatSize(long bytes) => bytes >= 1024L * 1024 * 1024 ? $"{bytes / (1024d * 1024d * 1024d):N1} GB" : $"{bytes / (1024d * 1024d):N0} MB";
+
+    /// <summary>
+    /// A Whisper.net ggml model: one <c>ggml-{id}.bin</c> under <c>models/whisper.net/</c>, downloaded from the whisper.cpp repository on Hugging Face.
+    /// Same ids, file names and sizes as the WPF catalog, so both apps share the installed file.
+    /// </summary>
+    private static ModelDownloadOption GgmlWhisper(string id, string name, string description, long bytes, bool recommended = false) =>
+        new(LegacyBackend.WhisperNet, id, name, description, bytes, $"ggml-{id}.bin", recommended, FileName: $"ggml-{id}.bin");
 
     private static ModelDownloadOption Whisper(string id, string name, string description, long bytes, bool recommended = false) =>
         new(LegacyBackend.Whisper, id, name, description, bytes, $"sherpa-onnx-whisper-{id}", recommended);
@@ -63,11 +81,24 @@ public static class SpeechModelLocator
     {
         LegacyBackend.Parakeet => "parakeet",
         LegacyBackend.Moonshine => "moonshine",
+        LegacyBackend.WhisperNet => "whisper.net",
         _ => "whisper"
     };
 
+    /// <summary>
+    /// A ggml file is valid when it exists and is at least half the catalog size. The sizes are approximate (the published file
+    /// can differ by a few MB), so this only rejects an empty or cut-off file, not a slightly different build.
+    /// </summary>
+    public static bool IsValidGgml(ModelDownloadOption option, string path)
+    {
+        var info = new FileInfo(path);
+        return info.Exists && info.Length > 0 && info.Length >= option.ApproximateBytes / 2;
+    }
+
+    /// <summary>For a directory-based model, the folder; for a single-file model, the file path.</summary>
     public static bool IsValid(ModelDownloadOption option, string directory) => option.Backend switch
     {
+        LegacyBackend.WhisperNet => IsValidGgml(option, directory),
         LegacyBackend.Parakeet => IsParakeet(directory),
         LegacyBackend.Moonshine => ResolveMoonshine(directory) is not null,
         _ => WhisperOnnxModelLocator.TryResolve(directory, out _)
@@ -123,18 +154,40 @@ public static class SpeechModelLocator
 
         foreach (var option in SpeechModelCatalog.Options.Where(o => o.Backend != LegacyBackend.Whisper))
         {
-            var dir = Path.Combine(modelsRoot, option.SubFolder, option.InstallDirectoryName);
+            var dir = InstallPath(modelsRoot, option);
             if (IsValid(option, dir))
             {
-                found.Add(new InstalledSpeechModel(option.Backend, option.Id, option.DisplayName, Path.GetFullPath(dir), option.Id is "parakeet-tdt-0.6b-v2" or "parakeet-tdt-0.6b-v2-fp16" || option.Id.EndsWith("-en", StringComparison.Ordinal)));
+                var english = option.Backend == LegacyBackend.WhisperNet
+                    ? option.Id.EndsWith(".en", StringComparison.Ordinal)
+                    : option.Id is "parakeet-tdt-0.6b-v2" or "parakeet-tdt-0.6b-v2-fp16" || option.Id.EndsWith("-en", StringComparison.Ordinal);
+                found.Add(new InstalledSpeechModel(option.Backend, option.Id, option.DisplayName, Path.GetFullPath(dir), english));
             }
         }
 
         return found;
     }
 
+    /// <summary>Where the model lives: its folder, or for a Whisper.net model the <c>.bin</c> file itself.</summary>
     public static string InstallPath(string modelsRoot, ModelDownloadOption option) =>
         Path.Combine(modelsRoot, option.SubFolder, option.InstallDirectoryName);
+
+    /// <summary>The catalog option for a Whisper.net model id such as <c>large-v3-turbo</c>, or null.</summary>
+    public static ModelDownloadOption? FindWhisperNet(string? id) =>
+        SpeechModelCatalog.Options.FirstOrDefault(o => o.Backend == LegacyBackend.WhisperNet && string.Equals(o.Id, id, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>OpenVINO encoder files that sit next to a ggml model (the WPF app downloads these for the Intel NPU). Null when either is missing.</summary>
+    public static string? WhisperNetOpenVinoEncoder(string modelPath)
+    {
+        var directory = Path.GetDirectoryName(modelPath);
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            return null;
+        }
+
+        var stem = Path.GetFileNameWithoutExtension(modelPath);
+        var xml = Path.Combine(directory, $"{stem}-encoder-openvino.xml");
+        return File.Exists(xml) && File.Exists(Path.Combine(directory, $"{stem}-encoder-openvino.bin")) ? xml : null;
+    }
 
     private static string? Find(string directory, params string[] names) =>
         names.Select(n => Path.Combine(directory, n)).FirstOrDefault(File.Exists);

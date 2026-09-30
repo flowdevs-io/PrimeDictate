@@ -20,8 +20,8 @@ public sealed class DictationHost : IAsyncDisposable
     private readonly IHotkeySource? hotkeys;
     private readonly IForegroundTargetGuard guard;
     private readonly object providerSync = new();
-    private SherpaOfflineProvider? provider;
-    private SherpaOfflineProvider? wakeProvider;
+    private ITranscriptionProvider? provider;
+    private ITranscriptionProvider? wakeProvider;
     private string? wakeProviderId;
     private string? providerId;
     private string? lastModelNotice;
@@ -212,7 +212,7 @@ public sealed class DictationHost : IAsyncDisposable
             await this.Wake.DisposeAsync().ConfigureAwait(false);
         }
 
-        SherpaOfflineProvider?[] old;
+        ITranscriptionProvider?[] old;
         lock (this.providerSync)
         {
             old = [this.provider, this.wakeProvider];
@@ -342,8 +342,9 @@ public sealed class DictationHost : IAsyncDisposable
         }
     }
 
-    private static SherpaOfflineProvider CreateProvider(InstalledSpeechModel model) => model.Backend switch
+    private static ITranscriptionProvider CreateProvider(InstalledSpeechModel model) => model.Backend switch
     {
+        LegacyBackend.WhisperNet => new WhisperNetProvider(model),
         LegacyBackend.Parakeet => new SherpaParakeetProvider(model),
         LegacyBackend.Moonshine => new SherpaMoonshineProvider(model),
         _ => new SherpaWhisperProvider(WhisperOnnxModelLocator.TryResolve(model.Directory, out var whisper)

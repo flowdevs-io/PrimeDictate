@@ -43,6 +43,28 @@ public sealed class DictationSettings
     /// <summary>Where the ONNX speech models run: <c>auto</c>, <c>cpu</c> or <c>cuda</c>. Applies at the next start; PRIMEDICTATE_ONNX_DEVICE overrides it.</summary>
     public string OnnxDevice { get; set; } = "auto";
 
+    /// <summary>
+    /// The WPF app's compute setting (<c>Cpu</c>, <c>Gpu</c> or <c>Npu</c>), read from its <c>settings.json</c>. Null when the file had none.
+    /// Only used for Whisper.net, and only until <see cref="WhisperNetDevice"/> is chosen in this app.
+    /// </summary>
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public LegacyComputeInterface? TranscriptionComputeInterface { get; set; }
+
+    /// <summary>Where Whisper.net models run: <c>auto</c>, <c>cpu</c> or <c>gpu</c>. Null follows the WPF value, else Auto. Applies at the next start; PRIMEDICTATE_WHISPERNET_DEVICE overrides it.</summary>
+    public string? WhisperNetDevice { get; set; }
+
+    /// <summary>The Whisper.net device this configuration asks for: an explicit choice, else the WPF compute setting, else Auto.</summary>
+    public WhisperNetDevicePreference ResolveWhisperNetDevice() =>
+        this.WhisperNetDevice is { Length: > 0 } chosen
+            ? WhisperNetDevicePreferences.Parse(chosen)
+            : this.TranscriptionComputeInterface switch
+            {
+                LegacyComputeInterface.Cpu => WhisperNetDevicePreference.Cpu,
+                LegacyComputeInterface.Gpu => WhisperNetDevicePreference.Gpu,
+                LegacyComputeInterface.Npu => WhisperNetDevicePreference.Npu,
+                _ => WhisperNetDevicePreference.Auto
+            };
+
     /// <summary>Typing speed used for the time-saved figure. Valid range 20 to 120.</summary>
     public int BaselineTypingSpeedWpm { get; set; } = DictationStatsStore.DefaultBaselineWpm;
 
@@ -134,6 +156,34 @@ public enum LegacyBackend
     QualcommQnn = 4
 }
 
+/// <summary>The WPF app's <c>TranscriptionComputeInterface</c> values.</summary>
+public enum LegacyComputeInterface
+{
+    Cpu = 0,
+    Gpu = 1,
+    Npu = 2
+}
+
+/// <summary>Where Whisper.net runs. Npu is the WPF OpenVINO option and only takes effect when the model's OpenVINO files are installed.</summary>
+public enum WhisperNetDevicePreference
+{
+    Auto = 0,
+    Cpu = 1,
+    Gpu = 2,
+    Npu = 3
+}
+
+public static class WhisperNetDevicePreferences
+{
+    public static WhisperNetDevicePreference Parse(string? text) => text?.Trim().ToLowerInvariant() switch
+    {
+        "cpu" => WhisperNetDevicePreference.Cpu,
+        "gpu" or "cuda" => WhisperNetDevicePreference.Gpu,
+        "npu" => WhisperNetDevicePreference.Npu,
+        _ => WhisperNetDevicePreference.Auto
+    };
+}
+
 public sealed class HotkeyDto
 {
     public string KeyCode { get; set; } = "";
@@ -221,6 +271,7 @@ public static class LegacyBackendExtensions
     {
         LegacyBackend.Parakeet => "parakeet-onnx",
         LegacyBackend.Moonshine => "moonshine-onnx",
+        LegacyBackend.WhisperNet => "whisper-net",
         _ => "whisper-onnx"
     };
 }

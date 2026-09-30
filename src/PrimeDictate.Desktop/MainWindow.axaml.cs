@@ -186,7 +186,7 @@ public sealed partial class MainWindow : Window
             await this.workspace.InitializeAsync(CancellationToken.None);
             this.models = this.workspace.AvailableModels();
             this.ModelBox.ItemsSource = this.models.Select(m => m.DisplayName).ToList();
-            this.ModelBox.SelectedIndex = this.models.Count > 0 ? 0 : -1;
+            this.ModelBox.SelectedIndex = TranscriptionWorkspaceService.DefaultModelIndex(this.models, this.workspace.DictationModelId());
             await this.ReloadSessionsAsync();
             var notes = new List<string>();
             if (this.models.Count == 0)

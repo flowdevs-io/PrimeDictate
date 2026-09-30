@@ -36,6 +36,11 @@ public sealed class ModelDownloader(HttpClient? http = null, Func<string, string
             return destination;
         }
 
+        if (option.IsSingleFile)
+        {
+            return await this.DownloadFileAsync(option, destination, progress, cancellationToken).ConfigureAwait(false);
+        }
+
         var archive = Path.Combine(whisperRoot, option.ArchiveFileName + ".download");
         var scratch = Path.Combine(whisperRoot, option.InstallDirectoryName + ".extract");
         try
@@ -91,6 +96,51 @@ public sealed class ModelDownloader(HttpClient? http = null, Func<string, string
         {
             DeleteQuietly(archive);
             DeleteQuietly(scratch);
+        }
+    }
+
+    /// <summary>A single-file model (Whisper.net ggml): written to <c>{file}.download</c>, checked, then moved into place.</summary>
+    private async Task<string> DownloadFileAsync(ModelDownloadOption option, string destination, IProgress<ModelDownloadProgress>? progress, CancellationToken cancellationToken)
+    {
+        var temp = destination + ".download";
+        try
+        {
+            DeleteQuietly(temp);
+            long downloaded = 0;
+            long? total = null;
+            using (var response = await this.client.GetAsync(this.UriFor?.Invoke(option) ?? option.DownloadUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false))
+            {
+                response.EnsureSuccessStatusCode();
+                total = response.Content.Headers.ContentLength;
+                await using var source = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+                await using var file = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None, 128 * 1024, useAsync: true);
+                var buffer = new byte[128 * 1024];
+                int read;
+                while ((read = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+                {
+                    await file.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+                    downloaded += read;
+                    progress?.Report(new ModelDownloadProgress("download", downloaded, total));
+                }
+            }
+
+            if (total is > 0 && downloaded != total)
+            {
+                throw new IOException($"The download ended early ({downloaded:N0} of {total:N0} bytes).");
+            }
+
+            if (!SpeechModelLocator.IsValidGgml(option, temp))
+            {
+                throw new InvalidOperationException($"The downloaded file is too small to be the {option.DisplayName} model ({downloaded:N0} bytes).");
+            }
+
+            File.Move(temp, destination, overwrite: true);
+            progress?.Report(new ModelDownloadProgress("ready", downloaded, downloaded));
+            return destination;
+        }
+        finally
+        {
+            DeleteQuietly(temp);
         }
     }
 
