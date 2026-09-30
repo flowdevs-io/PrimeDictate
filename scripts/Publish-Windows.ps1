@@ -53,6 +53,18 @@ try {
         throw "dotnet publish failed with exit code $LASTEXITCODE"
     }
 
+    # Whisper.net ships its natives as content under runtimes\<rid> and runtimes\<variant>\<rid> for every OS, and
+    # publish copies all of them. Keep only the folders for this runtime.
+    $runtimesDir = Join-Path $publishDir "runtimes"
+    if (Test-Path $runtimesDir) {
+        Get-ChildItem $runtimesDir -Directory -Recurse |
+            Where-Object { $_.Name -match '^(win|linux|linux-musl|osx|macos|maccatalyst|ios|android|browser)(-|$)' -and $_.Name -ne $RuntimeIdentifier } |
+            Sort-Object { $_.FullName.Length } -Descending |
+            ForEach-Object { if (Test-Path $_.FullName) { Remove-Item -Recurse -Force $_.FullName } }
+        Get-ChildItem $runtimesDir -Directory | Where-Object { -not (Get-ChildItem $_.FullName -Recurse -File) } |
+            ForEach-Object { Remove-Item -Recurse -Force $_.FullName }
+    }
+
     Write-Host "Published to $publishDir"
 }
 finally {
