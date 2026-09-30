@@ -54,6 +54,9 @@ public sealed class MeetingFinalPass(ModelLeaseScheduler scheduler)
         var resultVersion = host.Document.Runs.Count == 0 ? 1 : host.Document.Runs.Max(r => r.ResultVersion) + 1;
         var (overlay, diarizerProblem) = await diarize(cancellationToken).ConfigureAwait(false);
         var diar = overlay?.Segments ?? [];
+        // With diarizer turns, each turn is transcribed on its own, so its words carry the turn's speaker and time by construction.
+        var byTurns = diar.Count > 0;
+        var systemPcm = byTurns ? new List<short>() : null;
 
         var max = asr.Capabilities.MaxWindow ?? TimeSpan.FromSeconds(28);
         var chunkOptions = new SpeechChunkerOptions { MaxChunk = max - TimeSpan.FromSeconds(2) < TimeSpan.FromSeconds(5) ? max : max - TimeSpan.FromSeconds(2) };
@@ -115,6 +118,64 @@ public sealed class MeetingFinalPass(ModelLeaseScheduler scheduler)
             }
         }
 
+        var turnReport = new List<string>();
+        async Task RecognizeTurnsAsync()
+        {
+            var turns = Turns(diar, systemPcm!.Count / 16_000d, asr.Capabilities.MaxWindow ?? TimeSpan.FromSeconds(28));
+            var k = 0;
+            foreach (var turn in turns)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var startSample = (long)(turn.Start * 16_000);
+                var length = (int)Math.Min(systemPcm.Count - startSample, (long)((turn.End - turn.Start) * 16_000));
+                var index = k++;
+                var st = stats[1];
+                st.Windows++;
+                stats[1] = st;
+                if (length < 4_800)
+                {
+                    continue;
+                }
+
+                var samples = new float[length];
+                double squares = 0;
+                float peak = 0;
+                for (var i = 0; i < length; i++)
+                {
+                    samples[i] = systemPcm[(int)startSample + i] / 32768f;
+                    squares += samples[i] * samples[i];
+                    peak = Math.Max(peak, Math.Abs(samples[i]));
+                }
+
+                st = stats[1];
+                st.Squares += squares;
+                st.Peak = Math.Max(st.Peak, peak);
+                st.Samples += length;
+                st.Sent++;
+                stats[1] = st;
+                IReadOnlyList<RecognizedSegment> recognized;
+                using (await scheduler.AcquireAsync(asr.ModelId, ModelLeasePriority.Background, cancellationToken).ConfigureAwait(false))
+                {
+                    recognized = await asr.RecognizeWindowAsync(samples, language, cancellationToken).ConfigureAwait(false);
+                }
+
+                var turnWords = recognized.Sum(r => r.Words?.Count ?? r.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length);
+                if (turnReport.Count < 30)
+                {
+                    turnReport.Add($"{turn.Start:0.0}-{turn.End:0.0}s speaker {turn.Speaker}: {turnWords} words");
+                }
+
+                stats[1].Words += recognized.Sum(r => r.Words?.Count ?? r.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length);
+                var label = $"speaker-{turn.Speaker}";
+                var forced = recognized.Select(r => r with { SpeakerLabel = label, Words = r.Words?.Select(w => w with { SpeakerId = label }).ToList() });
+                system.AddRange(SegmentMapper.Map(forced, $"ft{index}", startSample, TimeSpan.FromSeconds(length / 16_000d), resultVersion, 1, SegmentState.Final));
+                if (total > TimeSpan.Zero)
+                {
+                    progress?.Report(Math.Clamp(0.5 + (0.5 * turn.End / Math.Max(1, systemPcm.Count / 16_000d)), 0, 1));
+                }
+            }
+        }
+
         await foreach (var frame in new WavAudioDecoder().DecodeAsync(stereoWavPath, 0, cancellationToken).ConfigureAwait(false))
         {
             if (frame.Format.Channels < 2)
@@ -125,15 +186,32 @@ public sealed class MeetingFinalPass(ModelLeaseScheduler scheduler)
             for (var channel = 0; channel < 2; channel++)
             {
                 var samples = AudioConversion.SelectChannel(frame.Samples.Span, frame.Format.Channels, channel);
+                if (channel == 1 && byTurns)
+                {
+                    // Kept whole: the system channel is cut at the diarizer's turns after decoding, not at silences.
+                    foreach (var v in samples)
+                    {
+                        systemPcm!.Add((short)Math.Clamp(v * 32767f, -32768f, 32767f));
+                    }
+
+                    continue;
+                }
+
                 await RecognizeAsync(channel, chunkers[channel].Add(samples)).ConfigureAwait(false);
             }
 
             total = frame.End > total ? frame.End : total;
         }
 
-        for (var channel = 0; channel < 2; channel++)
+        await RecognizeAsync(0, chunkers[0].Flush()).ConfigureAwait(false);
+        if (byTurns)
         {
-            await RecognizeAsync(channel, chunkers[channel].Flush()).ConfigureAwait(false);
+            await RecognizeTurnsAsync().ConfigureAwait(false);
+            HideDuplicatesAcrossSpeakers(system, diar);
+        }
+        else
+        {
+            await RecognizeAsync(1, chunkers[1].Flush()).ConfigureAwait(false);
         }
 
         // Everything worked: place the new result in one go, so the draft stays on screen until the final rows replace it.
@@ -184,7 +262,7 @@ public sealed class MeetingFinalPass(ModelLeaseScheduler scheduler)
         string Report(string name, int c) => stats[c].Samples == 0
             ? $"{name}: no audio"
             : $"{name}: rms {Math.Sqrt(stats[c].Squares / stats[c].Samples) * 32768:0}, peak {stats[c].Peak * 32768:0}, {stats[c].Sent} of {stats[c].Windows} windows sent, {stats[c].Words} words";
-        return new FinalPassResult(resultVersion, mic.Count, system.Count, speakers, overlay?.OverlapSeconds ?? 0, overlay, diarizerProblem, $"{Report("microphone", 0)}; {Report("system", 1)}");
+        return new FinalPassResult(resultVersion, mic.Count, system.Count, speakers, overlay?.OverlapSeconds ?? 0, overlay, diarizerProblem, $"{Report("microphone", 0)}; {Report("system", 1)}" + (turnReport.Count > 0 ? $"; system turns: {string.Join(", ", turnReport)}" : string.Empty));
     }
 
     /// <summary>
@@ -268,6 +346,111 @@ public sealed class MeetingFinalPass(ModelLeaseScheduler scheduler)
         }
     }
 
+    /// <summary>
+    /// Where two speakers talk at once, both turns hear the same mixed audio and recognize the same words. A word that another
+    /// speaker's turn also produced at the same moment stays with the speaker the diarizer says covers it more; the other copy is
+    /// hidden (kept, not deleted), and a row left with only hidden words is dropped.
+    /// </summary>
+    internal static void HideDuplicatesAcrossSpeakers(List<TranscriptSegment> system, IReadOnlyList<DiarizationSegment> diar)
+    {
+        static string Key(string text) => new(text.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+
+        double Coverage(int speaker, WordTiming w) => diar
+            .Where(d => SpeakerNumber(d.Speaker) == speaker)
+            .Sum(d => Math.Max(0, Math.Min(w.End.TotalSeconds, d.End) - Math.Max(w.Start.TotalSeconds, d.Start)));
+
+        int Owner(TranscriptSegment segment) => SpeakerNumber(segment.Speakers[0].SpeakerId.Replace('-', '_')) ?? 0;
+
+        var all = system.SelectMany((segment, si) => (segment.Words ?? []).Select((word, wi) => (si, wi, word, Speaker: Owner(segment)))).ToList();
+        var hide = new HashSet<(int, int)>();
+        foreach (var a in all)
+        {
+            foreach (var b in all)
+            {
+                if (a.Speaker >= b.Speaker || Key(a.word.Text).Length == 0 || Key(a.word.Text) != Key(b.word.Text)
+                    || Math.Abs((a.word.Start - b.word.Start).TotalSeconds) > 0.6)
+                {
+                    continue;
+                }
+
+                hide.Add(Coverage(a.Speaker, a.word) >= Coverage(b.Speaker, b.word) ? (b.si, b.wi) : (a.si, a.wi));
+            }
+        }
+
+        if (hide.Count == 0)
+        {
+            return;
+        }
+
+        for (var si = system.Count - 1; si >= 0; si--)
+        {
+            if (system[si].Words is not { } words || !hide.Any(h => h.Item1 == si))
+            {
+                continue;
+            }
+
+            var updated = words.Select((w, wi) => hide.Contains((si, wi)) ? w with { Hidden = true } : w).ToList();
+            if (updated.All(w => w.Hidden))
+            {
+                system.RemoveAt(si);
+            }
+            else
+            {
+                system[si] = system[si] with { Words = updated };
+            }
+        }
+    }
+
+    internal readonly record struct Turn(int Speaker, double Start, double End);
+
+    /// <summary>
+    /// One span of audio per stretch of a speaker's talking: a speaker's segments with gaps under a second are joined, each span
+    /// gets a little padding so words at the edges are not clipped, and spans are cut to the recognizer's window.
+    /// </summary>
+    internal static IReadOnlyList<Turn> Turns(IReadOnlyList<DiarizationSegment> diar, double durationSeconds, TimeSpan maxWindow)
+    {
+        const double MergeGap = 1.0;
+        const double Pad = 0.25;
+        var limit = Math.Max(5, maxWindow.TotalSeconds - 2);
+        var turns = new List<Turn>();
+        foreach (var group in diar.Select(d => (Speaker: SpeakerNumber(d.Speaker), d.Start, d.End)).Where(d => d.Speaker is not null).GroupBy(d => d.Speaker!.Value))
+        {
+            double? start = null, end = null;
+            void Emit()
+            {
+                if (start is null)
+                {
+                    return;
+                }
+
+                for (var from = Math.Max(0, start.Value - Pad); from < end!.Value; from += limit)
+                {
+                    turns.Add(new Turn(group.Key, from, Math.Min(Math.Min(from + limit, end.Value + Pad), durationSeconds)));
+                }
+            }
+
+            foreach (var segment in group.OrderBy(g => g.Start))
+            {
+                if (start is not null && segment.Start - end!.Value <= MergeGap)
+                {
+                    end = Math.Max(end.Value, segment.End);
+                    continue;
+                }
+
+                Emit();
+                start = segment.Start;
+                end = segment.End;
+            }
+
+            Emit();
+        }
+
+        return turns.OrderBy(t => t.Start).ThenBy(t => t.Speaker).ToList();
+    }
+
+    private static int? SpeakerNumber(string speaker) =>
+        int.TryParse(speaker.AsSpan(speaker.LastIndexOf('_') + 1), out var number) ? number : null;
+
     /// <summary>The diarizer speaker (1-based) covering most of the interval, or the nearest one within a second.</summary>
     private static int? SpeakerFor(TimeSpan start, TimeSpan end, IReadOnlyList<DiarizationSegment> diar)
     {
@@ -295,6 +478,6 @@ public sealed class MeetingFinalPass(ModelLeaseScheduler scheduler)
             best = (nearest.Speaker, 0);
         }
 
-        return int.TryParse(best.Speaker.AsSpan(best.Speaker.LastIndexOf('_') + 1), out var number) ? number : null;
+        return SpeakerNumber(best.Speaker);
     }
 }

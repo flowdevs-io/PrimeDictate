@@ -28,7 +28,7 @@ public sealed class MeetingFinalPassTests : IDisposable
     }
 
     /// <summary>Tells the two channels apart by loudness: the microphone is loud, the system audio quieter.</summary>
-    private sealed class ChannelProvider(List<string> calls) : ITranscriptionProvider
+    internal sealed class ChannelProvider(List<string> calls) : ITranscriptionProvider
     {
         public string ModelId => "nemotron:fake";
 
@@ -38,18 +38,35 @@ public sealed class MeetingFinalPassTests : IDisposable
 
         public ValueTask<IReadOnlyList<RecognizedSegment>> RecognizeWindowAsync(ReadOnlyMemory<float> samples, string? language, CancellationToken cancellationToken)
         {
-            var peak = samples.Span.ToArray().Max(Math.Abs);
+            // A faithful recognizer: one word per half second that holds sound, placed where the sound is. The letter says how
+            // loud it was (m = microphone, a = 0.2 amplitude, b = quieter), so a test can tell whose audio a word came from.
+            var span = samples.Span;
+            var peak = span.ToArray().Max(Math.Abs);
             lock (calls)
             {
                 calls.Add(peak > 0.25f ? "mic" : "system");
             }
 
-            // Words are placed where the tone is: the microphone speaks at 9-10.5 s, the system audio at 2-8 s.
-            var words = peak > 0.25f
-                ? new[] { ("hello", 9.0), ("there", 9.5), ("yeah", 10.0) }
-                : Enumerable.Range(0, 12).Select(i => ($"word{i}", 2.0 + (i * 0.5))).ToArray();
-            var timings = words.Select(w => new WordTiming(w.Item1, TimeSpan.FromSeconds(w.Item2), TimeSpan.FromSeconds(w.Item2 + 0.4), null, TimingProvenance.Model)).ToList();
-            var segment = new RecognizedSegment(timings[0].Start, timings[^1].End, string.Join(' ', words.Select(w => w.Item1)), timings, null, null, TimingProvenance.Model);
+            var timings = new List<WordTiming>();
+            for (var block = 0; block * 8_000 < span.Length; block++)
+            {
+                var part = span.Slice(block * 8_000, Math.Min(8_000, span.Length - (block * 8_000)));
+                var loud = part.ToArray().Max(Math.Abs);
+                if (loud < 0.02f)
+                {
+                    continue;
+                }
+
+                var letter = loud > 0.3f ? "m" : loud > 0.15f ? "a" : "b";
+                timings.Add(new WordTiming(letter, TimeSpan.FromSeconds(block * 0.5), TimeSpan.FromSeconds((block * 0.5) + 0.4), null, TimingProvenance.Model));
+            }
+
+            if (timings.Count == 0)
+            {
+                return ValueTask.FromResult<IReadOnlyList<RecognizedSegment>>([]);
+            }
+
+            var segment = new RecognizedSegment(timings[0].Start, timings[^1].End, string.Join(' ', timings.Select(w => w.Text)), timings, null, null, TimingProvenance.Model);
             return ValueTask.FromResult<IReadOnlyList<RecognizedSegment>>([segment]);
         }
 
@@ -70,7 +87,7 @@ public sealed class MeetingFinalPassTests : IDisposable
             var t = i / 16_000d;
             var tone = MathF.Sin(i * 0.07f);
             samples[i * 2] = t is >= 9 and < 11 ? 0.4f * tone : 0f;
-            samples[(i * 2) + 1] = t is >= 2 and < 8 ? 0.2f * tone : 0f;
+            samples[(i * 2) + 1] = t is >= 2 and < 5 ? 0.2f * tone : t is >= 5.4 and < 8 ? 0.1f * tone : 0f;
         }
 
         writer.Write(samples);
@@ -89,7 +106,7 @@ public sealed class MeetingFinalPassTests : IDisposable
     }
 
     private static Task<(DiarizationOverlay?, string?)> TwoSpeakers(CancellationToken _) =>
-        Task.FromResult<(DiarizationOverlay?, string?)>((new DiarizationOverlay([new("speaker_1", 2.0, 5.0), new("speaker_2", 4.8, 8.2)]), null));
+        Task.FromResult<(DiarizationOverlay?, string?)>((new DiarizationOverlay([new("speaker_1", 2.0, 5.0), new("speaker_2", 5.4, 8.2)]), null));
 
     [Fact]
     public async Task The_final_pass_replaces_the_draft_with_you_and_diarized_system_lines_and_keeps_the_draft_as_the_earlier_result()
@@ -109,17 +126,22 @@ public sealed class MeetingFinalPassTests : IDisposable
         var lines = doc.ActiveSegments.ToList();
         Assert.Equal(3, lines.Count);
         Assert.Equal("local", lines.Single(l => l.Id.StartsWith("fm", StringComparison.Ordinal)).Speakers[0].SpeakerId);
-        Assert.Equal("hello there yeah", lines.Single(l => l.Id.StartsWith("fm", StringComparison.Ordinal)).DisplayText);
-        var system = lines.Where(l => l.Id.StartsWith("fs", StringComparison.Ordinal)).ToList();
+        var mic = lines.Single(l => l.Id.StartsWith("fm", StringComparison.Ordinal));
+        Assert.All(mic.Words!, w => Assert.StartsWith("m", w.Text));
+        Assert.InRange(mic.Start.TotalSeconds, 8.9, 9.6);
+        var system = lines.Where(l => l.Id.StartsWith("ft", StringComparison.Ordinal)).OrderBy(l => l.Start).ToList();
         Assert.Equal(["speaker-1", "speaker-2"], system.Select(l => l.Speakers[0].SpeakerId));
-        Assert.Equal("word0 word1 word2 word3 word4 word5", system[0].DisplayText);
-        Assert.Equal("word6 word7 word8 word9 word10 word11", system[1].DisplayText);
+        // Each word lands on the diarizer segment of its own speaker, at the time it was spoken.
+        Assert.All(system[0].Words!, w => Assert.StartsWith("a", w.Text));
+        Assert.All(system[1].Words!, w => Assert.StartsWith("b", w.Text));
+        Assert.All(system[0].Words!, w => Assert.InRange(w.Start.TotalSeconds, 1.7, 5.2));
+        Assert.All(system[1].Words!, w => Assert.InRange(w.Start.TotalSeconds, 5.1, 8.5));
+        Assert.InRange(system[0].Words!.Count, 6, 7);
         Assert.Equal(["You", "Speaker 1", "Speaker 2"], new[] { "local", "speaker-1", "speaker-2" }.Select(id => doc.Speakers.Single(s => s.Id == id).Name));
 
         // The live draft is still stored as version 1.
         Assert.Contains(doc.Segments, s => s.ResultVersion == 1 && s.RawText == "live draft text");
         Assert.Equal(2, result.SpeakerCount);
-        Assert.True(result.OverlapSeconds > 0.15);
         Assert.True(File.Exists(Path.Combine(this.root, DiarizationOverlay.FileName)));
         Assert.Equal(["speaker-1", "speaker-2"], result.Overlay!.MapTo(doc).Select(b => b.SpeakerId).Distinct());
     }
@@ -274,6 +296,43 @@ public sealed class SystemChannelTests : IDisposable
         public ValueTask<IStreamingRecognitionSession> StartStreamingAsync(string? language, bool diarize, CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    [Fact]
+    public async Task Words_heard_by_two_overlapping_turns_are_shown_once()
+    {
+        Directory.CreateDirectory(this.root);
+        var path = Path.Combine(this.root, "stereo.wav");
+        using (var writer = new WavFileWriter(path, 16_000, 2))
+        {
+            var samples = new float[10 * 16_000 * 2];
+            for (var i = 0; i < 10 * 16_000; i++)
+            {
+                samples[(i * 2) + 1] = i / 16_000d is >= 2 and < 8 ? 0.1f * MathF.Sin(i * 0.07f) : 0f;
+            }
+
+            writer.Write(samples);
+        }
+
+        var store = SqliteTranscriptionSessionStore.Create(new AppDataPaths(this.root));
+        await store.InitializeAsync(CancellationToken.None);
+        var doc = NewDocument() with { SourceType = TranscriptSourceType.Meeting, Duration = TimeSpan.FromSeconds(10) };
+        doc = TranscriptDocumentReducer.Apply(doc, new SessionStarted(doc.SessionId, Run(1, "whisper-onnx/tiny.en")), Now);
+        var host = new SessionDocumentHost(doc, store);
+
+        // Speaker 3 talks 2-5 s, speaker 4 talks 4-8 s: they overlap for a second, and both turns hear that second.
+        var result = await new MeetingFinalPass(new ModelLeaseScheduler()).RunAsync(
+            host, path, new MeetingFinalPassTests.ChannelProvider([]), _ => Task.FromResult<(DiarizationOverlay?, string?)>((new DiarizationOverlay([new("speaker_3", 2.0, 5.0), new("speaker_4", 4.0, 8.0)]), null)), "en-US", this.root, null, default);
+
+        await store.DisposeAsync();
+        SqliteConnection.ClearAllPools();
+        var rows = host.Document.ActiveSegments.Where(l => l.Id.StartsWith("ft", StringComparison.Ordinal)).OrderBy(l => l.Start).ToList();
+        Assert.Equal(["speaker-3", "speaker-4"], rows.Select(r => r.Speakers[0].SpeakerId));
+        var visible = rows.SelectMany(r => r.Words!.Where(w => !w.Hidden)).ToList();
+        // 2-8 s is twelve half-second blocks; the padded turns hold about 15 between them, and the shared ones are hidden once.
+        Assert.InRange(visible.Count, 11, 14);
+        Assert.Contains(rows.SelectMany(r => r.Words!), w => w.Hidden);
+        Assert.Contains("system turns:", result.ChannelReport);
     }
 
     [Fact]

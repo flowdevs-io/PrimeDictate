@@ -78,6 +78,10 @@ recognizer and a stand-in diarizer on Linux, not on Windows with the real worker
 2. **Final pass after Stop** (`MeetingFinalPass`, checkbox "Meetings: speaker labels after Stop"):
    - `nemo-speech diarize` runs over the system channel (mono `.wav`, `--model`, `--device`, `--format json`), giving
      speaker segments that are consistent across the whole meeting and may overlap.
+   - When the diarizer returned turns, the system channel is cut at those turns, not at silences: each speaker's talking
+     (gaps under 1 s joined, 0.25 s padding, at most one recognizer window) is sent on its own, so its words carry that
+     speaker and time. Where two turns overlap they hear the same audio; a duplicate word is hidden on the speaker the
+     diarizer covers less. Without diarizer output the channel falls back to speech chunks as below.
    - Each channel is cut into speech chunks and sent to Nemotron's file API without its own diarization (per-window
      diarization numbers speakers from 1 in every request, so it cannot keep a person the same across windows).
    - Microphone lines are "You". Each system word takes the diarizer speaker covering most of it; one-word flickers are
