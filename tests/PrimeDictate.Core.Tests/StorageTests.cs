@@ -277,6 +277,37 @@ public sealed class StorageTests : IDisposable
     }
 
     [Fact]
+    public async Task A_run_saved_before_SegmentsAreRows_existed_still_loads_and_reads_false()
+    {
+        var doc = NewDocument();
+        doc = TranscriptDocumentReducer.Apply(doc, new SessionStarted(doc.SessionId, Run() with { SegmentsAreRows = true }), Now);
+        await using (var store = await this.OpenStoreAsync())
+        {
+            await store.SaveCheckpointAsync(doc, CancellationToken.None);
+            Assert.True((await store.LoadAsync(doc.SessionId, CancellationToken.None))!.Runs.Single().SegmentsAreRows);
+        }
+
+        // Every run stored before the field existed lacks it.
+        await using (var conn = new SqliteConnection($"Data Source={this.Paths.SessionDatabasePath};Pooling=False"))
+        {
+            await conn.OpenAsync();
+            await using var read = conn.CreateCommand();
+            read.CommandText = "SELECT run_json FROM runs;";
+            var run = JsonNode.Parse((string)(await read.ExecuteScalarAsync())!)!.AsObject();
+            Assert.True(run.Remove(nameof(RecognitionRunInfo.SegmentsAreRows)));
+            await using var write = conn.CreateCommand();
+            write.CommandText = "UPDATE runs SET run_json = $json;";
+            write.Parameters.AddWithValue("$json", run.ToJsonString());
+            await write.ExecuteNonQueryAsync();
+        }
+
+        await using (var store = await this.OpenStoreAsync())
+        {
+            Assert.False((await store.LoadAsync(doc.SessionId, CancellationToken.None))!.Runs.Single().SegmentsAreRows);
+        }
+    }
+
+    [Fact]
     public async Task Initialize_is_idempotent_across_restarts()
     {
         var doc = NewDocument();
