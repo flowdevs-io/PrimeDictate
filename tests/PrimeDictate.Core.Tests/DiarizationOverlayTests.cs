@@ -4,6 +4,7 @@ using PrimeDictate.Platforms.Nemotron;
 
 namespace PrimeDictate.Core.Tests;
 
+[Collection("nemotron-log")]
 public sealed class DiarizationOverlayTests
 {
     private const string Rttm = """

@@ -8,6 +8,7 @@ using PrimeDictate.Platforms.Nemotron;
 
 namespace PrimeDictate.Core.Tests;
 
+[Collection("nemotron-log")]
 public sealed class NemotronTests : IDisposable
 {
     private readonly string root = Path.Combine(Path.GetTempPath(), "pd-nemo-tests", Guid.NewGuid().ToString("N"));

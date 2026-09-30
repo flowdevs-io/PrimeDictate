@@ -72,6 +72,8 @@ public static class NemotronDiarizer
 
             using var process = Process.Start(info) ?? throw new InvalidOperationException("The diarizer did not start.");
             ChildProcessJob.TryAdd(process);
+            var source = $"[diarizer pid={process.Id} {device}]";
+            NemotronLog.Event(source, "started");
             using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             limit.CancelAfter(timeout);
             var output = process.StandardOutput.ReadToEndAsync(limit.Token);
@@ -87,6 +89,12 @@ public static class NemotronDiarizer
             }
 
             var text = await output.ConfigureAwait(false);
+            foreach (var line in (await errors.ConfigureAwait(false)).Split('\n'))
+            {
+                NemotronLog.WorkerLine(source, line);
+            }
+
+            NemotronLog.Event(source, $"exited with code {process.ExitCode}");
             var segments = DiarizationOverlay.ParseJson(text);
             if (process.ExitCode != 0 || segments.Count == 0)
             {
