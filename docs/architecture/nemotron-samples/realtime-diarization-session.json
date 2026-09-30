@@ -1,0 +1,396 @@
+{
+ "note": "Real CPU worker session, AMI EN2002d first 12 s, two commits (6 s each). Empty-string delta events and most deltas are omitted; completed events are complete. Client->server audio frames are binary PCM16 and not shown.",
+ "events": [
+  {
+   "t": 0.05,
+   "dir": "server->client",
+   "event": {
+    "event_id": "event_4",
+    "session": {
+     "input_audio_format": "pcm16",
+     "model": ".nemotron-3.5-asr-streaming-0.6b.q8_0.gguf",
+     "sample_rate": 16000
+    },
+    "type": "session.created"
+   }
+  },
+  {
+   "t": 0.56,
+   "dir": "client->server",
+   "event": {
+    "type": "session.update",
+    "session": {
+     "sample_rate": 16000,
+     "word_timestamps": true,
+     "speaker_diarization": true
+    }
+   }
+  },
+  {
+   "t": 0.56,
+   "dir": "server->client",
+   "event": {
+    "event_id": "event_5",
+    "session": {
+     "sample_rate": 16000,
+     "speaker_diarization": true,
+     "word_timestamps": true
+    },
+    "type": "session.updated"
+   }
+  },
+  {
+   "t": 2.81,
+   "dir": "server->client",
+   "event": {
+    "audio_processed": 1.7000000476837158,
+    "delta": "From a",
+    "event_id": "event_6",
+    "type": "conversation.item.input_audio_transcription.delta"
+   }
+  },
+  {
+   "t": 2.92,
+   "dir": "server->client",
+   "event": {
+    "audio_processed": 1.7999999523162842,
+    "delta": " pla",
+    "event_id": "event_7",
+    "type": "conversation.item.input_audio_transcription.delta"
+   }
+  },
+  {
+   "t": 3.13,
+   "dir": "server->client",
+   "event": {
+    "audio_processed": 2,
+    "delta": "in",
+    "event_id": "event_9",
+    "type": "conversation.item.input_audio_transcription.delta"
+   }
+  },
+  {
+   "t": 3.24,
+   "dir": "server->client",
+   "event": {
+    "audio_processed": 2.0999999046325684,
+    "delta": " text",
+    "event_id": "event_10",
+    "type": "conversation.item.input_audio_transcription.delta"
+   }
+  },
+  {
+   "t": 7.48,
+   "dir": "client->server",
+   "event": {
+    "type": "input_audio_buffer.commit"
+   }
+  },
+  {
+   "t": 7.82,
+   "dir": "server->client",
+   "event": {
+    "audio_processed": 6,
+    "event_id": "event_50",
+    "transcript": "From a plain text file back into organiser by which speaker speaks what and how",
+    "type": "conversation.item.input_audio_transcription.completed",
+    "words": [
+     {
+      "confidence": 1,
+      "end": 1.52,
+      "speaker": 1,
+      "start": 1.44,
+      "word": "From"
+     },
+     {
+      "confidence": 1,
+      "end": 1.6,
+      "speaker": 1,
+      "start": 1.52,
+      "word": "a"
+     },
+     {
+      "confidence": 1,
+      "end": 1.84,
+      "speaker": 1,
+      "start": 1.68,
+      "word": "plain"
+     },
+     {
+      "confidence": 1,
+      "end": 2,
+      "speaker": 1,
+      "start": 1.92,
+      "word": "text"
+     },
+     {
+      "confidence": 1,
+      "end": 2.48,
+      "speaker": 1,
+      "start": 2.16,
+      "word": "file"
+     },
+     {
+      "confidence": 1,
+      "end": 3.52,
+      "speaker": 1,
+      "start": 3.44,
+      "word": "back"
+     },
+     {
+      "confidence": 1,
+      "end": 3.84,
+      "speaker": 1,
+      "start": 3.68,
+      "word": "into"
+     },
+     {
+      "confidence": 1,
+      "end": 4.48,
+      "speaker": 1,
+      "start": 4,
+      "word": "organiser"
+     },
+     {
+      "confidence": 1,
+      "end": 4.56,
+      "speaker": 1,
+      "start": 4.48,
+      "word": "by"
+     },
+     {
+      "confidence": 1,
+      "end": 5.04,
+      "speaker": 1,
+      "start": 4.96,
+      "word": "which"
+     },
+     {
+      "confidence": 1,
+      "end": 5.28,
+      "speaker": 1,
+      "start": 5.12,
+      "word": "speaker"
+     },
+     {
+      "confidence": 1,
+      "end": 5.52,
+      "speaker": 1,
+      "start": 5.36,
+      "word": "speaks"
+     },
+     {
+      "confidence": 1,
+      "end": 5.76,
+      "speaker": 1,
+      "start": 5.68,
+      "word": "what"
+     },
+     {
+      "confidence": 1,
+      "end": 6.08,
+      "speaker": 1,
+      "start": 6,
+      "word": "and"
+     },
+     {
+      "confidence": 1,
+      "end": 6.24,
+      "speaker": 1,
+      "start": 6.16,
+      "word": "how"
+     }
+    ]
+   }
+  },
+  {
+   "t": 7.82,
+   "dir": "server->client",
+   "event": {
+    "event_id": "event_51",
+    "type": "input_audio_buffer.committed"
+   }
+  },
+  {
+   "t": 19.91,
+   "dir": "client->server",
+   "event": {
+    "type": "input_audio_buffer.commit"
+   }
+  },
+  {
+   "t": 20.25,
+   "dir": "server->client",
+   "event": {
+    "audio_processed": 6,
+    "event_id": "event_103",
+    "transcript": "Doing the segment, I think that was the stupidest way they could have organized the whole thing if you ask me organization",
+    "type": "conversation.item.input_audio_transcription.completed",
+    "words": [
+     {
+      "confidence": 1,
+      "end": 0.96,
+      "speaker": 1,
+      "start": 0.8,
+      "word": "Doing"
+     },
+     {
+      "confidence": 1,
+      "end": 1.04,
+      "speaker": 1,
+      "start": 0.96,
+      "word": "the"
+     },
+     {
+      "confidence": 1,
+      "end": 1.44,
+      "speaker": 1,
+      "start": 1.12,
+      "word": "segment,"
+     },
+     {
+      "confidence": 1,
+      "end": 1.76,
+      "speaker": 1,
+      "start": 1.68,
+      "word": "I"
+     },
+     {
+      "confidence": 1,
+      "end": 1.84,
+      "speaker": 1,
+      "start": 1.76,
+      "word": "think"
+     },
+     {
+      "confidence": 1,
+      "end": 1.92,
+      "speaker": 1,
+      "start": 1.84,
+      "word": "that"
+     },
+     {
+      "confidence": 1,
+      "end": 2.08,
+      "speaker": 1,
+      "start": 2,
+      "word": "was"
+     },
+     {
+      "confidence": 1,
+      "end": 2.32,
+      "speaker": 1,
+      "start": 2.24,
+      "word": "the"
+     },
+     {
+      "confidence": 1,
+      "end": 2.72,
+      "speaker": 1,
+      "start": 2.4,
+      "word": "stupidest"
+     },
+     {
+      "confidence": 1,
+      "end": 2.8,
+      "speaker": 1,
+      "start": 2.72,
+      "word": "way"
+     },
+     {
+      "confidence": 1,
+      "end": 2.96,
+      "speaker": 1,
+      "start": 2.88,
+      "word": "they"
+     },
+     {
+      "confidence": 1,
+      "end": 3.04,
+      "speaker": 1,
+      "start": 2.96,
+      "word": "could"
+     },
+     {
+      "confidence": 1,
+      "end": 3.12,
+      "speaker": 1,
+      "start": 3.04,
+      "word": "have"
+     },
+     {
+      "confidence": 1,
+      "end": 3.84,
+      "speaker": 1,
+      "start": 3.44,
+      "word": "organized"
+     },
+     {
+      "confidence": 1,
+      "end": 3.92,
+      "speaker": 1,
+      "start": 3.84,
+      "word": "the"
+     },
+     {
+      "confidence": 1,
+      "end": 4,
+      "speaker": 1,
+      "start": 3.92,
+      "word": "whole"
+     },
+     {
+      "confidence": 1,
+      "end": 4.16,
+      "speaker": 1,
+      "start": 4.08,
+      "word": "thing"
+     },
+     {
+      "confidence": 1,
+      "end": 4.24,
+      "speaker": 1,
+      "start": 4.16,
+      "word": "if"
+     },
+     {
+      "confidence": 1,
+      "end": 4.4,
+      "speaker": 1,
+      "start": 4.32,
+      "word": "you"
+     },
+     {
+      "confidence": 1,
+      "end": 4.48,
+      "speaker": 1,
+      "start": 4.4,
+      "word": "ask"
+     },
+     {
+      "confidence": 1,
+      "end": 4.72,
+      "speaker": 1,
+      "start": 4.64,
+      "word": "me"
+     },
+     {
+      "confidence": 1,
+      "end": 6.4,
+      "speaker": 1,
+      "start": 6,
+      "word": "organization"
+     }
+    ]
+   }
+  },
+  {
+   "t": 20.25,
+   "dir": "server->client",
+   "event": {
+    "event_id": "event_104",
+    "type": "input_audio_buffer.committed"
+   }
+  }
+ ]
+}

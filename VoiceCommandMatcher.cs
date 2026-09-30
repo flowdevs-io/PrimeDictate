@@ -190,6 +190,26 @@ internal static class VoiceCommandMatcher
     private static bool TryRemovePhrase(string text, string phrase, out string cleaned)
     {
         cleaned = text;
+        if (string.IsNullOrWhiteSpace(phrase))
+        {
+            return false;
+        }
+
+        var variants = GetPhraseVariants(phrase);
+        foreach (var variant in variants)
+        {
+            if (TryRemoveSinglePhrase(cleaned, variant, out cleaned))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryRemoveSinglePhrase(string text, string phrase, out string cleaned)
+    {
+        cleaned = text;
         var phraseTokens = Tokenize(phrase);
         if (phraseTokens.Count == 0)
         {
@@ -204,20 +224,7 @@ internal static class VoiceCommandMatcher
 
         for (var startIndex = 0; startIndex <= textTokens.Count - phraseTokens.Count; startIndex++)
         {
-            var matched = true;
-            for (var phraseIndex = 0; phraseIndex < phraseTokens.Count; phraseIndex++)
-            {
-                if (!string.Equals(
-                        textTokens[startIndex + phraseIndex].Value,
-                        phraseTokens[phraseIndex].Value,
-                        StringComparison.OrdinalIgnoreCase))
-                {
-                    matched = false;
-                    break;
-                }
-            }
-
-            if (!matched)
+            if (!TokensMatchAt(textTokens, phraseTokens, startIndex))
             {
                 continue;
             }
@@ -230,6 +237,75 @@ internal static class VoiceCommandMatcher
         }
 
         return false;
+    }
+
+    private static List<string> GetPhraseVariants(string phrase)
+    {
+        var results = new List<string>();
+        if (string.IsNullOrWhiteSpace(phrase))
+        {
+            return results;
+        }
+
+        var trimmed = phrase.Trim();
+        results.Add(trimmed);
+
+        var normalized = trimmed.ToLowerInvariant();
+
+        if (normalized == "thank you" || normalized == "thanks" || normalized == "thankyou" || normalized == "thank u")
+        {
+            AddIfNotPresent(results, "thank you");
+            AddIfNotPresent(results, "thanks");
+            AddIfNotPresent(results, "thankyou");
+            AddIfNotPresent(results, "thank u");
+        }
+        else
+        {
+            if (normalized.Contains("thank you"))
+            {
+                AddIfNotPresent(results, ReplaceIgnoreCase(trimmed, "thank you", "thanks"));
+                AddIfNotPresent(results, ReplaceIgnoreCase(trimmed, "thank you", "thankyou"));
+                AddIfNotPresent(results, ReplaceIgnoreCase(trimmed, "thank you", "thank u"));
+            }
+            else if (normalized.Contains("thanks"))
+            {
+                AddIfNotPresent(results, ReplaceIgnoreCase(trimmed, "thanks", "thank you"));
+                AddIfNotPresent(results, ReplaceIgnoreCase(trimmed, "thanks", "thankyou"));
+            }
+        }
+
+        var currentCount = results.Count;
+        for (var i = 0; i < currentCount; i++)
+        {
+            var item = results[i];
+            var itemNorm = item.ToLowerInvariant();
+            if (itemNorm.Contains("okay"))
+            {
+                AddIfNotPresent(results, ReplaceIgnoreCase(item, "okay", "ok"));
+            }
+            else if (itemNorm.Contains("ok"))
+            {
+                AddIfNotPresent(results, ReplaceIgnoreCase(item, "ok", "okay"));
+            }
+        }
+
+        return results.OrderByDescending(p => Tokenize(p).Count).ThenByDescending(p => p.Length).ToList();
+    }
+
+    private static void AddIfNotPresent(List<string> list, string candidate)
+    {
+        if (string.IsNullOrWhiteSpace(candidate)) return;
+        if (!list.Any(existing => string.Equals(existing, candidate, StringComparison.OrdinalIgnoreCase)))
+        {
+            list.Add(candidate);
+        }
+    }
+
+    private static string ReplaceIgnoreCase(string input, string search, string replacement)
+    {
+        var index = input.IndexOf(search, StringComparison.OrdinalIgnoreCase);
+        if (index < 0) return input;
+        return input[..index] + replacement + input[(index + search.Length)..];
     }
 
     private static string RemoveSpan(string text, int removeStart, int removeEnd)

@@ -1,0 +1,105 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="clr-namespace:PrimeDictate.Desktop"
+        x:Class="PrimeDictate.Desktop.MainWindow"
+        Title="PrimeDictate" Width="1100" Height="720" MinWidth="720" MinHeight="480">
+  <DockPanel>
+    <Border DockPanel.Dock="Top" Padding="16,10" Background="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}">
+      <StackPanel Orientation="Horizontal" Spacing="12">
+        <TextBlock Text="PrimeDictate" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center" />
+        <TextBlock Text="Transcription" Opacity="0.7" VerticalAlignment="Center" />
+        <TextBlock x:Name="PlatformText" Opacity="0.5" VerticalAlignment="Center" FontSize="12" />
+      </StackPanel>
+    </Border>
+    <Border DockPanel.Dock="Bottom" Padding="16,6">
+      <TextBlock x:Name="StatusText" TextWrapping="Wrap" />
+    </Border>
+    <Grid ColumnDefinitions="280,*" Margin="12">
+      <DockPanel Grid.Column="0" Margin="0,0,12,0">
+        <StackPanel DockPanel.Dock="Top" Spacing="8" Margin="0,0,0,8">
+          <Button x:Name="ImportButton" Content="Import audio or video…" HorizontalAlignment="Stretch" />
+          <ComboBox x:Name="SourceBox" HorizontalAlignment="Stretch" />
+          <CheckBox x:Name="AutoGainBox" Content="Boost quiet audio for recognition" IsChecked="True"
+                    ToolTip.Tip="Raises quiet system audio before it is transcribed. The saved recording is not changed." />
+          <CheckBox x:Name="FinalPassBox" Content="Meetings: speaker labels after Stop" IsChecked="True"
+                    ToolTip.Tip="With a Whisper model, the live text is a draft. After Stop, Nemotron re-reads the recording, labels the speakers and marks who talked over whom. Needs Nemotron and its diarizer." />
+          <ComboBox x:Name="LiveTextBox" HorizontalAlignment="Stretch"
+                    ToolTip.Tip="Off: nothing is transcribed during the call (no CPU load); after Stop the GPU final pass does everything. Draft: a fast model shows text while people talk." />
+          <Button x:Name="RecordButton" Content="Record" HorizontalAlignment="Stretch" />
+          <TextBlock x:Name="RecordingIndicator" IsVisible="False" Foreground="#E5484D" FontWeight="SemiBold" TextWrapping="Wrap" />
+          <TextBlock Text="Drop a file anywhere in this window. Recording starts only when you press Record and stays on this computer. Choose a system audio option to capture other people on a call."
+                     TextWrapping="Wrap" FontSize="12" Opacity="0.7" />
+        </StackPanel>
+        <ListBox x:Name="SessionList">
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="d:SessionItem">
+              <StackPanel>
+                <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
+                <TextBlock Text="{Binding Detail}" FontSize="11" Opacity="0.6" />
+              </StackPanel>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </DockPanel>
+
+      <DockPanel Grid.Column="1">
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,8">
+          <TextBlock Text="Model" VerticalAlignment="Center" />
+          <ComboBox x:Name="ModelBox" MinWidth="220" />
+          <ComboBox x:Name="LanguageBox" MinWidth="150" ToolTip.Tip="Spoken language. Auto-detect can put words in the wrong script on noisy audio." />
+          <Button x:Name="PauseButton" Content="Pause" IsVisible="False" />
+          <Button x:Name="StopButton" Content="Stop" IsVisible="False" />
+          <Button x:Name="DiscardButton" Content="Discard" IsVisible="False" />
+          <Button x:Name="RerunButton" Content="Rerun with this model" IsEnabled="False" />
+          <ProgressBar x:Name="Progress" Width="140" Minimum="0" Maximum="1" IsVisible="False" VerticalAlignment="Center" />
+        </StackPanel>
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,8">
+          <TextBox x:Name="SearchBox" PlaceholderText="Search transcript" MinWidth="260" />
+          <TextBlock x:Name="LevelText" VerticalAlignment="Center" Opacity="0.7" />
+          <Border x:Name="BackendBadge" IsVisible="False" CornerRadius="10" Padding="8,2" VerticalAlignment="Center" BorderThickness="1" BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
+            <TextBlock x:Name="BackendText" FontSize="12" />
+          </Border>
+        </StackPanel>
+        <StackPanel x:Name="SpeakersPanel" DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,8" IsVisible="False">
+          <TextBlock Text="Speakers" VerticalAlignment="Center" />
+          <StackPanel x:Name="SpeakerBoxes" Orientation="Horizontal" Spacing="6" />
+        </StackPanel>
+        <Panel DockPanel.Dock="Top" Margin="0,0,0,8">
+          <d:SpeakerTimelineControl x:Name="Timeline" Height="0" ClipToBounds="True" />
+          <Button x:Name="JumpToLiveButton" Content="Jump to live" IsVisible="False" HorizontalAlignment="Right" VerticalAlignment="Top" Padding="8,2" />
+        </Panel>
+        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
+          <Button x:Name="CopyButton" Content="Copy" IsEnabled="False" />
+          <ComboBox x:Name="FormatBox" SelectedIndex="0" MinWidth="130">
+            <ComboBoxItem Content="Text (.txt)" />
+            <ComboBoxItem Content="Markdown (.md)" />
+            <ComboBoxItem Content="JSON (.json)" />
+            <ComboBoxItem Content="SubRip (.srt)" />
+            <ComboBoxItem Content="WebVTT (.vtt)" />
+          </ComboBox>
+          <Button x:Name="ExportButton" Content="Export…" IsEnabled="False" />
+          <Button x:Name="DeleteButton" Content="Delete session" IsEnabled="False" />
+        </StackPanel>
+        <Border BorderThickness="1" BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}" CornerRadius="4">
+          <Panel>
+            <ListBox x:Name="TranscriptList">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="d:SegmentRow">
+                  <Grid ColumnDefinitions="4,110,Auto,*" Opacity="{Binding Opacity}">
+                    <Border Grid.Column="0" Background="{Binding SpeakerBrush}" CornerRadius="2" Margin="0,4,6,4" />
+                    <TextBlock Grid.Column="1" Text="{Binding Time}" Opacity="0.6" VerticalAlignment="Top" Margin="0,8,0,0" />
+                    <TextBlock Grid.Column="2" MinWidth="90" Text="{Binding Speaker}" IsVisible="{Binding HasSpeaker}" FontWeight="SemiBold" VerticalAlignment="Top" Margin="0,8,8,0" />
+                    <TextBox Grid.Column="3" Text="{Binding Text, Mode=TwoWay}" AcceptsReturn="True" TextWrapping="Wrap"
+                             BorderThickness="0" Background="Transparent" Tag="{Binding Id}" />
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+            <TextBlock x:Name="EmptyText" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.6" TextWrapping="Wrap"
+                       Text="Import a file or start recording. Transcription never types into other apps or runs voice commands." />
+          </Panel>
+        </Border>
+      </DockPanel>
+    </Grid>
+  </DockPanel>
+</Window>

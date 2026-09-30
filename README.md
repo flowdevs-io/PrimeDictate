@@ -210,7 +210,7 @@ Pro tips:
 ## Requirements
 
 - Windows is the primary supported platform.
-- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) is required to build from source.
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) is required to build from source (pinned in `global.json`).
 - Local transcription uses local model files only.
 - sherpa-onnx backends require extracted ONNX model folders and tokens.
 - Whisper.net uses GGML `.bin` files and optional hardware-specific sidecars.
