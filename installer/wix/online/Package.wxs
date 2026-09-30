@@ -13,7 +13,7 @@
     <util:QueryNativeMachine />
     <Launch
         Condition='"$(sys.BUILDARCH)" ~= "x64" IMP (NOT WIX_NATIVE_MACHINE OR WIX_NATIVE_MACHINE = 34404)'
-        Message="This x64 installer is for Intel/AMD64 Windows. Use the ARM64 installer on Copilot+ PCs for native QNN/NPU support." />
+        Message="This x64 installer is for Intel/AMD64 Windows. Use the ARM64 installer on ARM64 Windows." />
     <MediaTemplate EmbedCab="yes" />
     <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
     <WixVariable Id="WixUILicenseRtf" Value="$(sys.SOURCEFILEDIR)..\assets\License.rtf" />
@@ -22,7 +22,7 @@
     <Feature
         Id="Main"
         Title="PrimeDictate"
-        Description="Installs PrimeDictate with workspace dashboard and branded tray status indicators."
+        Description="Installs PrimeDictate: dictation, transcription and meeting workspace, and a tray status icon."
         Level="1">
       <ComponentGroupRef Id="AppComponents" />
       <ComponentGroupRef Id="StartMenuShortcutComponents" />

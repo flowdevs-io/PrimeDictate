@@ -15,7 +15,7 @@
             Target="[INSTALLFOLDER]PrimeDictate.exe"
             WorkingDirectory="INSTALLFOLDER"
             Icon="AppIcon"
-            Description="Local Whisper dictation with live dashboard and color-coded tray state." />
+            Description="Local dictation, transcription and meetings with a color-coded tray state." />
         <RemoveFolder Id="RemoveProgramShortcutFolder" On="uninstall" />
         <RegistryValue
             Root="HKCU"

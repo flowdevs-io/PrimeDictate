@@ -6,8 +6,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>PrimeDictate.Desktop</RootNamespace>
-    <AssemblyName>PrimeDictate.Desktop</AssemblyName>
-    <Description>Cross-platform PrimeDictate desktop shell (Avalonia). Spike; the WPF app remains the shipping Windows shell.</Description>
+    <AssemblyName>PrimeDictate</AssemblyName>
+    <Product>PrimeDictate</Product>
+    <AssemblyTitle>PrimeDictate</AssemblyTitle>
+    <Authors>FlowDevs.io</Authors>
+    <Company>FlowDevs.io</Company>
+    <Copyright>Copyright © FlowDevs.io</Copyright>
+    <Description>PrimeDictate: local dictation with a global hotkey, plus transcription and meeting capture (Avalonia).</Description>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <ApplicationIcon>..\..\installer\wix\assets\PrimeDictate.ico</ApplicationIcon>
   </PropertyGroup>

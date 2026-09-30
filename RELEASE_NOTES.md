@@ -1,3 +1,24 @@
+# PrimeDictate 6.1.0
+
+## Highlights
+
+- One app. The installers now ship the new PrimeDictate that does both jobs in one process: hotkey dictation from the tray, and the transcription and meeting workspace (recordings, speaker timeline, sessions). It is still `PrimeDictate.exe`, so shortcuts, winget, Chocolatey and the updater keep working, and 6.1.0 upgrades 6.0.0 in place.
+- Your setup carries over. The new app reads the 6.0.0 settings and history once (it never rewrites them), keeps the same model folders under `%LocalAppData%\PrimeDictate\models`, and keeps the lifetime stats.
+- Launch at login is one thing again. The installer's Startup shortcut now starts PrimeDictate in the tray (`--background`), and the app's "Start PrimeDictate when I sign in" checkbox turns that same shortcut on or off for you without administrator rights. `LAUNCHATLOGIN=0` still leaves it out; the checkbox then uses a per-user startup entry instead. The 6.0.0 per-user startup entries are cleaned up on first start.
+- Updates: "Check for updates..." in the tray menu, plus an automatic check at most once a day. Nothing installs without your OK, the MSI is verified against its published SHA-256 first, and PrimeDictate closes the normal way (an active meeting recording is saved) before Windows Installer starts.
+
+## Not in 6.1.0 yet
+
+The old app is not packaged any more, so these are gone until they are ported:
+
+- Qualcomm QNN and AI Hub NPU models on ARM64 (Whisper, Moonshine and the QNN runtime). The ARM64 installer runs the CPU models natively.
+- Whisper.net models (its CUDA, Vulkan and OpenVINO runtimes). The sherpa-onnx Whisper, Parakeet and Moonshine models work, with an optional CUDA setting.
+- Inserting text straight into the focused edit control. Dictation types the final text with simulated keystrokes, as before, and still never pastes through the clipboard.
+- The overlay's copy and pin buttons and the compact-mode ripple.
+- There is no setting to turn off the automatic update check yet.
+
+The old WPF app stays in the repository and still builds; it is just not shipped.
+
 # PrimeDictate 6.0.0
 
 ## Highlights

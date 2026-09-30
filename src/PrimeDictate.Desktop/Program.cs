@@ -30,7 +30,7 @@ internal static class Program
 
             if (!instance.TryBecomePrimary())
             {
-                if (!args.Contains("--background"))
+                if (!App.IsBackgroundLaunch(args))
                 {
                     instance.SendAsync(SingleInstance.ShowCommand, TimeSpan.FromSeconds(3)).GetAwaiter().GetResult();
                 }
