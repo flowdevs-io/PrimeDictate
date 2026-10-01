@@ -178,6 +178,13 @@ public sealed class DictationHost : IAsyncDisposable
         this.store.Save(this.Settings);
     }
 
+    /// <summary>Saves the overlay's pin (keep it on screen), the same <c>IsOverlaySticky</c> setting the Settings checkbox changes.</summary>
+    public void RememberOverlayPinned(bool pinned)
+    {
+        this.Settings.IsOverlaySticky = pinned;
+        this.store.Save(this.Settings);
+    }
+
     /// <summary>First step of leaving: no hotkey or wake word can start a new dictation while the app shuts down.</summary>
     public void StopListeningForExit()
     {
@@ -392,13 +399,16 @@ public sealed class DictationHost : IAsyncDisposable
         return string.Join(' ', segments.Select(s => s.Text.Trim()));
     }
 
-    /// <summary>Prefers a small model for idle listening (as the WPF app does) and falls back to the dictation model.</summary>
+    /// <summary>
+    /// Prefers a small model of the dictation model's family for idle listening (<see cref="WakeModelChooser"/>, as the WPF app does)
+    /// and falls back to the dictation model.
+    /// </summary>
     private ITranscriptionProvider? GetWakeProvider()
     {
         var installed = this.InstalledModels();
-        var small = new[] { "tiny.en", "base.en", "tiny", "base" }
-            .Select(id => installed.FirstOrDefault(m => m.Backend == LegacyBackend.Whisper && string.Equals(m.Id, id, StringComparison.OrdinalIgnoreCase)))
-            .FirstOrDefault(m => m is not null);
+        var wanted = this.Settings.ResolveModelId();
+        var dictation = installed.FirstOrDefault(m => m.ModelId == wanted) ?? installed.FirstOrDefault();
+        var small = dictation is null ? null : WakeModelChooser.ChooseSmall(installed, dictation.Backend);
         if (small is null)
         {
             return this.GetProvider();

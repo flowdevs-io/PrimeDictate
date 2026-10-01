@@ -136,6 +136,9 @@ public sealed class WakeWordListener : IMicrophoneConsumer, IAsyncDisposable
 
     public event Action<string>? Notice;
 
+    /// <summary>True after the listener gave up (the microphone would not open) until it next starts listening. The tray shows it as "Wake listening failed".</summary>
+    public bool HasFailed { get; private set; }
+
     public void Configure(bool enabled, string? wakePhrase, string? inputDeviceId, double inputGain)
     {
         lock (this.sync)
@@ -246,7 +249,8 @@ public sealed class WakeWordListener : IMicrophoneConsumer, IAsyncDisposable
             {
                 if (attempt >= OpenRetryDelays.Length)
                 {
-                    Diagnostics.AppLog.Event("wake-word", $"Stopped listening: the microphone did not open after {attempt + 1} tries: {ex.Message}", Diagnostics.ActivityLevel.Error);
+                    Diagnostics.AppLog.Error("wake-word", $"Stopped listening: the microphone did not open after {attempt + 1} tries: {ex.Message}");
+                    this.HasFailed = true;
                     this.Notice?.Invoke($"Wake word listening could not open the microphone: {ex.Message}");
                     return;
                 }
@@ -256,6 +260,7 @@ public sealed class WakeWordListener : IMicrophoneConsumer, IAsyncDisposable
             }
         }
 
+        this.HasFailed = false;
         var run = new Running(lease);
         run.Loop = Task.Run(() => this.ListenAsync(run));
         lock (this.sync)

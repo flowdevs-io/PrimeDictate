@@ -77,12 +77,29 @@ public sealed class DictationSettings
     public bool IsOverlaySticky { get; set; }
 
     /// <summary>
+    /// Hide the compact microphone while idle. On by default: Justin asked for the overlay to show only while dictating after his first
+    /// Windows run. Turning it off gives the WPF behavior (the compact microphone stays on screen; see <see cref="OverlayRules.ShouldShow"/>).
+    /// </summary>
+    public bool HideOverlayWhenIdle { get; set; } = true;
+
+    /// <summary>
     /// Where the user dragged the overlay: the bottom-center point it grows up from, in screen pixels. Null keeps the
     /// default, a little above the bottom middle of the primary screen. New app only (the WPF overlay did not remember).
     /// </summary>
     public int? OverlayAnchorX { get; set; }
 
     public int? OverlayAnchorY { get; set; }
+
+    /// <summary>The automatic update check on launch (at most daily). The tray's "Check for updates..." always works. Same name and meaning as the WPF setting.</summary>
+    public bool CheckForUpdatesAutomatically { get; set; } = true;
+
+    /// <summary>What clicking the tray icon does. The WPF default (double click) is kept.</summary>
+    [JsonConverter(typeof(TrayClickBehaviorConverter))]
+    public TrayClickBehavior TrayClickBehavior { get; set; } = TrayClickBehavior.DoubleClickOpensWorkspace;
+
+    /// <summary>Light, dark or the system setting. Dark by default, as the WPF app always was.</summary>
+    [JsonConverter(typeof(AppThemeConverter))]
+    public AppTheme Theme { get; set; } = AppTheme.Dark;
 
     public List<ReplacementDto> TranscriptReplacements { get; set; } = [];
 

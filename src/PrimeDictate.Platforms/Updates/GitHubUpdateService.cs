@@ -290,16 +290,23 @@ public sealed class GitHubUpdateService : IDisposable
     private static string Quote(string value) => "\"" + value.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
 }
 
-/// <summary>Remembers when the last automatic check ran, in a small JSON file, so launches within 24 hours do not check again.</summary>
-public sealed class UpdateCheckState(string path)
+/// <summary>
+/// Remembers when the last automatic check ran, in a small JSON file, so launches within 24 hours do not check again. Until this app has
+/// written its own file, the WPF app's <c>LastUpdateCheckUtc</c> in <c>settings.json</c> (read only) stands in, so an upgrade does not check again at once.
+/// Once the own file exists it alone decides (a failed update clears it so the next launch retries).
+/// </summary>
+public sealed class UpdateCheckState(string path, string? legacySettingsPath = null)
 {
-    public DateTime? LastCheckUtc()
+    public DateTime? LastCheckUtc() =>
+        File.Exists(path) || legacySettingsPath is null ? ReadDate(path, "lastCheckUtc") : ReadDate(legacySettingsPath, "LastUpdateCheckUtc");
+
+    private static DateTime? ReadDate(string file, string property)
     {
         try
         {
-            using var stream = File.OpenRead(path);
+            using var stream = File.OpenRead(file);
             using var doc = JsonDocument.Parse(stream);
-            return doc.RootElement.TryGetProperty("lastCheckUtc", out var v) && v.ValueKind == JsonValueKind.String && v.TryGetDateTime(out var when) ? when.ToUniversalTime() : null;
+            return doc.RootElement.TryGetProperty(property, out var v) && v.ValueKind == JsonValueKind.String && v.TryGetDateTime(out var when) ? when.ToUniversalTime() : null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {

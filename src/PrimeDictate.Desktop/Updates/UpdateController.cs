@@ -34,15 +34,17 @@ public sealed class UpdateController : IUpdateMenu, IDisposable
     private readonly UpdateCheckState state;
     private readonly LaunchAtLogin launch;
     private readonly Func<Task> exit;
+    private readonly Func<bool> automaticChecksEnabled;
     private readonly Version current;
     private bool busy;
 
-    public UpdateController(Version current, string downloadDirectory, UpdateCheckState state, LaunchAtLogin launch, Func<Task> exit)
+    public UpdateController(Version current, string downloadDirectory, UpdateCheckState state, LaunchAtLogin launch, Func<Task> exit, Func<bool>? automaticChecksEnabled = null)
     {
         this.current = current;
         this.state = state;
         this.launch = launch;
         this.exit = exit;
+        this.automaticChecksEnabled = automaticChecksEnabled ?? (() => true);
         this.service = new GitHubUpdateService(current, downloadDirectory, message => System.Diagnostics.Trace.TraceInformation(message));
     }
 
@@ -54,15 +56,28 @@ public sealed class UpdateController : IUpdateMenu, IDisposable
 
     public void Dispose() => this.service.Dispose();
 
-    /// <summary>Checks once after a short delay when the last check is over 24 hours old. A failure is only traced.</summary>
+    /// <summary>
+    /// Checks once after a short delay when the last check is over 24 hours old, unless the "check for updates automatically" setting is off
+    /// (read again when the delay is over, so turning it off in Settings right after launch is honored). A failure is only traced.
+    /// </summary>
     public async Task CheckOnLaunchAsync()
     {
+        if (!this.automaticChecksEnabled())
+        {
+            return;
+        }
+
         if (!UpdateRules.IsCheckDue(this.state.LastCheckUtc(), DateTime.UtcNow))
         {
             return;
         }
 
         await Task.Delay(TimeSpan.FromSeconds(8)).ConfigureAwait(false);
+        if (!this.automaticChecksEnabled())
+        {
+            return;
+        }
+
         await Dispatcher.UIThread.InvokeAsync(() => this.RunAsync(interactive: false));
     }
 
@@ -138,7 +153,10 @@ public sealed class UpdateController : IUpdateMenu, IDisposable
         {
             // A failed attempt must not wait a day for the next automatic try.
             this.state.Save(null);
-            await UpdateDialog.ShowAsync("Update failed", $"The update could not be installed: {ex.Message}");
+            var message = ex is System.ComponentModel.Win32Exception { NativeErrorCode: 1223 }
+                ? "Administrator approval was declined, so the update was not installed. Check for updates again when you are ready to approve it."
+                : $"The update could not be installed: {ex.Message}";
+            await UpdateDialog.ShowAsync("Update failed", message);
         }
     }
 
