@@ -13,16 +13,66 @@ public sealed class DictationStatsWindow : Window
 {
     private static readonly Color[] Palette = [Color.Parse("#38BDF8"), Color.Parse("#A78BFA"), Color.Parse("#34D399"), Color.Parse("#F59E0B")];
 
+    private readonly DictationHost host;
+    private readonly StackPanel content = new() { Spacing = 16 };
+    private readonly NumericUpDown baselineBox = new()
+    {
+        Minimum = DictationStatsStore.MinBaselineWpm,
+        Maximum = DictationStatsStore.MaxBaselineWpm,
+        Increment = 5,
+        FormatString = "0",
+        Width = 120
+    };
+
+    private bool loading;
+
     public DictationStatsWindow(DictationHost host)
     {
+        this.host = host;
         this.Title = "PrimeDictate: dictation stats";
         this.Width = 620;
         this.SizeToContent = SizeToContent.Height;
         this.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        this.content.Margin = new Thickness(24);
+        this.Content = new ScrollViewer { Content = this.content, HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled };
+        this.MaxHeight = 760;
+        this.baselineBox.ValueChanged += (_, _) => this.OnBaselineChanged();
+        this.Render();
+    }
 
-        var state = host.Stats();
-        var baseline = host.Settings.BaselineTypingSpeedWpm;
-        var panel = new StackPanel { Margin = new Thickness(24), Spacing = 16 };
+    /// <summary>
+    /// The "compare against typing at N WPM" setting, as on the WPF Impact tab: whole numbers from 20 to 120, saved at once, and the
+    /// time-saved figure follows. A value outside the range (an empty box) is not saved.
+    /// </summary>
+    private void OnBaselineChanged()
+    {
+        if (this.loading || this.baselineBox.Value is not { } value)
+        {
+            return;
+        }
+
+        var wpm = (int)Math.Round(value);
+        if (wpm is < DictationStatsStore.MinBaselineWpm or > DictationStatsStore.MaxBaselineWpm || wpm == this.host.Settings.BaselineTypingSpeedWpm)
+        {
+            return;
+        }
+
+        this.host.Settings.BaselineTypingSpeedWpm = wpm;
+        this.host.ApplySettings(this.host.Settings);
+        this.Render();
+    }
+
+    private void Render()
+    {
+        var state = this.host.Stats();
+        var baseline = DictationStatsStore.NormalizeBaselineWpm(this.host.Settings.BaselineTypingSpeedWpm);
+        this.loading = true;
+        this.baselineBox.Value = baseline;
+        this.loading = false;
+        var panel = this.content;
+        panel.Children.Clear();
+        panel.Children.Add(new TextBlock { Text = "Dictation impact", FontSize = 18, FontWeight = FontWeight.SemiBold });
+        panel.Children.Add(new TextBlock { Text = "Local stats are counted from successful transcript commits and stay on this PC. Only text that was typed into an app counts.", Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
         panel.Children.Add(new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -30,33 +80,54 @@ public sealed class DictationStatsWindow : Window
             Children =
             {
                 Figure("Words typed", state.TotalWords.ToString("N0", CultureInfo.InvariantCulture)),
-                Figure("Time saved", FormatDuration(state.TimeSaved(baseline))),
-                Figure("Speaking speed", $"{state.AverageWordsPerMinute:N0} WPM"),
-                Figure("Dictations", state.InjectedSessions.ToString("N0", CultureInfo.InvariantCulture))
+                Figure("Net time saved", FormatDuration(state.TimeSaved(baseline))),
+                Figure("Average speech pace", $"{state.AverageWordsPerMinute:N0} WPM"),
+                Figure("Successful sessions", state.InjectedSessions.ToString("N0", CultureInfo.InvariantCulture))
             }
         });
-        panel.Children.Add(new TextBlock { Text = $"Time saved compares with typing at {(baseline is >= 20 and <= 120 ? baseline : DictationStatsStore.DefaultBaselineWpm)} WPM. Only text that was typed into an app counts.", Opacity = 0.7, TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Children =
+            {
+                new TextBlock { Text = "Compare against typing at", VerticalAlignment = VerticalAlignment.Center },
+                this.baselineBox,
+                new TextBlock { Text = "WPM (20 to 120)", VerticalAlignment = VerticalAlignment.Center }
+            }
+        });
         panel.Children.Add(new TextBlock { Text = "Last 14 days", FontWeight = FontWeight.SemiBold });
         panel.Children.Add(this.Bars(state));
-        panel.Children.Add(new TextBlock { Text = "Milestones", FontWeight = FontWeight.SemiBold });
+        panel.Children.Add(new TextBlock { Text = "Achievements", FontWeight = FontWeight.SemiBold });
         foreach (var a in DictationStatsStore.Achievements)
         {
             var unlocked = state.UnlockedAchievementIds.Contains(a.Id) || state.TotalWords >= a.WordThreshold;
             var remaining = Math.Max(0, a.WordThreshold - state.TotalWords);
-            panel.Children.Add(new StackPanel
+            var accent = unlocked ? Color.Parse("#34D399") : Color.Parse("#64748B");
+            panel.Children.Add(new Border
             {
-                Orientation = Orientation.Horizontal,
-                Spacing = 10,
-                Children =
+                BorderBrush = new SolidColorBrush(accent),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(12),
+                Child = new DockPanel
                 {
-                    new TextBlock { Text = unlocked ? "✓" : "○", Foreground = unlocked ? Brushes.SeaGreen : Brushes.Gray, Width = 16 },
-                    new TextBlock { Text = a.Title, FontWeight = FontWeight.SemiBold, MinWidth = 190 },
-                    new TextBlock { Text = unlocked ? a.Message : $"{Math.Min(100, state.TotalWords * 100.0 / a.WordThreshold):N0}% - {remaining:N0} words to go", Opacity = 0.8, TextWrapping = TextWrapping.Wrap, MaxWidth = 340 }
+                    LastChildFill = true,
+                    Children =
+                    {
+                        new TextBlock { Text = unlocked ? "Unlocked" : "Locked", Foreground = new SolidColorBrush(accent), FontWeight = FontWeight.SemiBold, [DockPanel.DockProperty] = Dock.Right, Margin = new Thickness(14, 0, 0, 0) },
+                        new StackPanel
+                        {
+                            Children =
+                            {
+                                new TextBlock { Text = a.Title, FontWeight = FontWeight.SemiBold },
+                                new TextBlock { Text = unlocked ? a.Message : $"{Math.Min(100, state.TotalWords * 100.0 / a.WordThreshold):N0}% complete - {remaining:N0} words to go.", Opacity = 0.8, TextWrapping = TextWrapping.Wrap }
+                            }
+                        }
+                    }
                 }
             });
         }
-
-        this.Content = panel;
     }
 
     private static StackPanel Figure(string label, string value) => new()
@@ -68,7 +139,7 @@ public sealed class DictationStatsWindow : Window
     {
         var days = state.LastDays(DateTime.Today);
         var max = Math.Max(1, days.Max(d => d.Words));
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Height = 150 };
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Height = 166 };
         for (var i = 0; i < days.Count; i++)
         {
             var (day, words) = days[i];
@@ -79,6 +150,7 @@ public sealed class DictationStatsWindow : Window
                 Width = 36,
                 Children =
                 {
+                    new TextBlock { Text = words.ToString(CultureInfo.InvariantCulture), FontSize = 10, HorizontalAlignment = HorizontalAlignment.Center, Opacity = 0.7 },
                     new Border { Height = height, Background = new SolidColorBrush(Palette[i % Palette.Length]), CornerRadius = new CornerRadius(3) },
                     new TextBlock { Text = day.ToString("M/d", CultureInfo.InvariantCulture), FontSize = 10, HorizontalAlignment = HorizontalAlignment.Center, Opacity = 0.7 }
                 }

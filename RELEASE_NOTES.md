@@ -8,7 +8,12 @@
 - Record a meeting from the tray. "Record meeting" starts a microphone and system-audio recording in the workspace; the same item stops it. The main window shows dictation status and opens history, stats and Settings, and there is one Settings window for dictation and for transcription and meetings.
 - Same models everywhere. Dictation and transcription pick from the same installed models, including Whisper.net (ggml) models on the GPU (CUDA or Vulkan); one loaded copy of a model is shared by both.
 - Voice shell commands run again in dictation (never in transcription). Commands from 6.0.0 keep their on/off state; new ones start off.
-- Updates: "Check for updates..." in the tray menu, plus an automatic check at most once a day. Nothing installs without your OK, the MSI is verified against its published SHA-256 first, and PrimeDictate closes the normal way (an active meeting recording is saved) before Windows Installer starts.
+- Updates: "Check for updates..." in the tray menu, plus an automatic check at most once a day that you can turn off in Settings (the 6.0.0 choice and last-check time carry over). Nothing installs without your OK, the MSI is verified against its published SHA-256 first, and PrimeDictate closes the normal way (an active meeting recording is saved) before Windows Installer starts.
+- The overlay has its 6.0.0 controls back: pin (keep it on screen), copy (the last transcript, only when you click it), settings, collapse and expand, the elapsed time, the "Local only" badge and the model in its header, and the compact microphone has its ripple animation and, as before, stays on screen (a new Settings option hides it while idle).
+- The tray icon: single or double click (or neither) opens PrimeDictate, as chosen in Settings; it shows "needs attention" for 10 seconds after an error and when the wake word could not start, and its tooltip names the model and the wake phrase.
+- Settings: start at sign-in for just you or for everyone on this PC (asks for administrator permission, as in 6.0.0; the `--enable-launch-at-login` and `--disable-launch-at-login` command-line switches work again), the typing speed that time saved is compared with (also in the stats window), a color scheme (system, light or dark; 6.0.0 was always dark), and the tray click choice.
+- History window: filters for typed or not typed, app and window, "Clear filters", and "Copy details"; the stats window shows the achievements and daily word counts as before.
+- The wake word listens with a small model of the same kind as your dictation model (Whisper.net tiny or base, Moonshine tiny or base, or a small Whisper), as in 6.0.0, and falls back to the dictation model.
 
 ## Not in 6.1.0 yet
 
@@ -16,8 +21,6 @@ The old app is not packaged any more, so these are gone until they are ported:
 
 - Qualcomm QNN and AI Hub NPU models on ARM64 (Whisper, Moonshine and the QNN runtime). The ARM64 installer runs the CPU models natively.
 - Inserting text straight into the focused edit control. Dictation types the final text with simulated keystrokes, as before, and still never pastes through the clipboard.
-- The overlay's copy and pin buttons and the compact-mode ripple.
-- There is no setting to turn off the automatic update check yet.
 
 The old WPF app stays in the repository and still builds; it is just not shipped.
 

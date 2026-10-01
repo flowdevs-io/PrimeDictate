@@ -31,7 +31,7 @@ public sealed class DictationStatsState
     /// <summary>Time saved against typing the same words at <paramref name="baselineWpm"/> (20 to 120, else 40), net of speaking time.</summary>
     public TimeSpan TimeSaved(int baselineWpm)
     {
-        var baseline = baselineWpm is >= 20 and <= 120 ? baselineWpm : DictationStatsStore.DefaultBaselineWpm;
+        var baseline = DictationStatsStore.NormalizeBaselineWpm(baselineWpm);
         var saved = TimeSpan.FromMinutes(this.TotalWords / (double)baseline) - TimeSpan.FromSeconds(this.TotalAudioSeconds);
         return saved < TimeSpan.Zero ? TimeSpan.Zero : saved;
     }
@@ -70,6 +70,11 @@ public sealed record DictationStatsUpdate(DictationStatsState State, IReadOnlyLi
 public sealed class DictationStatsStore(string path)
 {
     public const int DefaultBaselineWpm = 40;
+    public const int MinBaselineWpm = 20;
+    public const int MaxBaselineWpm = 120;
+
+    /// <summary>The typing speed to compare against: the value when it is 20 to 120, else the default of 40 (as the WPF app did).</summary>
+    public static int NormalizeBaselineWpm(int wpm) => wpm is >= MinBaselineWpm and <= MaxBaselineWpm ? wpm : DefaultBaselineWpm;
     private const int MaxDailyBuckets = 370;
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true, Converters = { new JsonStringEnumConverter() } };

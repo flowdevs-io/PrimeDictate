@@ -30,6 +30,12 @@ public sealed class DictationSettingsWindow : Window
     private readonly ComboBox whisperNetDeviceBox = new() { ItemsSource = new[] { "Auto (CPU, or the NPU when its files are installed)", "CPU", "GPU (CUDA or Vulkan, CPU if it fails)" }, MinWidth = 260 };
     private readonly ComboBox deviceBox = new() { ItemsSource = new[] { "Auto (CUDA if ready, else CPU)", "CPU", "CUDA" }, MinWidth = 260 };
     private readonly CheckBox launchAtLogin = Check("Start PrimeDictate when I sign in (tray only)");
+    private readonly CheckBox launchEveryone = Check("Start it for everyone on this PC, not just me (asks for administrator permission)");
+    private readonly CheckBox autoUpdate = Check("Check for updates automatically (at most once a day; installing always asks first)");
+    private readonly ComboBox trayClickBox = new() { ItemsSource = TrayClickNames, MinWidth = 260 };
+    private readonly ComboBox themeBox = new() { ItemsSource = new[] { "Follow the system", "Light", "Dark" }, MinWidth = 260 };
+    private readonly NumericUpDown baseline = new() { Minimum = DictationStatsStore.MinBaselineWpm, Maximum = DictationStatsStore.MaxBaselineWpm, Increment = 5, FormatString = "0", Width = 120 };
+    private readonly CheckBox hideOverlayIdle = Check("Hide the compact microphone when I am not dictating");
     private readonly CheckBox sendEnter = Check("Coding mode: press Enter after typing");
     private readonly CheckBox returnToStart = Check("If focus moved, return to the window I started in");
     private readonly CheckBox typeWithoutGuard = Check("Type even when the app cannot check which window is in front");
@@ -57,6 +63,9 @@ public sealed class DictationSettingsWindow : Window
     private readonly List<ShellRow> shellEditors = [];
     private DictationSettings working;
     private IReadOnlyList<AudioInputDevice> devices = [];
+
+    private static readonly string[] TrayClickNames = ["Double-click the tray icon opens PrimeDictate", "Single click opens PrimeDictate", "Clicking the icon does nothing (use its menu)"];
+    private static readonly TrayClickBehavior[] TrayClickValues = [TrayClickBehavior.DoubleClickOpensWorkspace, TrayClickBehavior.SingleClickOpensWorkspace, TrayClickBehavior.ClickDoesNothing];
 
     private sealed record ShellRow(Control Root, CheckBox On, TextBox Phrase, ComboBox After, TextBox Command);
 
@@ -90,6 +99,15 @@ public sealed class DictationSettingsWindow : Window
 
         panel.Children.Add(this.audioCues);
         panel.Children.Add(this.launchAtLogin);
+        if (this.launch.SupportsAllUsers)
+        {
+            panel.Children.Add(this.launchEveryone);
+        }
+
+        panel.Children.Add(this.autoUpdate);
+        panel.Children.Add(Row("Clicking the tray icon", this.trayClickBox));
+        panel.Children.Add(Row("Color scheme", this.themeBox));
+        panel.Children.Add(Row("Compare time saved against typing at (WPM, 20 to 120)", this.baseline));
         panel.Children.Add(this.sendEnter);
         if (OperatingSystem.IsWindows())
         {
@@ -115,6 +133,7 @@ public sealed class DictationSettingsWindow : Window
             Opacity = 0.7
         });
         panel.Children.Add(this.sticky);
+        panel.Children.Add(this.hideOverlayIdle);
         var resetOverlay = new Button { Content = "Move the overlay back to the bottom of the screen" };
         resetOverlay.Click += (_, _) =>
         {
@@ -392,7 +411,14 @@ public sealed class DictationSettingsWindow : Window
             WhisperNetDevicePreference.Gpu => 2,
             _ => 0
         };
-        this.launchAtLogin.IsChecked = this.launch.IsEnabled;
+        var scope = this.launch.Scope;
+        this.launchAtLogin.IsChecked = scope != LoginScope.Off;
+        this.launchEveryone.IsChecked = scope == LoginScope.AllUsers;
+        this.autoUpdate.IsChecked = this.working.CheckForUpdatesAutomatically;
+        this.trayClickBox.SelectedIndex = Math.Max(0, Array.IndexOf(TrayClickValues, this.working.TrayClickBehavior));
+        this.themeBox.SelectedIndex = (int)this.working.Theme;
+        this.baseline.Value = DictationStatsStore.NormalizeBaselineWpm(this.working.BaselineTypingSpeedWpm);
+        this.hideOverlayIdle.IsChecked = this.working.HideOverlayWhenIdle;
         this.sendEnter.IsChecked = this.working.SendEnterAfterCommit;
         this.returnToStart.IsChecked = this.working.ReturnToStartTargetOnCommit;
         this.typeWithoutGuard.IsChecked = this.working.TypeWithoutFocusGuard;
@@ -432,11 +458,15 @@ public sealed class DictationSettingsWindow : Window
 
     private void ApplyLaunchAtLogin()
     {
-        var wanted = this.launchAtLogin.IsChecked == true;
-        if (wanted != this.launch.IsEnabled && this.launch.Apply(wanted) is { } problem)
+        var wanted = this.launchAtLogin.IsChecked != true ? LoginScope.Off
+            : this.launch.SupportsAllUsers && this.launchEveryone.IsChecked == true ? LoginScope.AllUsers
+            : LoginScope.CurrentUser;
+        if (wanted != this.launch.Scope && this.launch.Apply(wanted) is { } problem)
         {
             this.status.Text = problem;
-            this.launchAtLogin.IsChecked = this.launch.IsEnabled;
+            var actual = this.launch.Scope;
+            this.launchAtLogin.IsChecked = actual != LoginScope.Off;
+            this.launchEveryone.IsChecked = actual == LoginScope.AllUsers;
         }
     }
 
@@ -480,6 +510,11 @@ public sealed class DictationSettingsWindow : Window
         s.VoiceHistoryPhrase = this.historyPhrase.Text?.Trim() ?? string.Empty;
         s.OverlayMode = (OverlayStyle)Math.Max(0, this.overlayBox.SelectedIndex);
         s.IsOverlaySticky = this.sticky.IsChecked == true;
+        s.HideOverlayWhenIdle = this.hideOverlayIdle.IsChecked == true;
+        s.CheckForUpdatesAutomatically = this.autoUpdate.IsChecked == true;
+        s.TrayClickBehavior = TrayClickValues[Math.Clamp(this.trayClickBox.SelectedIndex, 0, TrayClickValues.Length - 1)];
+        s.Theme = (AppTheme)Math.Clamp(this.themeBox.SelectedIndex, 0, 2);
+        s.BaselineTypingSpeedWpm = DictationStatsStore.NormalizeBaselineWpm((int)Math.Round(this.baseline.Value ?? DictationStatsStore.DefaultBaselineWpm));
         if (this.resetOverlayPosition)
         {
             s.OverlayAnchorX = null;
