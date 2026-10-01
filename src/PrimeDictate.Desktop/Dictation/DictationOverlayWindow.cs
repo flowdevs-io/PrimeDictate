@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Shapes;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
@@ -11,35 +12,60 @@ using PrimeDictate.Core.Dictation;
 namespace PrimeDictate.Desktop.Dictation;
 
 /// <summary>
-/// Live dictation preview: a small always-on-top window that never takes focus, so it cannot pull the caret away from
-/// the app being dictated into. It shows only while dictating (and briefly for a notice or the final words), unless
-/// pinned; the tray icon is there the rest of the time. Compact mode is a microphone pill with the level; full mode adds
-/// a text box with the latest words. Both keep one size while words arrive, so nothing jumps. It can be dragged anywhere
-/// (the spot is remembered) and closed until the next dictation. Live text is shown here and never typed.
+/// Live dictation preview: a small always-on-top window that never takes focus, so it cannot pull the caret away from the app being
+/// dictated into. It has the WPF overlay's controls: a pin (keep it on screen), a copy button (copies the last transcript to the clipboard,
+/// only when clicked; this is not text injection), a settings button, collapse and expand between the compact microphone and the full panel, close,
+/// the elapsed time and a "Local only" badge. Compact mode is the microphone with the ripple animation; full mode adds the particle visualizer and a
+/// text box with the latest words. Like the WPF overlay, the compact microphone stays on screen (see <see cref="OverlayRules.ShouldShow"/>).
+/// Both modes keep one size while words arrive, so nothing jumps. It can be dragged anywhere (the spot is remembered). Live text is shown here and never typed.
 /// </summary>
 public sealed class DictationOverlayWindow : Window
 {
-    private const double CompactWidth = 300;
+    private const double CompactWidth = 350;
     private const double FullWidth = 460;
     private const int MaxShownCharacters = 900;
     private static readonly TimeSpan NoticeTime = TimeSpan.FromSeconds(6);
     private static readonly TimeSpan FinalTextTime = TimeSpan.FromSeconds(1.5);
 
     private readonly VisualizerControl visualizer = new() { HorizontalAlignment = HorizontalAlignment.Center };
-    private readonly TextBlock status = new() { FontSize = 12, Opacity = 0.7, VerticalAlignment = VerticalAlignment.Center };
+    private readonly MicRippleControl mic = new() { VerticalAlignment = VerticalAlignment.Center };
+    private readonly TextBlock status = new() { FontSize = 13, FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+    private readonly TextBlock compactStatus = new() { FontSize = 13, FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+    private readonly TextBlock title = new() { Text = "Live transcript", FontSize = 15, FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center };
     private readonly TextBlock text = new() { FontSize = 15, LineHeight = 20, TextWrapping = TextWrapping.Wrap };
+    private readonly TextBlock timerText = new() { Text = "00:00", FontFamily = new FontFamily("Consolas, Menlo, monospace"), FontSize = 14, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center };
     private readonly ScrollViewer textView;
     private readonly Ellipse dot = new() { Width = 10, Height = 10, Fill = Brushes.Gray, VerticalAlignment = VerticalAlignment.Center };
     private readonly Border panel;
+    private readonly Control fullHeader;
+    private readonly Control compactHeader;
+    private readonly Control footer;
+    private readonly Control stateRow;
+    private readonly ToggleButton pinFull;
+    private readonly ToggleButton pinCompact;
+    private readonly Button copyFull;
+    private readonly Button copyCompact;
+    private readonly Button collapse;
     private readonly DispatcherTimer hideTimer;
+    private readonly DispatcherTimer clockTimer;
     private readonly DispatcherTimer anchorSaveTimer;
     private OverlayStyle style = OverlayStyle.CompactMicrophone;
+    private bool? expandedOverride;
     private bool sticky;
+    private bool hideCompactWhenIdle;
     private bool dismissed;
     private bool placing;
     private bool dragging;
     private bool moved;
+    private bool clickCandidate;
+    private PixelPoint pressedAt;
     private bool showingNotice;
+    private bool wakeListening;
+    private string backend = "Whisper ONNX";
+    private string transcript = string.Empty;
+    private string lastTranscript = string.Empty;
+    private string notice = string.Empty;
+    private DateTime listeningSince;
     private DictationState state;
     private DateTime hideAtUtc = DateTime.MinValue;
     private PixelPoint? anchor;
@@ -56,7 +82,10 @@ public sealed class DictationOverlayWindow : Window
         this.Background = Brushes.Transparent;
         this.TransparencyLevelHint = [WindowTransparencyLevel.Transparent];
         this.status.Foreground = Brushes.White;
+        this.title.Foreground = Brushes.White;
+        this.compactStatus.Foreground = Brushes.White;
         this.text.Foreground = Brushes.White;
+        this.timerText.Foreground = Brushes.White;
         this.textView = new ScrollViewer
         {
             Content = this.text,
@@ -65,34 +94,78 @@ public sealed class DictationOverlayWindow : Window
             VerticalScrollBarVisibility = ScrollBarVisibility.Hidden
         };
 
-        // Not focusable, so pressing it never moves keyboard focus away from the app being dictated into.
-        var close = new Button
+        // None of the buttons can take keyboard focus, so pressing one never moves it away from the app being dictated into.
+        this.pinFull = PinButton();
+        this.pinCompact = PinButton();
+        this.copyFull = CopyButton();
+        this.copyCompact = CopyButton("📋");
+        this.collapse = IconButton("—", "Back to the compact microphone");
+        var expand = IconButton("⤢", "Show the full panel");
+        var settings = IconButton("⚙", "Settings");
+        var settingsCompact = IconButton("⚙", "Settings");
+        var close = IconButton("✕", "Hide until the next dictation");
+        var closeCompact = IconButton("✕", "Hide until the next dictation");
+        foreach (var pin in new[] { this.pinFull, this.pinCompact })
         {
-            Content = "✕",
-            Focusable = false,
-            FontSize = 11,
-            Padding = new Thickness(6, 0),
-            MinHeight = 0,
-            Background = Brushes.Transparent,
-            Foreground = Brushes.White,
-            Opacity = 0.7,
-            Cursor = new Cursor(StandardCursorType.Hand),
-            VerticalAlignment = VerticalAlignment.Center
+            pin.Click += (_, _) => this.SetPinned(pin.IsChecked == true, raise: true);
+        }
+
+        foreach (var copy in new[] { this.copyFull, this.copyCompact })
+        {
+            copy.Click += async (_, _) => await this.CopyLastTranscriptAsync();
+        }
+
+        this.collapse.Click += (_, _) => this.Collapse();
+        expand.Click += (_, _) => this.Expand();
+        settings.Click += (_, _) => this.SettingsRequested?.Invoke();
+        settingsCompact.Click += (_, _) => this.SettingsRequested?.Invoke();
+        close.Click += (_, _) => this.CloseClicked();
+        closeCompact.Click += (_, _) => this.CloseClicked();
+
+        var compactButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0, Children = { this.copyCompact, this.pinCompact, settingsCompact, expand, closeCompact } };
+        this.compactHeader = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(compactButtons, Dock.Right);
+        ((Panel)this.compactHeader).Children.Add(compactButtons);
+        ((Panel)this.compactHeader).Children.Add(this.mic);
+        ((Panel)this.compactHeader).Children.Add(this.compactStatus);
+        this.mic.Margin = new Thickness(0, 0, 10, 0);
+        DockPanel.SetDock(this.mic, Dock.Left);
+
+        var fullButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0, Children = { this.pinFull, settings, this.collapse, close } };
+        this.fullHeader = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(fullButtons, Dock.Right);
+        ((Panel)this.fullHeader).Children.Add(fullButtons);
+        ((Panel)this.fullHeader).Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { new TextBlock { Text = "🎙", FontSize = 17, VerticalAlignment = VerticalAlignment.Center }, this.title } });
+
+        this.stateRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { this.dot, this.status } };
+
+        var badge = new Border
+        {
+            BorderBrush = new SolidColorBrush(Color.FromArgb(0x60, 255, 255, 255)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(8, 3),
+            Child = new TextBlock { Text = "Local only", FontSize = 12, Foreground = Brushes.White, Opacity = 0.8 }
         };
-        ToolTip.SetTip(close, "Hide until the next dictation");
-        close.Click += (_, _) => this.Dismiss();
-        var header = new DockPanel { LastChildFill = true };
-        DockPanel.SetDock(close, Dock.Right);
-        header.Children.Add(close);
-        header.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { this.dot, this.status } });
+        ToolTip.SetTip(badge, "Transcript preview stays on this device. Audio is not uploaded.");
+        ToolTip.SetTip(this.timerText, "Elapsed dictation time");
+        var footerGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
+        Grid.SetColumn(this.timerText, 1);
+        Grid.SetColumn(this.copyFull, 2);
+        footerGrid.Children.Add(badge);
+        footerGrid.Children.Add(this.timerText);
+        footerGrid.Children.Add(this.copyFull);
+        this.footer = footerGrid;
 
         this.panel = new Border
         {
-            Background = new SolidColorBrush(Color.FromArgb(0xE6, 0x1E, 0x1E, 0x24)),
+            Background = new SolidColorBrush(Color.FromArgb(0xE6, 0x0D, 0x11, 0x17)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33)),
+            BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(14),
-            Padding = new Thickness(14, 8, 8, 10),
+            Padding = new Thickness(14, 10, 8, 12),
             Cursor = new Cursor(StandardCursorType.SizeAll),
-            Child = new StackPanel { Spacing = 6, Children = { header, this.textView, this.visualizer } }
+            Child = new StackPanel { Spacing = 8, Children = { this.compactHeader, this.fullHeader, this.visualizer, this.stateRow, this.textView, this.footer } }
         };
         this.Content = this.panel;
 
@@ -101,14 +174,18 @@ public sealed class DictationOverlayWindow : Window
         {
             if (this.hideAtUtc != DateTime.MinValue && DateTime.UtcNow >= this.hideAtUtc)
             {
-                // The notice or the final words have been shown long enough; a pinned overlay goes back to an empty "Ready".
+                // The notice or the final words have been shown long enough; what stays on screen goes back to its idle wording.
                 this.hideAtUtc = DateTime.MinValue;
                 this.showingNotice = false;
-                this.text.Text = string.Empty;
+                this.notice = string.Empty;
+                this.transcript = string.Empty;
                 this.Refresh();
             }
         };
         this.hideTimer.Start();
+
+        this.clockTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        this.clockTimer.Tick += (_, _) => this.timerText.Text = OverlayRules.Elapsed(DateTime.UtcNow - this.listeningSince);
 
         // Only a move the user started counts: Windows runs the drag inside BeginMoveDrag, other systems after it returns.
         // Either way the drag is over once the overlay has been still for a moment, and then the new spot is saved.
@@ -129,15 +206,33 @@ public sealed class DictationOverlayWindow : Window
             if (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
             {
                 this.dragging = true;
+                this.clickCandidate = true;
+                this.pressedAt = this.Position;
                 this.BeginMoveDrag(e);
                 this.anchorSaveTimer.Stop();
                 this.anchorSaveTimer.Start();
+                // On Windows the drag runs inside BeginMoveDrag, so a press that never moved the window ends right here: that is a click.
+                if (OperatingSystem.IsWindows() && this.clickCandidate && this.Position == this.pressedAt)
+                {
+                    this.clickCandidate = false;
+                    this.OnPanelClicked();
+                }
+            }
+        };
+        this.PointerReleased += (_, _) =>
+        {
+            // Elsewhere the window manager reports the release when nothing was dragged.
+            if (!OperatingSystem.IsWindows() && this.clickCandidate && this.Position == this.pressedAt)
+            {
+                this.clickCandidate = false;
+                this.OnPanelClicked();
             }
         };
         this.PositionChanged += (_, _) =>
         {
             if (this.dragging && !this.placing)
             {
+                this.clickCandidate = false;
                 this.anchor = this.CurrentAnchor();
                 this.moved = true;
                 this.anchorSaveTimer.Stop();
@@ -158,10 +253,26 @@ public sealed class DictationOverlayWindow : Window
     /// <summary>The user moved the overlay: the bottom-center point it now grows from, in screen pixels.</summary>
     public event Action<int, int>? AnchorMoved;
 
-    public void Configure(OverlayStyle style, bool sticky, int? anchorX, int? anchorY)
+    /// <summary>The pin was toggled; the app saves it as <c>IsOverlaySticky</c>.</summary>
+    public event Action<bool>? PinChanged;
+
+    /// <summary>The gear was clicked.</summary>
+    public event Action? SettingsRequested;
+
+    /// <summary>The effective look: the configured one, unless the user expanded or collapsed it for now.</summary>
+    private OverlayStyle EffectiveStyle => this.expandedOverride switch
+    {
+        true => OverlayStyle.FullPanel,
+        false => OverlayStyle.CompactMicrophone,
+        _ => this.style
+    };
+
+    public void Configure(OverlayStyle style, bool sticky, bool hideCompactWhenIdle, int? anchorX, int? anchorY)
     {
         this.style = style;
-        this.sticky = sticky;
+        this.expandedOverride = null;
+        this.hideCompactWhenIdle = hideCompactWhenIdle;
+        this.SetPinned(sticky, raise: false);
         this.anchor = anchorX is { } x && anchorY is { } y ? new PixelPoint(x, y) : null;
         this.Refresh();
         if (this.IsVisible)
@@ -170,14 +281,37 @@ public sealed class DictationOverlayWindow : Window
         }
     }
 
+    /// <summary>The model family shown in the header and tooltip, such as "Whisper.net (GGML)".</summary>
+    public void SetBackendLabel(string label)
+    {
+        this.backend = label;
+        this.Refresh();
+    }
+
+    /// <summary>True while the wake word is listening on the idle microphone ("Wake listening", yellow).</summary>
+    public void SetWakeListening(bool listening)
+    {
+        this.wakeListening = listening;
+        this.Refresh();
+    }
+
     public void SetState(DictationState state)
     {
+        var before = this.state;
         this.state = state;
         if (state == DictationState.Listening)
         {
             this.dismissed = false;
             this.showingNotice = false;
-            this.text.Text = string.Empty;
+            this.notice = string.Empty;
+            this.transcript = string.Empty;
+            this.lastTranscript = string.Empty;
+            this.hideAtUtc = DateTime.MinValue;
+            if (before != DictationState.Listening)
+            {
+                this.listeningSince = DateTime.UtcNow;
+                this.timerText.Text = "00:00";
+            }
         }
         else if (state == DictationState.Idle)
         {
@@ -186,68 +320,227 @@ public sealed class DictationOverlayWindow : Window
             this.hideAtUtc = this.hideAtUtc > finalWords ? this.hideAtUtc : finalWords;
         }
 
-        this.Refresh();
-    }
-
-    public void SetTranscript(string transcript)
-    {
-        if (this.showingNotice)
+        this.clockTimer.IsEnabled = state == DictationState.Listening;
+        if (state == DictationState.Idle)
         {
-            return;
+            this.timerText.Text = "00:00";
         }
 
-        this.ShowText(transcript.Length > MaxShownCharacters ? "…" + transcript[^MaxShownCharacters..].TrimStart() : transcript);
         this.Refresh();
     }
 
-    public void SetLevel(double rms) => this.visualizer.SetLevel(rms);
+    public void SetTranscript(string value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            this.lastTranscript = value.Trim();
+        }
+
+        this.transcript = value.Length > MaxShownCharacters ? "…" + value[^MaxShownCharacters..].TrimStart() : value;
+        this.Refresh();
+    }
+
+    /// <summary>Remembers the final transcript so the Copy button can still copy it after dictation ended. Kept in memory only.</summary>
+    public void SetCommitted(string value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            this.lastTranscript = value.Trim();
+            this.Refresh();
+        }
+    }
+
+    public void SetLevel(double rms)
+    {
+        this.visualizer.SetLevel(rms);
+        this.mic.SetLevel(rms);
+    }
 
     public void SetNotice(string message)
     {
         // A notice is worth seeing even after the overlay was closed (for example why nothing was typed).
         this.dismissed = false;
         this.showingNotice = true;
-        this.ShowText(message);
+        this.notice = message;
         this.hideAtUtc = DateTime.UtcNow + NoticeTime;
         this.Refresh();
     }
 
-    private void Dismiss()
+    private static Button IconButton(string glyph, string tip)
     {
+        var button = new Button
+        {
+            Content = glyph,
+            Focusable = false,
+            FontSize = 13,
+            Padding = new Thickness(7, 2),
+            MinHeight = 0,
+            Background = Brushes.Transparent,
+            Foreground = Brushes.White,
+            Opacity = 0.75,
+            Cursor = new Cursor(StandardCursorType.Hand),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        ToolTip.SetTip(button, tip);
+        return button;
+    }
+
+    private static ToggleButton PinButton()
+    {
+        var pin = new ToggleButton
+        {
+            Content = "📌",
+            Focusable = false,
+            FontSize = 13,
+            Padding = new Thickness(7, 2),
+            MinHeight = 0,
+            Background = Brushes.Transparent,
+            Foreground = Brushes.White,
+            Opacity = 0.75,
+            Cursor = new Cursor(StandardCursorType.Hand),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        ToolTip.SetTip(pin, "Keep open on screen");
+        return pin;
+    }
+
+    private static Button CopyButton(string? glyph = null)
+    {
+        var copy = IconButton(glyph ?? "📋  Copy", "Copy the last transcript");
+        copy.IsEnabled = false;
+        copy.BorderBrush = new SolidColorBrush(Color.FromArgb(0x60, 255, 255, 255));
+        copy.BorderThickness = glyph is null ? new Thickness(1) : new Thickness(0);
+        return copy;
+    }
+
+    private void SetPinned(bool pinned, bool raise)
+    {
+        this.sticky = pinned;
+        this.pinFull.IsChecked = pinned;
+        this.pinCompact.IsChecked = pinned;
+        var opacity = pinned ? 1.0 : 0.75;
+        this.pinFull.Opacity = opacity;
+        this.pinCompact.Opacity = opacity;
+        if (raise)
+        {
+            this.PinChanged?.Invoke(pinned);
+        }
+
+        this.Refresh();
+    }
+
+    private void Expand()
+    {
+        this.expandedOverride = true;
+        this.Refresh();
+    }
+
+    private void Collapse()
+    {
+        this.expandedOverride = false;
+        this.Refresh();
+    }
+
+    /// <summary>A click (not a drag) on the compact microphone opens the full panel, as in the WPF overlay.</summary>
+    private void OnPanelClicked()
+    {
+        if (this.EffectiveStyle == OverlayStyle.CompactMicrophone)
+        {
+            this.Expand();
+        }
+    }
+
+    /// <summary>Like the WPF overlay, closing a panel that was opened from the compact microphone goes back to the microphone; otherwise it hides until the next dictation.</summary>
+    private void CloseClicked()
+    {
+        if (this.expandedOverride == true && this.style == OverlayStyle.CompactMicrophone && !this.sticky)
+        {
+            this.Collapse();
+            return;
+        }
+
         this.dismissed = true;
         this.showingNotice = false;
         this.Refresh();
     }
 
-    private void ShowText(string value)
+    private async Task CopyLastTranscriptAsync()
     {
-        this.text.Text = value;
-        Dispatcher.UIThread.Post(() => this.textView.ScrollToEnd(), DispatcherPriority.Background);
+        if (!OverlayRules.IsCopyable(this.lastTranscript) || this.Clipboard is not { } clipboard)
+        {
+            return;
+        }
+
+        try
+        {
+            await clipboard.SetTextAsync(this.lastTranscript);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.IO.IOException)
+        {
+            // The clipboard can be held by another program for a moment; the user can click again.
+        }
     }
+
+    private OverlayPhase Phase => this.state switch
+    {
+        DictationState.Listening => OverlayPhase.Listening,
+        DictationState.Processing => OverlayPhase.Processing,
+        _ => this.wakeListening ? OverlayPhase.WakeListening : OverlayPhase.Ready
+    };
 
     private void Refresh()
     {
-        var active = this.state != DictationState.Idle;
-        this.dot.Fill = this.state switch
+        var phase = this.Phase;
+        var color = phase switch
         {
-            DictationState.Listening => Brushes.IndianRed,
-            DictationState.Processing => Brushes.Orange,
-            _ => Brushes.SeaGreen
+            OverlayPhase.Listening => Color.FromRgb(220, 53, 69),
+            OverlayPhase.Processing => Color.FromRgb(255, 165, 0),
+            OverlayPhase.WakeListening => Color.FromRgb(255, 214, 10),
+            _ => Color.FromRgb(32, 164, 112)
         };
-        this.status.Text = this.state switch
+        this.dot.Fill = new SolidColorBrush(color);
+        this.mic.SetStateColor(color);
+        var effective = this.EffectiveStyle;
+        var full = effective == OverlayStyle.FullPanel;
+        var header = OverlayRules.Header(phase, this.backend);
+        this.status.Text = header;
+        // The compact microphone has room for one short word; the model family is in the tooltip.
+        this.compactStatus.Text = phase switch
         {
-            DictationState.Listening => "Listening",
-            DictationState.Processing => "Transcribing",
+            OverlayPhase.Listening => "Listening",
+            OverlayPhase.Processing => "Transcribing",
+            OverlayPhase.WakeListening => "Wake listening",
             _ => "Ready"
         };
+        ToolTip.SetTip(this.panel, header);
 
-        var lingering = this.hideAtUtc != DateTime.MinValue && DateTime.UtcNow < this.hideAtUtc;
-        var full = this.style == OverlayStyle.FullPanel;
+        var shown = this.showingNotice
+            ? this.notice
+            : this.transcript.Length > 0 ? this.transcript : OverlayRules.Placeholder(phase, this.backend);
+        this.text.Text = shown;
+        Dispatcher.UIThread.Post(() => this.textView.ScrollToEnd(), DispatcherPriority.Background);
+        var copyable = OverlayRules.IsCopyable(this.lastTranscript);
+        foreach (var copy in new[] { this.copyFull, this.copyCompact })
+        {
+            copy.IsEnabled = copyable;
+            ToolTip.SetTip(copy, copyable ? "Copy the last transcript" : "Nothing to copy yet: wait for a transcript");
+        }
+
         this.panel.Width = full ? FullWidth : CompactWidth;
+        this.panel.CornerRadius = new CornerRadius(full ? 12 : 30);
+        this.fullHeader.IsVisible = full;
+        this.compactHeader.IsVisible = !full;
+        this.stateRow.IsVisible = full;
+        this.visualizer.IsVisible = full;
+        this.footer.IsVisible = full;
         // Full mode keeps its text box while shown, empty or not, so the size never changes; compact mode shows text only for a notice.
         this.textView.IsVisible = full || this.showingNotice;
-        this.visualizer.SetRunning(this.state == DictationState.Listening);
-        var visible = !this.dismissed && (active || lingering || this.sticky);
+
+        this.visualizer.SetRunning(full && phase == OverlayPhase.Listening);
+        this.mic.SetRunning(!full && phase == OverlayPhase.Listening);
+
+        var lingering = this.hideAtUtc != DateTime.MinValue && DateTime.UtcNow < this.hideAtUtc;
+        var visible = OverlayRules.ShouldShow(this.dismissed, this.state != DictationState.Idle, lingering, this.sticky, this.style, this.hideCompactWhenIdle);
         if (visible && !this.IsVisible)
         {
             // Placed before it appears (measured first), so it never flashes in a corner.

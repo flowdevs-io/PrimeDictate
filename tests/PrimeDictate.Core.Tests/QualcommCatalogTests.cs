@@ -241,6 +241,59 @@ public sealed class QualcommCatalogTests : IDisposable
     }
 
     [Fact]
+    public void A_custom_model_path_resolves_a_qualcomm_package_as_in_wpf()
+    {
+        var custom = Path.Combine(this.root, "my-package");
+        Directory.CreateDirectory(custom);
+        foreach (var f in QualcommAihubWhisperCatalog.RequiredFiles)
+        {
+            File.WriteAllText(Path.Combine(custom, f), "x");
+        }
+
+        Assert.True(SpeechModelLocator.TryResolveCustom(LegacyBackend.QualcommQnn, custom, out var model, out _));
+        Assert.Equal("qualcomm-qnn:" + AihubId, model.ModelId);
+        Assert.True(model.IsCustom);
+        Assert.True(SpeechModelLocator.IsQualcommAihubWhisper(model));
+        // Only tried when the Qualcomm family is the configured one.
+        Assert.False(SpeechModelLocator.TryResolveCustom(custom, LegacyBackend.Whisper, out _, out _));
+        Assert.True(SpeechModelLocator.TryResolveCustom(custom, LegacyBackend.QualcommQnn, out _, out _));
+
+        var settings = new DictationSettings { TranscriptionBackend = LegacyBackend.QualcommQnn, ModelPath = custom };
+        Assert.Contains(SpeechModelLocator.DiscoverFor(this.root, settings, [], Snapdragon), m => m.IsCustom);
+        Assert.DoesNotContain(SpeechModelLocator.DiscoverFor(this.root, settings, [], MachineSupport.None), m => m.IsCustom);
+    }
+
+    [Fact]
+    public void A_raw_context_folder_as_a_custom_path_is_refused_with_the_wpf_explanation()
+    {
+        var raw = Path.Combine(this.root, "raw2");
+        Directory.CreateDirectory(raw);
+        foreach (var f in new[] { "encoder.bin", "decoder.bin", "metadata.json" })
+        {
+            File.WriteAllText(Path.Combine(raw, f), "x");
+        }
+
+        Assert.False(SpeechModelLocator.TryResolveCustom(LegacyBackend.QualcommQnn, raw, out _, out var problem));
+        Assert.Contains("raw qnn_context_binary", problem);
+    }
+
+    [Fact]
+    public void A_custom_qualcomm_path_is_cleared_when_the_pc_cannot_run_it()
+    {
+        var custom = Path.Combine(this.root, "pkg");
+        Directory.CreateDirectory(custom);
+        foreach (var f in QualcommAihubWhisperCatalog.RequiredFiles)
+        {
+            File.WriteAllText(Path.Combine(custom, f), "x");
+        }
+
+        var settings = new DictationSettings { TranscriptionBackend = LegacyBackend.QualcommQnn, ModelPath = custom };
+        Assert.NotNull(HardwareNormalization.Normalize(settings, MachineSupport.None, this.root));
+        Assert.Equal(LegacyBackend.Whisper, settings.TranscriptionBackend);
+        Assert.Null(settings.ModelPath);
+    }
+
+    [Fact]
     public void Nothing_selected_resolves_to_nothing()
     {
         Assert.Null(SpeechModelLocator.Resolve([], new DictationSettings()));

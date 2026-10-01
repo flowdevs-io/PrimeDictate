@@ -109,11 +109,14 @@ public static class HardwareNormalization
                 return Changed(before, settings);
             }
 
-            if (QualcommAihubWhisperCatalog.TryGetById(settings.SelectedModelId, out _))
+            if (QualcommAihubWhisperCatalog.TryGetById(settings.SelectedModelId, out _)
+                || QualcommAihubWhisperCatalog.TryResolveDirectory(settings.ModelPath, out _)
+                || QualcommAihubWhisperCatalog.IsRawContextOnlyDirectory(settings.ModelPath))
             {
                 // The package only runs on the NPU; back to Whisper on the CPU with no model chosen (the model list will offer what is installed).
                 settings.TranscriptionBackend = LegacyBackend.Whisper;
                 settings.SelectedModelId = null;
+                settings.ModelPath = null;
             }
             else
             {
@@ -164,6 +167,7 @@ public static class HardwareNormalization
         settings.TranscriptionBackend = backend;
         settings.TranscriptionComputeInterface = compute;
         settings.SelectedModelId = modelId;
+        settings.ModelPath = null;
     }
 
     private static string Describe(DictationSettings settings) =>

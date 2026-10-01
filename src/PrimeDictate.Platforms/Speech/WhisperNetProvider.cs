@@ -58,7 +58,7 @@ public sealed class WhisperNetModel : IDisposable
         if (WhisperNetRuntime.GpuWantedButNotLoaded(preference, loaded))
         {
             var message = $"GPU was requested for Whisper.net, but it loaded {loaded?.ToString() ?? "no GPU runtime"} instead. Check the NVIDIA driver (CUDA) or Vulkan support if GPU speed is expected.";
-            AppLog.Event("whisper.net", message);
+            AppLog.Event("whisper.net", message, ActivityLevel.Warning);
             WhisperNetRuntime.Notice?.Invoke(message);
         }
 

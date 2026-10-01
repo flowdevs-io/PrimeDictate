@@ -156,6 +156,69 @@ public sealed class DictationLoopTests
         Assert.True(source.Lease.Disposed);
     }
 
+    [Theory]
+    [InlineData(false, MicAccessMode.Exclusive, MicAccessMode.Shared, MicAccessMode.Shared)]
+    [InlineData(true, MicAccessMode.Exclusive, MicAccessMode.Exclusive, MicAccessMode.Exclusive)]
+    [InlineData(true, MicAccessMode.Shared, MicAccessMode.Exclusive, MicAccessMode.Shared)]
+    public async Task Exclusive_mic_is_requested_only_when_set_and_the_granted_mode_is_reported(
+        bool exclusiveSetting, MicAccessMode deviceGrants, MicAccessMode expectedRequest, MicAccessMode expectedActive)
+    {
+        var source = new FakeSource { GrantsExclusive = deviceGrants };
+        await using var controller = new DictationController(source, () => new FakeProvider("x"), new FakeGuard(), new FakeInjector());
+        controller.Options = new DictationOptions { ExclusiveMicAccess = exclusiveSetting, AutoCommitSilence = TimeSpan.Zero };
+        Assert.Null(controller.ActiveMicAccess);
+
+        await controller.ToggleAsync();
+
+        Assert.Equal(exclusiveSetting ? expectedRequest : MicAccessMode.Shared, source.RequestedAccess);
+        Assert.Equal(expectedActive, controller.ActiveMicAccess);
+        await controller.DiscardAsync();
+        Assert.Null(controller.ActiveMicAccess);
+    }
+
+    [Fact]
+    public async Task Microphone_fallback_passes_the_access_request_through()
+    {
+        var source = new FakeSource();
+        var fallback = new DefaultMicrophoneFallback(source, _ => { });
+
+        var lease = await fallback.OpenAsync(null, MicAccessMode.Exclusive, CancellationToken.None);
+
+        Assert.Equal(MicAccessMode.Exclusive, source.RequestedAccess);
+        Assert.Equal(MicAccessMode.Exclusive, lease.AccessMode);
+    }
+
+    [Fact]
+    public void Exclusive_mic_setting_imports_from_the_wpf_file_by_name()
+    {
+        var s = System.Text.Json.JsonSerializer.Deserialize<DictationSettings>("""{ "ExclusiveMicAccessWhileDictating": true }""")!;
+
+        Assert.True(s.ToOptions().ExclusiveMicAccess);
+        Assert.False(new DictationSettings().ToOptions().ExclusiveMicAccess);
+    }
+
+    [Fact]
+    public async Task Activity_feed_records_the_session_status_and_app_but_never_the_text()
+    {
+        var source = new FakeSource();
+        var commits = new List<DictationCommit>();
+        await using var controller = new DictationController(source, () => new FakeProvider("zebra crossing secret"), new FakeGuard(), new FakeInjector());
+        controller.Committed += commits.Add;
+        controller.Options = new DictationOptions { AutoCommitSilence = TimeSpan.Zero };
+
+        await controller.ToggleAsync();
+        source.Lease!.Push(Tone(1.0));
+        await controller.ToggleAsync();
+
+        var id = Assert.Single(commits).SessionId;
+        var session = Assert.Single(Diagnostics.AppLog.Feed.Sessions(), s => s.Id == id);
+        Assert.Equal(Diagnostics.DictationSessionStatus.Typed, session.Status);
+        var log = Diagnostics.AppLog.Feed.SessionEntries(id);
+        Assert.NotEmpty(log);
+        Assert.DoesNotContain(log, e => e.Message.Contains("zebra", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain("zebra", Diagnostics.ActivityText.Join(Diagnostics.AppLog.Feed.Entries()), StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public async Task Silence_commits_on_its_own_after_speech()
     {
@@ -512,15 +575,29 @@ public sealed class DictationLoopTests
     {
         public FakeLease? Lease { get; private set; }
 
+        public MicAccessMode? RequestedAccess { get; private set; }
+
+        /// <summary>What the "device" grants when exclusive is asked for (a device can refuse and open shared).</summary>
+        public MicAccessMode GrantsExclusive { get; init; } = MicAccessMode.Exclusive;
+
         public ValueTask<IReadOnlyList<AudioInputDevice>> ListDevicesAsync(CancellationToken cancellationToken) =>
             ValueTask.FromResult<IReadOnlyList<AudioInputDevice>>([new AudioInputDevice("fake", "Fake mic", true)]);
 
         public ValueTask<IAudioCaptureLease> OpenAsync(string? deviceId, CancellationToken cancellationToken) =>
-            ValueTask.FromResult<IAudioCaptureLease>(this.Lease = new FakeLease());
+            this.OpenAsync(deviceId, MicAccessMode.Shared, cancellationToken);
+
+        public ValueTask<IAudioCaptureLease> OpenAsync(string? deviceId, MicAccessMode access, CancellationToken cancellationToken)
+        {
+            this.RequestedAccess = access;
+            this.Lease = new FakeLease { AccessMode = access == MicAccessMode.Exclusive ? this.GrantsExclusive : MicAccessMode.Shared };
+            return ValueTask.FromResult<IAudioCaptureLease>(this.Lease);
+        }
     }
 
     private sealed class FakeLease : IAudioCaptureLease
     {
+        public MicAccessMode AccessMode { get; init; } = MicAccessMode.Shared;
+
         private readonly Channel<AudioFrame> frames = Channel.CreateUnbounded<AudioFrame>();
         private long offset;
         private long sequence;

@@ -12,7 +12,7 @@ namespace PrimeDictate.Platforms.Startup;
 /// Linux an XDG autostart file. <see cref="WindowsLoginDecision"/> holds the rules; <see cref="MigrateLegacyEntries"/> cleans up
 /// what the 6.0.0 WPF app created.
 /// </summary>
-public sealed class LaunchAtLogin
+public sealed partial class LaunchAtLogin
 {
     public const string WindowsValueName = "PrimeDictate";
     public const string MacLabel = "io.flowdevs.primedictate.desktop";
@@ -23,9 +23,23 @@ public sealed class LaunchAtLogin
     private readonly Func<string?> executablePath;
     private readonly IWindowsRunKey? runKey;
     private readonly IWindowsStartupFolder? startupFolder;
+    private readonly IWindowsMachineRunKey? machineRunKey;
+    private readonly Func<bool> isAdministrator;
+    private readonly Func<string, string?> elevate;
 
-    public LaunchAtLogin(string? homeOverride = null, string? xdgConfigOverride = null, Func<string?>? executable = null, IWindowsRunKey? windowsRunKey = null, IWindowsStartupFolder? windowsStartupFolder = null)
+    public LaunchAtLogin(
+        string? homeOverride = null,
+        string? xdgConfigOverride = null,
+        Func<string?>? executable = null,
+        IWindowsRunKey? windowsRunKey = null,
+        IWindowsStartupFolder? windowsStartupFolder = null,
+        IWindowsMachineRunKey? windowsMachineRunKey = null,
+        Func<bool>? isAdministrator = null,
+        Func<string, string?>? elevate = null)
     {
+        this.machineRunKey = windowsMachineRunKey ?? (OperatingSystem.IsWindows() ? new RegistryMachineRunKey() : null);
+        this.isAdministrator = isAdministrator ?? WindowsElevation.IsAdministrator;
+        this.elevate = elevate ?? this.RunElevatedHelper;
         this.home = homeOverride ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         this.xdgConfig = xdgConfigOverride ?? Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
         this.executablePath = executable ?? (() => Environment.ProcessPath);

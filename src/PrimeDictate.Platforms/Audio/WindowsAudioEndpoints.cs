@@ -29,6 +29,22 @@ internal static partial class WindowsAudioEndpoints
         }
     }
 
+    /// <summary>The friendly name of the Windows default recording device, or null when there is none.</summary>
+    [SupportedOSPlatform("windows")]
+    public static string? DefaultCaptureName()
+    {
+        try
+        {
+            using var enumerator = new MMDeviceEnumerator();
+            using var device = enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Console);
+            return device.FriendlyName;
+        }
+        catch (COMException)
+        {
+            return null;
+        }
+    }
+
     [GeneratedRegex(@"^\{0\.0\.[01]\.00000000\}\.\{[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\}$")]
     private static partial Regex EndpointId();
 }

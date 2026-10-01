@@ -22,7 +22,8 @@ public sealed class SharpHookTextInjector : ITextInjector
 
         if (OperatingSystem.IsWindows())
         {
-            WindowsSendInput.SendText(target);
+            var route = WindowsSendInput.SendText(target);
+            PrimeDictate.Core.Diagnostics.AppLog.Event("dictation", route);
             return;
         }
 

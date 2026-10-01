@@ -88,7 +88,8 @@ public sealed class App : Application
     /// <summary>Windows only: the tray's "Check for updates..." item, the automatic check on launch, and the clean-up of 6.0.0 startup entries.</summary>
     private void StartUpdates(IClassicDesktopStyleApplicationLifetime desktop, MainWindow window, DictationShell shell)
     {
-        if (!OperatingSystem.IsWindows())
+        // A run with its own data folder (PRIMEDICTATE_DATA_DIR, used for tests) is an isolated profile: it must not touch the real startup entries or update record.
+        if (!OperatingSystem.IsWindows() || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PRIMEDICTATE_DATA_DIR")))
         {
             return;
         }
@@ -99,9 +100,10 @@ public sealed class App : Application
         this.updates = new UpdateController(
             GitHubUpdateService.CurrentApplicationVersion(typeof(App).Assembly),
             Path.Combine(root, "updates"),
-            new UpdateCheckState(Path.Combine(root, "update-check.json")),
+            new UpdateCheckState(Path.Combine(root, "update-check.json"), Path.Combine(root, "settings.json")),
             launch,
-            () => this.ExitAsync(desktop, window, shell));
+            () => this.ExitAsync(desktop, window, shell),
+            () => shell.Host.Settings.CheckForUpdatesAutomatically);
         shell.UpdateMenu = this.updates;
         _ = this.updates.CheckOnLaunchAsync();
     }

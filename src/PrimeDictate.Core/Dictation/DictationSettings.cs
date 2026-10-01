@@ -28,6 +28,18 @@ public sealed class DictationSettings
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public LegacyBackend TranscriptionBackend { get; set; } = LegacyBackend.Whisper;
 
+    /// <summary>
+    /// A model placed outside the managed folder: a model folder, or for Whisper.net the ggml file. Same name as the WPF setting, so
+    /// the one the WPF app saved is carried over. When it validates for <see cref="TranscriptionBackend"/> it is the model used.
+    /// </summary>
+    public string? ModelPath { get; set; }
+
+    /// <summary>
+    /// Whether first-run setup was finished. The WPF app's flag, honoured on import. Null in a file that predates the flag, which
+    /// counts as finished (the file only exists because setup or a save happened).
+    /// </summary>
+    public bool? FirstRunCompleted { get; set; }
+
     public string? SelectedInputDeviceId { get; set; }
 
     public double InputGainMultiplier { get; set; } = 1.0;
@@ -37,6 +49,9 @@ public sealed class DictationSettings
     public bool SendEnterAfterCommit { get; set; }
 
     public bool ReturnToStartTargetOnCommit { get; set; }
+
+    /// <summary>The WPF "Request exclusive mic access while dictating" setting (same name, so it imports as is). Windows only.</summary>
+    public bool ExclusiveMicAccessWhileDictating { get; set; }
 
     public bool PlayAudioCues { get; set; } = true;
 
@@ -74,12 +89,29 @@ public sealed class DictationSettings
     public bool IsOverlaySticky { get; set; }
 
     /// <summary>
+    /// Hide the compact microphone while idle. On by default: Justin asked for the overlay to show only while dictating after his first
+    /// Windows run. Turning it off gives the WPF behavior (the compact microphone stays on screen; see <see cref="OverlayRules.ShouldShow"/>).
+    /// </summary>
+    public bool HideOverlayWhenIdle { get; set; } = true;
+
+    /// <summary>
     /// Where the user dragged the overlay: the bottom-center point it grows up from, in screen pixels. Null keeps the
     /// default, a little above the bottom middle of the primary screen. New app only (the WPF overlay did not remember).
     /// </summary>
     public int? OverlayAnchorX { get; set; }
 
     public int? OverlayAnchorY { get; set; }
+
+    /// <summary>The automatic update check on launch (at most daily). The tray's "Check for updates..." always works. Same name and meaning as the WPF setting.</summary>
+    public bool CheckForUpdatesAutomatically { get; set; } = true;
+
+    /// <summary>What clicking the tray icon does. The WPF default (double click) is kept.</summary>
+    [JsonConverter(typeof(TrayClickBehaviorConverter))]
+    public TrayClickBehavior TrayClickBehavior { get; set; } = TrayClickBehavior.DoubleClickOpensWorkspace;
+
+    /// <summary>Light, dark or the system setting. Dark by default, as the WPF app always was.</summary>
+    [JsonConverter(typeof(AppThemeConverter))]
+    public AppTheme Theme { get; set; } = AppTheme.Dark;
 
     public List<ReplacementDto> TranscriptReplacements { get; set; } = [];
 
@@ -133,6 +165,7 @@ public sealed class DictationSettings
         AutoCommitSilence = TimeSpan.FromSeconds(this.AutoCommitSilenceSeconds),
         SendEnterAfterCommit = this.SendEnterAfterCommit,
         ReturnToStartTarget = this.ReturnToStartTargetOnCommit,
+        ExclusiveMicAccess = this.ExclusiveMicAccessWhileDictating,
         TypeWithoutFocusGuard = this.TypeWithoutFocusGuard,
         Replacements = this.TranscriptReplacements
             .Where(r => !string.IsNullOrWhiteSpace(r.Find))
@@ -250,16 +283,18 @@ public sealed class DictationSettingsStore(AppDataPaths paths)
                 var settings = JsonSerializer.Deserialize<DictationSettings>(File.ReadAllText(file), JsonOptions);
                 if (settings is not null)
                 {
+                    settings.FirstRunCompleted ??= true;
+                    DictationSettingsValidator.Normalize(settings);
                     return new DictationSettingsLoad(settings, imported, null);
                 }
             }
             catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
             {
-                return new DictationSettingsLoad(new DictationSettings(), false, $"Could not read {file}: {ex.Message}. Using defaults; the file was left untouched.");
+                return new DictationSettingsLoad(new DictationSettings { FirstRunCompleted = true }, false, $"Could not read {file}: {ex.Message}. Using defaults; the file was left untouched.");
             }
         }
 
-        return new DictationSettingsLoad(new DictationSettings(), false, null);
+        return new DictationSettingsLoad(new DictationSettings { FirstRunCompleted = false }, false, null);
     }
 
     public void Save(DictationSettings settings)

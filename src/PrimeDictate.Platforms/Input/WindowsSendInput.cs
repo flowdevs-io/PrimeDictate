@@ -5,9 +5,9 @@ using System.Runtime.Versioning;
 namespace PrimeDictate.Platforms.Input;
 
 /// <summary>
-/// Windows text entry with SendInput: real virtual-key strokes where the layout has them (so apps that ignore
-/// synthetic unicode still work), unicode events otherwise. Waits for the hotkey modifiers to be released first.
-/// The WPF app's focused-edit-control insertion is not ported yet.
+/// Windows text entry in the WPF order: first insert straight into the focused edit control (EM_REPLACESEL); if
+/// that is not an edit control, SendInput with real virtual-key strokes where the layout has them (so apps that
+/// ignore synthetic unicode still work) and unicode events otherwise, after the hotkey modifiers are released.
 /// </summary>
 [SupportedOSPlatform("windows")]
 internal static class WindowsSendInput
@@ -25,7 +25,12 @@ internal static class WindowsSendInput
     private const int MaxBatch = 128;
     private static readonly TimeSpan ModifierReleaseWait = TimeSpan.FromMilliseconds(750);
 
-    public static void SendText(string text)
+    /// <summary>Returns which route typed the text, for the log line (never the text itself).</summary>
+    public static string SendText(string text) =>
+        WindowsTextEntry.Enter(text, WindowsFocusedTextControl.TryReplaceSelection, SendKeys);
+
+    /// <summary>Keyboard simulation only (the fallback route).</summary>
+    public static void SendKeys(string text)
     {
         WaitForModifiersReleased();
         var layout = ForegroundLayout();

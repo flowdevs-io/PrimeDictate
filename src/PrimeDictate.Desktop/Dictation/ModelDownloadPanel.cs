@@ -45,6 +45,18 @@ public sealed class ModelDownloadPanel : StackPanel
         this.Children.Add(this.text);
     }
 
+    /// <summary>True while a download is running.</summary>
+    public bool IsBusy => this.running is not null;
+
+    /// <summary>Starts downloading the model currently shown in the list (first-run setup does this when no model is installed, as the WPF wizard did).</summary>
+    public void StartDownload(Action installed)
+    {
+        if (!this.IsBusy)
+        {
+            _ = this.RunAsync(installed);
+        }
+    }
+
     private async Task RunAsync(Action installed)
     {
         var option = this.options[Math.Max(0, this.choice.SelectedIndex)];

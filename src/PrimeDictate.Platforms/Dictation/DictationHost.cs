@@ -91,8 +91,8 @@ public sealed class DictationHost : IAsyncDisposable
 
     public string? StartupNotice { get; }
 
-    /// <summary>True until either app has saved settings, so a WPF user upgrading is not shown setup again.</summary>
-    public bool IsFirstRun => !File.Exists(this.store.Path) && !File.Exists(this.store.WpfSettingsPath);
+    /// <summary>True until setup was finished here or in the WPF app (its <c>FirstRunCompleted</c> is honoured), so a WPF user upgrading is not shown setup again.</summary>
+    public bool IsFirstRun => this.Settings.FirstRunCompleted != true;
 
     public string ModelsFolder => System.IO.Path.Combine(this.paths.ModelsDirectory, "whisper");
 
@@ -111,7 +111,13 @@ public sealed class DictationHost : IAsyncDisposable
 
     public event Action? HistoryRequested;
 
-    public IReadOnlyList<InstalledSpeechModel> InstalledModels() => SpeechModelLocator.Discover(this.paths.ModelsDirectory);
+    public IReadOnlyList<InstalledSpeechModel> InstalledModels() => SpeechModelLocator.DiscoverFor(this.paths.ModelsDirectory, this.Settings);
+
+    /// <summary>The model id dictation wants (the custom <c>ModelPath</c> model when it is valid, else the selected one).</summary>
+    public string? WantedModelId() => SpeechModelLocator.WantedModelId(this.Settings);
+
+    /// <summary>Raises <see cref="HistoryRequested"/> as the history hotkey and voice command do (the Settings window button).</summary>
+    public void RequestHistory() => this.HistoryRequested?.Invoke();
 
     /// <summary>Downloads a catalog model into the shared managed folder (the same one the WPF app uses).</summary>
     public Task<string> DownloadModelAsync(ModelDownloadOption option, IProgress<ModelDownloadProgress>? progress, CancellationToken cancellationToken) =>
@@ -177,6 +183,13 @@ public sealed class DictationHost : IAsyncDisposable
     {
         this.Settings.OverlayAnchorX = x;
         this.Settings.OverlayAnchorY = y;
+        this.store.Save(this.Settings);
+    }
+
+    /// <summary>Saves the overlay's pin (keep it on screen), the same <c>IsOverlaySticky</c> setting the Settings checkbox changes.</summary>
+    public void RememberOverlayPinned(bool pinned)
+    {
+        this.Settings.IsOverlaySticky = pinned;
         this.store.Save(this.Settings);
     }
 
@@ -268,7 +281,7 @@ public sealed class DictationHost : IAsyncDisposable
     private ITranscriptionProvider? GetProvider()
     {
         var installed = this.InstalledModels();
-        var wanted = this.Settings.ResolveModelId();
+        var wanted = this.WantedModelId();
         var model = SpeechModelLocator.Resolve(installed, this.Settings);
         if (model is null)
         {
@@ -386,13 +399,16 @@ public sealed class DictationHost : IAsyncDisposable
         return string.Join(' ', segments.Select(s => s.Text.Trim()));
     }
 
-    /// <summary>Prefers a small model for idle listening (as the WPF app does) and falls back to the dictation model.</summary>
+    /// <summary>
+    /// Prefers a small model of the dictation model's family for idle listening (<see cref="WakeModelChooser"/>, as the WPF app does)
+    /// and falls back to the dictation model.
+    /// </summary>
     private ITranscriptionProvider? GetWakeProvider()
     {
         var installed = this.InstalledModels();
-        var small = new[] { "tiny.en", "base.en", "tiny", "base" }
-            .Select(id => installed.FirstOrDefault(m => m.Backend == LegacyBackend.Whisper && string.Equals(m.Id, id, StringComparison.OrdinalIgnoreCase)))
-            .FirstOrDefault(m => m is not null);
+        var wanted = this.Settings.ResolveModelId();
+        var dictation = installed.FirstOrDefault(m => m.ModelId == wanted) ?? installed.FirstOrDefault();
+        var small = dictation is null ? null : WakeModelChooser.ChooseSmall(installed, dictation.Backend);
         if (small is null)
         {
             return this.GetProvider();

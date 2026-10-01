@@ -175,16 +175,25 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         this.whisperModels.Clear();
         this.onnxModels.Clear();
         var choices = new List<SpeechModelChoice>();
-        foreach (var model in WhisperOnnxModelLocator.Discover(this.paths.ModelsDirectory))
+        var dictationSettings = new DictationSettingsStore(this.paths).Load().Settings;
+        foreach (var model in SpeechModelLocator.DiscoverFor(this.paths.ModelsDirectory, dictationSettings))
         {
-            this.whisperModels[model.ModelId] = model;
-            choices.Add(new SpeechModelChoice(model.ModelId, model.DisplayName, model.IsEnglishOnly ? "en" : null, false, null));
-        }
+            if (model.Backend == LegacyBackend.Whisper)
+            {
+                if (WhisperOnnxModelLocator.TryResolve(model.Directory, out var whisper))
+                {
+                    this.whisperModels[model.ModelId] = whisper;
+                    choices.Add(new SpeechModelChoice(model.ModelId, model.DisplayName, model.IsEnglishOnly ? "en" : null, false, null));
+                }
 
-        foreach (var model in SpeechModelLocator.Discover(this.paths.ModelsDirectory).Where(m => m.Backend is LegacyBackend.Parakeet or LegacyBackend.Moonshine or LegacyBackend.WhisperNet or LegacyBackend.QualcommQnn))
-        {
-            this.onnxModels[model.ModelId] = model;
-            choices.Add(new SpeechModelChoice(model.ModelId, model.DisplayName, model.IsEnglishOnly ? "en" : null, false, null));
+                continue;
+            }
+
+            if (model.Backend is LegacyBackend.Parakeet or LegacyBackend.Moonshine or LegacyBackend.WhisperNet or LegacyBackend.QualcommQnn)
+            {
+                this.onnxModels[model.ModelId] = model;
+                choices.Add(new SpeechModelChoice(model.ModelId, model.DisplayName, model.IsEnglishOnly ? "en" : null, false, null));
+            }
         }
 
         this.nemotron = FindNemotron();
@@ -241,7 +250,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     }
 
     /// <summary>The model id dictation is set to (from the WPF file or this app's settings), or null.</summary>
-    public string? DictationModelId() => new DictationSettingsStore(this.paths).Load().Settings.ResolveModelId();
+    public string? DictationModelId() => SpeechModelLocator.WantedModelId(new DictationSettingsStore(this.paths).Load().Settings);
 
     public static SpeechModelChoice RecordOnly { get; } = new(RecordOnlyProvider.Id, "Record only", null, false, null);
 

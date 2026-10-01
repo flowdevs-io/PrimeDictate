@@ -19,6 +19,20 @@ internal static class Program
             return validationExit;
         }
 
+
+        // The elevated helper the all-users launch-at-login choice starts to change one machine-wide registry value; it never starts the app.
+        if (LaunchAtLogin.TryHandleMachineCommand(args, out var machineExit))
+        {
+            return machineExit;
+        }
+
+        // The WPF app's headless switches (--enable-launch-at-login, --disable-launch-at-login and the scope flags) still work and never start the app.
+        var scriptedLogin = new LaunchAtLogin();
+        if (LaunchAtLoginCli.TryHandle(args, scriptedLogin, WindowsElevationCheck(), out var loginExit))
+        {
+            return loginExit;
+        }
+
         // --quit asks the running instance to shut down (stopping recordings and workers) and waits for it; it never starts the app.
         // A second normal launch brings the running instance forward instead of starting a second copy (two copies would both
         // register the global hotkey). The screenshot and icon-rendering runs are one-shot tools and skip this.
@@ -50,6 +64,9 @@ internal static class Program
 
         return BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }
+
+    private static bool WindowsElevationCheck() =>
+        OperatingSystem.IsWindows() && new System.Security.Principal.WindowsPrincipal(System.Security.Principal.WindowsIdentity.GetCurrent()).IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
 
     private static void LogCrash(string kind, Exception? ex)
     {

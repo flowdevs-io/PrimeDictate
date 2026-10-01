@@ -16,14 +16,50 @@ public static class AppLog
     /// <summary>Where the log goes. Tests point it at a temporary folder.</summary>
     public static string Directory { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PrimeDictate", "logs");
 
+    /// <summary>The in-memory feed behind the Dictation activity view; every call below also lands here.</summary>
+    public static ActivityFeed Feed { get; } = new();
+
     public static string FilePath => Path.Combine(Directory, "app.log");
 
+    /// <summary>
+    /// Raised (on the thread that logged) whenever an error is logged by <see cref="Fault"/> or <see cref="Error"/>, so the tray can show its
+    /// "needs attention" icon for a while, as the WPF app did on any error-level log line. Carries no text.
+    /// </summary>
+    public static event Action? ErrorLogged;
+
     /// <summary>Records an exception with where it happened.</summary>
-    public static void Fault(string source, Exception exception) =>
+    public static void Fault(string source, Exception exception, Guid? sessionId = null)
+    {
+        Feed.Add(ActivityLevel.Error, source, $"{exception.GetType().FullName}: {Cut(exception.Message, MaxMessage)}", sessionId);
         Write($"[{source}] {exception.GetType().FullName}: {Cut(exception.Message, MaxMessage)}{Environment.NewLine}{Cut(exception.StackTrace ?? string.Empty, MaxStack)}");
+        RaiseErrorLogged();
+    }
+
+    /// <summary>Records a failure that is not an exception (a listener that gave up, for example). Never pass recognized text.</summary>
+    public static void Error(string source, string message, Guid? sessionId = null) => Event(source, message, ActivityLevel.Error, sessionId);
+
+    private static void RaiseErrorLogged()
+    {
+        try
+        {
+            ErrorLogged?.Invoke();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
+        {
+            // A subscriber that is shutting down must not break the code that logged.
+        }
+    }
 
     /// <summary>Records something the app observed, such as a timeout. Never pass recognized text.</summary>
-    public static void Event(string source, string message) => Write($"[{source}] {Cut(message, MaxMessage)}");
+    public static void Event(string source, string message, ActivityLevel level = ActivityLevel.Info, Guid? sessionId = null)
+    {
+        Feed.Add(level, source, Cut(message, MaxMessage), sessionId);
+        Write($"[{source}] {Cut(message, MaxMessage)}");
+        if (level == ActivityLevel.Error)
+        {
+            RaiseErrorLogged();
+        }
+    }
 
     private static string Cut(string text, int max) => text.Length <= max ? text : text[..max] + "…";
 
