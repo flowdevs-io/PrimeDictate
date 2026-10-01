@@ -54,6 +54,7 @@ public sealed class DictationController : IAsyncDisposable
     private readonly IVoiceCommandProcessor voiceCommands;
     private readonly TimeProvider time;
     private readonly ITranscriptRewriter? rewriter;
+    private readonly IVoiceShellCommandRunner? shellRunner;
     private readonly SemaphoreSlim gate = new(1, 1);
     private volatile DictationOptions options = new DictationOptions().Normalized();
     private Session? session;
@@ -66,7 +67,8 @@ public sealed class DictationController : IAsyncDisposable
         MicrophoneCoordinator? microphone = null,
         IVoiceCommandProcessor? voiceCommands = null,
         TimeProvider? time = null,
-        ITranscriptRewriter? rewriter = null)
+        ITranscriptRewriter? rewriter = null,
+        IVoiceShellCommandRunner? shellRunner = null)
     {
         this.audioSource = audioSource;
         this.providerSource = providerSource;
@@ -76,6 +78,7 @@ public sealed class DictationController : IAsyncDisposable
         this.voiceCommands = voiceCommands ?? NoVoiceCommands.Instance;
         this.time = time ?? TimeProvider.System;
         this.rewriter = rewriter;
+        this.shellRunner = shellRunner;
     }
 
     public event Action<DictationState>? StateChanged;
@@ -95,6 +98,9 @@ public sealed class DictationController : IAsyncDisposable
     public DictationState State { get; private set; }
 
     public bool IsRecording => Volatile.Read(ref this.session) is not null;
+
+    /// <summary>How the microphone is open right now (Exclusive or Shared), or null when dictation is not recording.</summary>
+    public MicAccessMode? ActiveMicAccess => Volatile.Read(ref this.session)?.Capture.AccessMode;
 
     public DictationOptions Options
     {
@@ -179,7 +185,11 @@ public sealed class DictationController : IAsyncDisposable
                 micLease = await this.microphone.AcquireAsync(MicrophoneOwner, CancellationToken.None).ConfigureAwait(false);
             }
 
-            capture = await this.audioSource.OpenAsync(opts.InputDeviceId, CancellationToken.None).ConfigureAwait(false);
+            capture = await this.audioSource.OpenAsync(
+                opts.InputDeviceId,
+                opts.ExclusiveMicAccess ? MicAccessMode.Exclusive : MicAccessMode.Shared,
+                CancellationToken.None).ConfigureAwait(false);
+            Diagnostics.AppLog.Event("dictation", $"Microphone opened ({capture.AccessMode.ToString().ToLowerInvariant()} access{(opts.ExclusiveMicAccess && capture.AccessMode == MicAccessMode.Shared ? ", exclusive was requested" : string.Empty)}).");
         }
         catch (Exception ex) when (ex is MicrophoneBusyException or AudioSourceException)
         {
@@ -188,7 +198,7 @@ public sealed class DictationController : IAsyncDisposable
                 await micLease.DisposeAsync().ConfigureAwait(false);
             }
 
-            Diagnostics.AppLog.Event("dictation", $"Dictation did not start: {ex.Message}");
+            Diagnostics.AppLog.Event("dictation", $"Dictation did not start: {ex.Message}", Diagnostics.ActivityLevel.Error);
             this.Notice?.Invoke(ex.Message);
             return;
         }
@@ -197,7 +207,8 @@ public sealed class DictationController : IAsyncDisposable
         var s = new Session(capture, micLease, provider, target, new SpeechActivityTracker(this.time), this.time.GetUtcNow().UtcDateTime);
         s.Tracker.LevelUpdated += level => this.LevelChanged?.Invoke(level);
         this.session = s;
-        s.Reader = Task.Run(() => this.ReadLoopAsync(s));
+        Track(s, Diagnostics.DictationSessionStatus.Listening, "Listening started.");
+        s.Reader =Task.Run(() => this.ReadLoopAsync(s));
         s.Preview = Task.Run(() => this.PreviewLoopAsync(s));
         this.SetState(DictationState.Listening);
     }
@@ -220,10 +231,12 @@ public sealed class DictationController : IAsyncDisposable
         {
             if (!commit || s.DiscardRequested)
             {
+                Track(s, Diagnostics.DictationSessionStatus.Discarded, $"Discarded ({reason}).");
                 this.SetState(DictationState.Idle);
                 return;
             }
 
+            Track(s, Diagnostics.DictationSessionStatus.Processing, $"Stopped ({reason}); transcribing.");
             this.SetState(DictationState.Processing);
             await this.FinishAsync(s, reason).ConfigureAwait(false);
         }
@@ -414,6 +427,7 @@ public sealed class DictationController : IAsyncDisposable
         var duration = TimeSpan.FromSeconds(audio.Length / (double)SampleRate);
         if (audio.Length == 0 || !s.Tracker.HasSpeechEvidence(audio))
         {
+            Track(s, Diagnostics.DictationSessionStatus.Discarded, "No speech was heard; nothing typed.");
             return;
         }
 
@@ -421,7 +435,19 @@ public sealed class DictationController : IAsyncDisposable
         try
         {
             var raw = await this.RecognizeAsync(s.Provider, audio, CancellationToken.None).ConfigureAwait(false);
-            var match = this.voiceCommands.Apply(TranscriptPostProcessor.RemoveTrailingSilenceArtifact(raw, reason.Contains("silence", StringComparison.Ordinal)));
+            var spoken = TranscriptPostProcessor.RemoveTrailingSilenceArtifact(raw, reason.Contains("silence", StringComparison.Ordinal));
+            // Shell commands are matched only here, in the final transcript of a dictation, and only when a runner exists.
+            var match = this.shellRunner is null ? this.voiceCommands.Apply(spoken) : this.voiceCommands.ApplyFinal(spoken);
+            if (match.Shell is { } shell && this.shellRunner is not null)
+            {
+                // Stop ends the dictation. Continue with nothing left after the phrase also ends it, silently (as the WPF app did):
+                // the command was the whole utterance, so "No text was recognized" would be wrong.
+                if (!await this.RunShellCommandAsync(s, shell, this.shellRunner, duration).ConfigureAwait(false) || string.IsNullOrWhiteSpace(match.CleanedText))
+                {
+                    return;
+                }
+            }
+
             if (match.StopRequested)
             {
                 return;
@@ -436,6 +462,7 @@ public sealed class DictationController : IAsyncDisposable
         }
         catch (Exception ex)
         {
+            Track(s, Diagnostics.DictationSessionStatus.Error, $"Transcription failed: {ex.GetType().Name}.", Diagnostics.ActivityLevel.Error);
             this.Notice?.Invoke($"Transcription failed: {ex.Message}");
             return;
         }
@@ -447,6 +474,7 @@ public sealed class DictationController : IAsyncDisposable
 
         if (transcript.Length == 0)
         {
+            Track(s, Diagnostics.DictationSessionStatus.NotTyped, "No text was recognized.", Diagnostics.ActivityLevel.Warning);
             this.Notice?.Invoke("No text was recognized. Try raising input gain or choosing a different model.");
             return;
         }
@@ -456,6 +484,12 @@ public sealed class DictationController : IAsyncDisposable
         string? rewritePrompt = null;
         if (this.rewriter is not null)
         {
+            if (this.rewriter.IsActive)
+            {
+                // The overlay shows this status while the model works, as the WPF app did.
+                this.PartialTranscript?.Invoke(s.Id, RewriteStatusText);
+            }
+
             try
             {
                 var rewrite = await this.rewriter.RewriteAsync(transcript, s.Target, CancellationToken.None).ConfigureAwait(false);
@@ -482,8 +516,19 @@ public sealed class DictationController : IAsyncDisposable
         if (result.Status != DictationDeliveryStatus.Injected)
         {
             // Why it was not typed (the guard's or the injector's reason); never the transcript itself.
-            Diagnostics.AppLog.Event("dictation", $"Not typed ({result.Status}): {result.Error}");
+            Diagnostics.AppLog.Event("dictation", $"Not typed ({result.Status}): {result.Error}", Diagnostics.ActivityLevel.Warning, s.Id);
         }
+
+        Track(
+            s,
+            result.Status switch
+            {
+                DictationDeliveryStatus.Injected => Diagnostics.DictationSessionStatus.Typed,
+                DictationDeliveryStatus.FailedToInject => Diagnostics.DictationSessionStatus.Error,
+                DictationDeliveryStatus.Discarded => Diagnostics.DictationSessionStatus.Discarded,
+                _ => Diagnostics.DictationSessionStatus.NotTyped
+            },
+            result.Status == DictationDeliveryStatus.Injected ? $"Typed ({duration.TotalSeconds:0.0} s of audio)." : null);
 
         this.Committed?.Invoke(new DictationCommit(
             s.Id,
@@ -498,6 +543,87 @@ public sealed class DictationController : IAsyncDisposable
             result.EnterSent,
             original,
             rewritePrompt));
+    }
+
+    /// <summary>Updates the session row in the activity feed and, when there is a message, adds it to the session's log. Never text.</summary>
+    private static void Track(Session s, Diagnostics.DictationSessionStatus status, string? message, Diagnostics.ActivityLevel level = Diagnostics.ActivityLevel.Info)
+    {
+        var feed = Diagnostics.AppLog.Feed;
+        feed.SetSession(s.Id, DateTime.UtcNow, status, s.Target?.AppName ?? s.Target?.DisplayName);
+        if (message is not null)
+        {
+            feed.Add(level, "dictation", message, s.Id);
+        }
+    }
+
+    /// <summary>What the overlay shows while a rewrite runs (the WPF text).</summary>
+    public const string RewriteStatusText = "[AI is processing transcript...]";
+
+    private static readonly TimeSpan ShellTypeTargetWait = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan ShellTypePollInterval = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>
+    /// Runs the user's command for a matched phrase. The command string is the one saved in settings; nothing from the
+    /// transcript reaches it. Returns true when the rest of the dictation should go on to be typed: only for
+    /// <see cref="VoiceShellCommandCompletionBehavior.Continue"/> and only when words remain after the phrase was removed.
+    /// </summary>
+    private async Task<bool> RunShellCommandAsync(Session s, VoiceShellCommandInvocation invocation, IVoiceShellCommandRunner runner, TimeSpan duration)
+    {
+        var command = invocation.Command;
+        var phrase = command.Phrase.Trim();
+        var label = $"Voice command: {phrase}";
+        DictationDeliveryStatus status;
+        string? error = null;
+        try
+        {
+            var result = runner.Run(command);
+            Diagnostics.AppLog.Event("dictation", $"Voice command ran: \"{phrase}\" (pid {result.ProcessId?.ToString() ?? "unknown"}).", sessionId: s.Id);
+            Track(s, Diagnostics.DictationSessionStatus.VoiceCommand, null);
+            if (!string.IsNullOrWhiteSpace(invocation.TextToType))
+            {
+                if (!await this.WaitForShellTypeTargetAsync(s.Target).ConfigureAwait(false))
+                {
+                    throw new InvalidOperationException("Chained typing skipped because the command did not move focus away from the starting window.");
+                }
+
+                this.injector.TypeText(invocation.TextToType);
+            }
+
+            status = DictationDeliveryStatus.CommandExecuted;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            status = DictationDeliveryStatus.CommandFailed;
+            error = ex.Message;
+            Diagnostics.AppLog.Event("dictation", $"Voice command failed: \"{phrase}\": {ex.Message}", Diagnostics.ActivityLevel.Error, s.Id);
+            Track(s, Diagnostics.DictationSessionStatus.Error, null);
+            this.Notice?.Invoke($"Voice command \"{phrase}\" failed: {ex.Message}");
+        }
+
+        this.Committed?.Invoke(new DictationCommit(
+            s.Id, this.time.GetUtcNow().UtcDateTime, label, status, "Command Prompt", "Command Prompt", "Command Prompt", error, duration, EnterSent: false));
+        return status == DictationDeliveryStatus.CommandExecuted && command.CompletionBehavior == VoiceShellCommandCompletionBehavior.Continue;
+    }
+
+    private async Task<bool> WaitForShellTypeTargetAsync(IForegroundTarget? start)
+    {
+        if (start is null)
+        {
+            await Task.Delay(ShellTypePollInterval, this.time).ConfigureAwait(false);
+            return true;
+        }
+
+        var deadline = this.time.GetUtcNow() + ShellTypeTargetWait;
+        while (this.time.GetUtcNow() < deadline)
+        {
+            await Task.Delay(ShellTypePollInterval, this.time).ConfigureAwait(false);
+            if (!start.IsStillForeground())
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static async Task<string> RecognizeAsync(ITranscriptionProvider provider, ReadOnlyMemory<float> samples, string? language, CancellationToken ct)

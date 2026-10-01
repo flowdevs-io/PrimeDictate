@@ -393,13 +393,17 @@ public enum VoiceShellCommandCompletionBehavior
     Continue = 1
 }
 
-/// <summary>A user-defined phrase that runs a command. Matching is ported; running is not (opt-in, dictation only, later).</summary>
+/// <summary>
+/// A user-defined phrase that runs a command. The command text comes only from the user's settings, never from what
+/// was said. Dictation only; transcription mode has no hook for it.
+/// </summary>
 public sealed class VoiceShellCommand
 {
     public bool Enabled { get; set; } = true;
 
     public string Phrase { get; set; } = "";
 
+    [System.Text.Json.Serialization.JsonConverter(typeof(VoiceShellCompletionConverter))]
     public VoiceShellCommandCompletionBehavior CompletionBehavior { get; set; } = VoiceShellCommandCompletionBehavior.Stop;
 
     public string Command { get; set; } = "";

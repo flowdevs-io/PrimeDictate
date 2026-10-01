@@ -281,16 +281,19 @@ PrimeDictate normalizes unsupported saved Whisper.net hardware settings at start
 - GPU appears only when supported local Whisper.net GPU runtime support is present.
 - NPU appears only for supported GGML models with the required sidecars.
 
-### Experimental Qualcomm QNN path
+### Experimental Qualcomm QNN path (native Windows ARM64; in the ARM64 installer)
 
-The Qualcomm backend is experimental and intended for native Windows ARM64 builds on supported Snapdragon X devices.
+The Qualcomm backend is experimental and intended for native Windows ARM64 builds on supported Snapdragon X devices. It is in the app that the installers ship (6.1.0 and later) as well as in the legacy WPF app. The models are offered in Settings and first-run setup only where they can run; on any other PC they are hidden, and a saved Qualcomm choice falls back to Whisper or Moonshine on the CPU.
 
 It requires:
 
 - Windows ARM64 process/runtime
-- QNN runtime assets in the build output
+- QNN runtime assets in the build output (the ARM64 installer carries them)
 - Qualcomm AI Hub Whisper wrapper package files, including `encoder.onnx`, `decoder.onnx`, context binaries, metadata, and tokenizer files
 - Successful EPContext session creation without CPU fallback when strict validation is requested
+- For Moonshine on the NPU, the prepared `qnn` subfolder of the Moonshine model (see `scripts/qnn/quantize_moonshine_for_qnn.py`); such a model is then listed again as "(Qualcomm NPU)"
+
+Developer validation commands (print a JSON report, optionally also write it to a file; they never start the app): `--qnn-aihub-whisper-transcribe <model-dir> <wav> [out]`, `--qnn-whisper-smoke <model-dir> <Cpu|Npu> [out]`, `--qnn-whisper-proof <model-dir> [true|false] [out]`, `--qnn-smoke <model-dir> <Cpu|Npu> [out]`, `--qnn-proof <model-dir> [true|false] [out]`.
 
 Maintainer environment knobs:
 
@@ -345,7 +348,7 @@ For installer-specific details, see `installer/README.md`.
 
 Tagged pushes that match `vX.Y.Z` build the app, produce release assets, and publish to GitHub Releases. Merging into `main` alone publishes nothing.
 
-The release pipeline packages the Windows WPF app (`PrimeDictate.exe`). The cross-platform app under `src/` is in the repository but not in the installers yet.
+From 6.1.0 the release pipeline packages the Avalonia app in `src/PrimeDictate.Desktop` as `PrimeDictate.exe`: one app for dictation and for transcription and meetings. The WPF app at the repository root is legacy: it still builds but is not packaged. The Qualcomm QNN path described above is in both apps.
 
 In practice, the release pipeline keeps three public distribution channels aligned:
 

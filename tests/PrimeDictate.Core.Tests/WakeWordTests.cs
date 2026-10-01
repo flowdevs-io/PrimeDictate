@@ -86,6 +86,56 @@ public sealed class WakeWordTests
     }
 
     [Fact]
+    public void Disable_marks_failure_once_and_turning_the_wake_word_off_clears_it()
+    {
+        var listener = new WakeWordListener(new Source(), (_, _) => ValueTask.FromResult(string.Empty));
+        var changes = 0;
+        var notices = new List<string>();
+        listener.FailedChanged += () => changes++;
+        listener.Notice += notices.Add;
+        listener.Configure(true, "okay computer", null, 1.0);
+
+        listener.Disable("no model");
+        listener.Disable("no model");
+        Assert.True(listener.HasFailed);
+        Assert.False(listener.IsActive);
+        Assert.Equal(1, changes);
+
+        listener.Configure(false, "okay computer", null, 1.0);
+        Assert.False(listener.HasFailed);
+        Assert.Equal(2, changes);
+    }
+
+    [Fact]
+    public async Task A_recovering_start_clears_the_failure_and_raises_the_change()
+    {
+        var source = new Source();
+        await using var listener = new WakeWordListener(source, (_, _) => ValueTask.FromResult(string.Empty));
+        var changes = 0;
+        listener.FailedChanged += () => changes++;
+        listener.Configure(true, "okay computer", null, 1.0);
+        listener.Disable("no model");
+        listener.Configure(true, "okay computer", null, 1.0);
+        await listener.EnsureRunningAsync();
+        Assert.False(listener.HasFailed);
+        Assert.Equal(2, changes);
+    }
+
+    [Fact]
+    public async Task A_failing_recognizer_is_reported_once_not_every_window()
+    {
+        var source = new Source();
+        var notices = 0;
+        await using var listener = new WakeWordListener(source, (_, _) => throw new InvalidOperationException("no model"));
+        listener.Notice += _ => Interlocked.Increment(ref notices);
+        listener.Configure(true, "okay computer", null, 1.0);
+        await listener.EnsureRunningAsync();
+        source.Lease!.Push(Tone(1.5));
+        await Task.Delay(3_500);
+        Assert.Equal(1, notices);
+    }
+
+    [Fact]
     public async Task Disabled_listener_never_opens_the_microphone()
     {
         var source = new Source();

@@ -20,9 +20,10 @@ public sealed class DictationHost : IAsyncDisposable
     private readonly IHotkeySource? hotkeys;
     private readonly IForegroundTargetGuard guard;
     private readonly object providerSync = new();
-    private SherpaOfflineProvider? provider;
-    private SherpaOfflineProvider? wakeProvider;
+    private ITranscriptionProvider? provider;
+    private ITranscriptionProvider? wakeProvider;
     private string? wakeProviderId;
+    private string? wakeKey;
     private string? providerId;
     private string? lastModelNotice;
     private bool disposed;
@@ -43,11 +44,15 @@ public sealed class DictationHost : IAsyncDisposable
         this.hotkeys = hotkeys;
         this.guard = guard ?? PlatformInput.CreateForegroundGuard();
         var load = this.store.Load();
+        // A setup carried over from another PC (a Snapdragon laptop's Qualcomm model, a GPU choice here without a GPU) is made to fit this one, in memory only.
+        var fitted = HardwareNormalization.Normalize(load.Settings, MachineSupport.Current, paths.ModelsDirectory);
         this.Settings = load.Settings;
-        this.StartupNotice = load.Warning;
+        this.StartupNotice = load.Warning is null ? fitted : fitted is null ? load.Warning : $"{load.Warning} {fitted}";
         if (audio is null)
         {
+            // As in the WPF app, hotkeys are bound without a microphone: the history hotkey still works and the dictation hotkey says why it cannot.
             this.UnavailableReason = "No microphone capture is available on this system.";
+            this.BindHotkeys();
             return;
         }
 
@@ -59,7 +64,8 @@ public sealed class DictationHost : IAsyncDisposable
             injector ?? new SharpHookTextInjector(),
             microphone,
             voiceCommands ?? new VoiceCommandProcessor(() => this.Settings.ToVoiceCommandOptions()),
-            rewriter: new OllamaRewriter(() => this.Settings.ToOllamaOptions(), report: message => this.Notice?.Invoke(message)));
+            rewriter: new OllamaRewriter(() => this.Settings.ToOllamaOptions(), report: message => this.Notice?.Invoke(message)),
+            shellRunner: new ProcessVoiceShellCommandRunner());
         this.Controller.Notice += message => this.Notice?.Invoke(message);
         this.Controller.HistoryRequested += () => this.HistoryRequested?.Invoke();
         this.Controller.Committed += this.OnCommitted;
@@ -68,7 +74,13 @@ public sealed class DictationHost : IAsyncDisposable
         microphone.Register(this.Wake);
         this.Wake.Notice += message => this.Notice?.Invoke(message);
         this.Wake.WakeDetected += () => _ = Task.Run(this.StartFromWakeAsync);
+        this.wakeKey = WakeKey(this.Settings);
         this.ConfigureWake();
+        this.BindHotkeys();
+    }
+
+    private void BindHotkeys()
+    {
         if (this.hotkeys is not null)
         {
             this.hotkeys.SetBindings(this.Settings.ToBindings());
@@ -88,8 +100,8 @@ public sealed class DictationHost : IAsyncDisposable
 
     public string? StartupNotice { get; }
 
-    /// <summary>True until either app has saved settings, so a WPF user upgrading is not shown setup again.</summary>
-    public bool IsFirstRun => !File.Exists(this.store.Path) && !File.Exists(this.store.WpfSettingsPath);
+    /// <summary>True until setup was finished here or in the WPF app (its <c>FirstRunCompleted</c> is honoured), so a WPF user upgrading is not shown setup again.</summary>
+    public bool IsFirstRun => this.Settings.FirstRunCompleted != true;
 
     public string ModelsFolder => System.IO.Path.Combine(this.paths.ModelsDirectory, "whisper");
 
@@ -108,7 +120,13 @@ public sealed class DictationHost : IAsyncDisposable
 
     public event Action? HistoryRequested;
 
-    public IReadOnlyList<InstalledSpeechModel> InstalledModels() => SpeechModelLocator.Discover(this.paths.ModelsDirectory);
+    public IReadOnlyList<InstalledSpeechModel> InstalledModels() => SpeechModelLocator.DiscoverFor(this.paths.ModelsDirectory, this.Settings);
+
+    /// <summary>The model id dictation wants (the custom <c>ModelPath</c> model when it is valid, else the selected one).</summary>
+    public string? WantedModelId() => SpeechModelLocator.WantedModelId(this.Settings);
+
+    /// <summary>Raises <see cref="HistoryRequested"/> as the history hotkey and voice command do (the Settings window button).</summary>
+    public void RequestHistory() => this.HistoryRequested?.Invoke();
 
     /// <summary>Downloads a catalog model into the shared managed folder (the same one the WPF app uses).</summary>
     public Task<string> DownloadModelAsync(ModelDownloadOption option, IProgress<ModelDownloadProgress>? progress, CancellationToken cancellationToken) =>
@@ -156,10 +174,10 @@ public sealed class DictationHost : IAsyncDisposable
             this.Controller.Options = settings.ToOptions();
         }
 
-        this.ConfigureWake();
         if (this.Wake is not null)
         {
-            _ = settings.EnableWakeWord && this.Controller?.IsRecording != true ? this.Wake.EnsureRunningAsync() : this.Wake.StopAsync();
+            // As the WPF app does on save: stop, reconfigure, then start again, so a new microphone (or a different wake model) takes effect now.
+            _ = this.ReconfigureWakeAsync();
         }
 
         this.hotkeys?.SetBindings(settings.ToBindings());
@@ -169,11 +187,54 @@ public sealed class DictationHost : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// What the wake listener was opened with: microphone, wake model and gain-independent model choice. The Settings window edits the live
+    /// settings object in place, so the previous values are remembered as this key rather than compared against a copy.
+    /// </summary>
+    public static string WakeKey(DictationSettings settings) =>
+        $"{(string.IsNullOrWhiteSpace(settings.SelectedInputDeviceId) ? string.Empty : settings.SelectedInputDeviceId)}|{settings.TranscriptionBackend}|{settings.ResolveModelId()}|{settings.ModelPath}";
+
+    private async Task ReconfigureWakeAsync()
+    {
+        var wake = this.Wake;
+        if (wake is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var key = WakeKey(this.Settings);
+            var restart = Interlocked.Exchange(ref this.wakeKey, key) != key;
+            if (restart || !this.Settings.EnableWakeWord || this.Controller?.IsRecording == true)
+            {
+                await wake.StopAsync().ConfigureAwait(false);
+            }
+
+            this.ConfigureWake();
+            if (this.Settings.EnableWakeWord && this.Controller?.IsRecording != true)
+            {
+                await wake.EnsureRunningAsync().ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            Core.Diagnostics.AppLog.Fault("wake-word", ex);
+        }
+    }
+
     /// <summary>Saves where the user dragged the overlay (the new app's settings file only).</summary>
     public void RememberOverlayAnchor(int x, int y)
     {
         this.Settings.OverlayAnchorX = x;
         this.Settings.OverlayAnchorY = y;
+        this.store.Save(this.Settings);
+    }
+
+    /// <summary>Saves the overlay's pin (keep it on screen), the same <c>IsOverlaySticky</c> setting the Settings checkbox changes.</summary>
+    public void RememberOverlayPinned(bool pinned)
+    {
+        this.Settings.IsOverlaySticky = pinned;
         this.store.Save(this.Settings);
     }
 
@@ -212,7 +273,7 @@ public sealed class DictationHost : IAsyncDisposable
             await this.Wake.DisposeAsync().ConfigureAwait(false);
         }
 
-        SherpaOfflineProvider?[] old;
+        ITranscriptionProvider?[] old;
         lock (this.providerSync)
         {
             old = [this.provider, this.wakeProvider];
@@ -232,10 +293,6 @@ public sealed class DictationHost : IAsyncDisposable
     private void OnHotkey(HotkeyAction action)
     {
         var controller = this.Controller;
-        if (controller is null)
-        {
-            return;
-        }
 
         // Runs on the hook thread: offload everything.
         _ = Task.Run(async () =>
@@ -245,10 +302,20 @@ public sealed class DictationHost : IAsyncDisposable
                 switch (action)
                 {
                     case HotkeyAction.ToggleDictation:
+                        if (controller is null)
+                        {
+                            this.Notice?.Invoke(this.UnavailableReason ?? "Dictation is unavailable.");
+                            break;
+                        }
+
                         await controller.ToggleAsync().ConfigureAwait(false);
                         break;
                     case HotkeyAction.EmergencyStop:
-                        await controller.DiscardAsync().ConfigureAwait(false);
+                        if (controller is not null)
+                        {
+                            await controller.DiscardAsync().ConfigureAwait(false);
+                        }
+
                         break;
                     case HotkeyAction.ShowHistory:
                         this.HistoryRequested?.Invoke();
@@ -265,8 +332,8 @@ public sealed class DictationHost : IAsyncDisposable
     private ITranscriptionProvider? GetProvider()
     {
         var installed = this.InstalledModels();
-        var wanted = this.Settings.ResolveModelId();
-        var model = installed.FirstOrDefault(m => m.ModelId == wanted);
+        var wanted = this.WantedModelId();
+        var model = SpeechModelLocator.Resolve(installed, this.Settings);
         if (model is null)
         {
             var missing = $"The selected {this.Settings.TranscriptionBackend} model ({this.Settings.SelectedModelId}) is not installed";
@@ -288,11 +355,12 @@ public sealed class DictationHost : IAsyncDisposable
 
         lock (this.providerSync)
         {
-            if (this.provider is null || this.providerId != model.ModelId)
+            // Keyed on id and folder: a custom ModelPath can point at another folder of the same model id.
+            if (this.provider is null || this.providerId != model.ProviderKey)
             {
                 _ = this.provider?.DisposeAsync();
                 this.provider = CreateProvider(model);
-                this.providerId = model.ModelId;
+                this.providerId = model.ProviderKey;
             }
 
             return this.provider;
@@ -342,17 +410,23 @@ public sealed class DictationHost : IAsyncDisposable
         }
     }
 
-    private static SherpaOfflineProvider CreateProvider(InstalledSpeechModel model) => model.Backend switch
-    {
-        LegacyBackend.Parakeet => new SherpaParakeetProvider(model),
-        LegacyBackend.Moonshine => new SherpaMoonshineProvider(model),
-        _ => new SherpaWhisperProvider(WhisperOnnxModelLocator.TryResolve(model.Directory, out var whisper)
-            ? whisper
-            : throw new FileNotFoundException($"The Whisper model folder is incomplete: {model.Directory}"))
-    };
+    private static ITranscriptionProvider CreateProvider(InstalledSpeechModel model) => SpeechProviders.Create(model);
 
-    private void ConfigureWake() =>
-        this.Wake?.Configure(this.Settings.EnableWakeWord, this.Settings.WakeWordPhrase, this.Settings.SelectedInputDeviceId, this.Settings.InputGainMultiplier);
+    private void ConfigureWake()
+    {
+        if (this.Wake is not { } wake)
+        {
+            return;
+        }
+
+        var settings = this.Settings;
+        wake.Configure(settings.EnableWakeWord, settings.WakeWordPhrase, settings.SelectedInputDeviceId, settings.InputGainMultiplier);
+        if (settings.EnableWakeWord && this.ResolveWakeModel() is null)
+        {
+            // Checked once here, as the WPF app did, instead of failing on every stretch of speech: no model means no listening and one notice.
+            wake.Disable("Wake word listening needs a speech model. Download one in Settings.");
+        }
+    }
 
     private async Task StartFromWakeAsync()
     {
@@ -390,25 +464,32 @@ public sealed class DictationHost : IAsyncDisposable
         return string.Join(' ', segments.Select(s => s.Text.Trim()));
     }
 
-    /// <summary>Prefers a small model for idle listening (as the WPF app does) and falls back to the dictation model.</summary>
-    private ITranscriptionProvider? GetWakeProvider()
+    /// <summary>
+    /// The model wake listening uses: a small one of the dictation model's family when installed (<see cref="WakeModelChooser"/>, as the WPF app does),
+    /// else the dictation model, else null when nothing is installed.
+    /// </summary>
+    private InstalledSpeechModel? ResolveWakeModel()
     {
         var installed = this.InstalledModels();
-        var small = new[] { "tiny.en", "base.en", "tiny", "base" }
-            .Select(id => installed.FirstOrDefault(m => m.Backend == LegacyBackend.Whisper && string.Equals(m.Id, id, StringComparison.OrdinalIgnoreCase)))
-            .FirstOrDefault(m => m is not null);
-        if (small is null)
+        var dictation = SpeechModelLocator.Resolve(installed, this.Settings) ?? installed.FirstOrDefault();
+        return (dictation is null ? null : WakeModelChooser.ChooseSmall(installed, dictation.Backend)) ?? dictation;
+    }
+
+    private ITranscriptionProvider? GetWakeProvider()
+    {
+        var model = this.ResolveWakeModel();
+        if (model is null)
         {
-            return this.GetProvider();
+            return null;
         }
 
         lock (this.providerSync)
         {
-            if (this.wakeProvider is null || this.wakeProviderId != small.ModelId)
+            if (this.wakeProvider is null || this.wakeProviderId != model.ProviderKey)
             {
                 _ = this.wakeProvider?.DisposeAsync();
-                this.wakeProvider = CreateProvider(small);
-                this.wakeProviderId = small.ModelId;
+                this.wakeProvider = CreateProvider(model);
+                this.wakeProviderId = model.ProviderKey;
             }
 
             return this.wakeProvider;

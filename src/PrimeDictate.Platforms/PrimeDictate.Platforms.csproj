@@ -14,7 +14,16 @@
     <!-- WASAPI loopback for Windows system-audio capture; the adapter is guarded by OperatingSystem.IsWindows(). -->
     <PackageReference Include="NAudio.Wasapi" Version="2.3.0" />
     <PackageReference Include="org.k2fsa.sherpa.onnx" Version="1.13.0" />
+    <!-- Qualcomm NPU (QNN HTP): the ONNX Runtime managed API plus the win-arm64 QNN natives. It does not bring natives for any other RID, so it
+         cannot collide with sherpa-onnx on x64, Linux or macOS. On win-arm64 the app project copies these natives over sherpa-onnx's onnxruntime.dll. -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.QNN" Version="$(OnnxRuntimeVersion)" />
     <PackageReference Include="SharpHook" Version="7.1.1" />
+    <!-- Whisper.net (whisper.cpp / ggml). Same versions as the WPF app; natives land under runtimes/{rid}/ at publish. -->
+    <PackageReference Include="Whisper.net" Version="1.9.0" />
+    <PackageReference Include="Whisper.net.Runtime" Version="1.9.0" />
+    <PackageReference Include="Whisper.net.Runtime.Cuda.Windows" Version="1.9.0" />
+    <PackageReference Include="Whisper.net.Runtime.OpenVino" Version="1.9.0" />
+    <PackageReference Include="Whisper.net.Runtime.Vulkan" Version="1.9.0" />
   </ItemGroup>
 
   <ItemGroup>

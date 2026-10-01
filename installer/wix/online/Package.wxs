@@ -22,7 +22,7 @@
     <Feature
         Id="Main"
         Title="PrimeDictate"
-        Description="Installs PrimeDictate with workspace dashboard and branded tray status indicators."
+        Description="Installs PrimeDictate: dictation, transcription and meeting workspace, and a tray status icon."
         Level="1">
       <ComponentGroupRef Id="AppComponents" />
       <ComponentGroupRef Id="StartMenuShortcutComponents" />

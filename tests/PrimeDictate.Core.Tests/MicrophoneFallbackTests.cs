@@ -142,6 +142,14 @@ public sealed class MicrophoneFallbackTests : IDisposable
         File.WriteAllText(Path.Combine(this.root, "settings.json"), $$"""
             { "FirstRunCompleted": true, "EnableWakeWord": true, "WakeWordPhrase": "okay computer", "SelectedInputDeviceId": "{{GoneMicrophone}}" }
             """);
+        // Wake listening only starts when a speech model is installed (checked once, as the WPF app did).
+        var model = Path.Combine(this.root, "models", "whisper", "sherpa-onnx-whisper-tiny.en");
+        Directory.CreateDirectory(model);
+        foreach (var f in new[] { "tiny.en-decoder.int8.onnx", "tiny.en-encoder.int8.onnx", "tiny.en-tokens.txt" })
+        {
+            File.WriteAllText(Path.Combine(model, f), "x");
+        }
+
         var devices = new Devices("Microphone (Yeti Classic)");
         await using var host = new PrimeDictate.Platforms.Dictation.DictationHost(new AppDataPaths(this.root), new PrimeDictate.Core.Coordination.MicrophoneCoordinator(), devices);
         var notice = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);

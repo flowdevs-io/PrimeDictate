@@ -2,24 +2,25 @@
 
 Installers are native **x64** and **ARM64** Windows Installer packages (`.msi`) built with the [WiX Toolset](https://wixtoolset.org/) **through NuGet** (`WixToolset.Sdk`). You only need the **.NET 10 SDK** (pinned in `global.json`); you do **not** install WiX separately.
 
-The installers package the Windows WPF app (`PrimeDictate.csproj`, `PrimeDictate.exe`). The cross-platform app under `src/` is not in them yet.
+From 6.1.0 the installers package the Avalonia app in `src/PrimeDictate.Desktop` (self-contained, output `PrimeDictate.exe`: dictation, tray, transcription workspace and meetings). The WPF app at the repository root (`PrimeDictate.csproj`, what 6.0.0 shipped) is legacy: it still builds but is not packaged. The MSI keeps the same `UpgradeCode`, so 6.1.0 upgrades 6.0.0 in place.
 
 The **online** MSI installs the PrimeDictate app payload only. Model acquisition happens inside PrimeDictate's first-run setup and Settings window.
 
 | MSI | Contents |
 |-----|----------|
-| **Online x64** (`PrimeDictate-*-Windows-x64-Online.msi`) | x64 app under `Program Files\PrimeDictate`, **Start Menu** shortcut, all-users launch-at-login Startup shortcut by default, and **Add/Remove Programs** icon. The x64 MSI is blocked on ARM64 Windows so Copilot+ PCs use the native ARM64/QNN build. |
-| **Online ARM64** (`PrimeDictate-*-Windows-arm64-Online.msi`) | Native ARM64 app under `Program Files\PrimeDictate` with the same installer behavior and QNN-capable ARM64 runtime payload. |
+| **Online x64** (`PrimeDictate-*-Windows-x64-Online.msi`) | x64 app under `Program Files\PrimeDictate`, **Start Menu** shortcut, all-users launch-at-login Startup shortcut by default, and **Add/Remove Programs** icon. The x64 MSI is blocked on ARM64 Windows so ARM64 PCs use the native ARM64 build. |
+| **Online ARM64** (`PrimeDictate-*-Windows-arm64-Online.msi`) | Native ARM64 app under `Program Files\PrimeDictate` with the same installer behavior. It also carries the ONNX Runtime QNN natives (`QnnHtp.dll`, `onnxruntime_providers_qnn.dll` and friends), so Snapdragon PCs can run the Qualcomm AI Hub Whisper and Moonshine NPU models. |
 
 After install, users open PrimeDictate and choose a model in first-run setup or Settings. The app can download supported models itself or browse to an existing local model folder.
 
 ## Installer UX
 
 - **Online MSI**: Uses WiX UI to install the app payload only. The MSI does not run external download commands or launch PrimeDictate from the finish dialog.
-- **Launch at login**: Setup installs `PrimeDictate.lnk` in the all-users Windows Startup folder by default so PrimeDictate runs after users sign in. Silent installs can opt out with `LAUNCHATLOGIN=0`.
+- **Launch at login**: Setup installs `PrimeDictate.lnk` in the all-users Windows Startup folder by default; it runs `PrimeDictate.exe --background` (tray only) after users sign in. Silent installs can opt out with `LAUNCHATLOGIN=0`. The app's "Start PrimeDictate when I sign in" checkbox controls that same shortcut per user (Explorer's StartupApproved switch, no administrator rights); when the shortcut is absent it uses a per-user Run value named `PrimeDictate` instead, never both. "Start it for everyone on this PC" (or `--enable-launch-at-login --scope=all-users`) writes a machine-wide Run value through an elevated helper (UAC prompt); turning it off for all users, in Settings or with `--disable-launch-at-login --scope=all-users`, removes that value and also deletes the MSI's all-users `PrimeDictate.lnk`, as the 6.0.0 app did (reinstall or enable launch at login for yourself to bring startup back). On first start the app removes the 6.0.0 per-user startup shortcut and stale Run values (and keeps launch at login on for a user who had it).
 - **First-run app entry**: Open PrimeDictate from the Start Menu or Startup shortcut after install to complete first-run setup, including model selection or download.
 - **Branding continuity**: ARP metadata, MSI names, and Start Menu shortcut text align with the app’s branded status language (**Ready=Blue, Recording=Red, Error=Yellow**).
-- **Upgrade continuity**: The online MSI keeps the existing product identity (`Name` + `UpgradeCode`) for clean upgrades.
+- **Upgrade continuity**: The online MSI keeps the existing product identity (`Name` + `UpgradeCode`) for clean upgrades. The 6.0.0 shortcut (argument `--from-login`) is replaced in place by the same component with `--background`, and all WPF files are removed with the old product.
+- **Updates**: the app checks GitHub Releases (tray menu "Check for updates...", and automatically at most once a day), verifies the `PrimeDictate-Setup-vX.Y.Z-<arch>.msi` download against its `.sha256`, asks before installing, quits through its clean exit path (a meeting recording is saved), then runs the MSI with `LAUNCHATLOGIN=1` only if the installer shortcut exists.
 - **Language**: The installer is pinned to `en-US` UI resources for consistent English setup dialogs.
 
 ## Prerequisites (maintainer)
@@ -96,7 +97,7 @@ Use this when winget reviewers request metadata changes for an existing version,
 
 | Path | Role |
 |------|------|
-| `wix/shared/AppPayload.wxs` | `Program Files\PrimeDictate` tree and harvested publish payload |
+| `wix/shared/AppPayload.wxs` | `Program Files\PrimeDictate` tree and harvested publish payload (`src/PrimeDictate.Desktop` publish output) |
 | `wix/shared/Branding.wxs` | ARP icon + common Add/Remove Programs metadata |
 | `wix/shared/StartMenuShortcuts.wxs` | Shared Start Menu shortcut component used by the online installer |
 | `wix/shared/LaunchAtLogin.wxs` | Optional all-users Startup-folder shortcut controlled by `LAUNCHATLOGIN` |

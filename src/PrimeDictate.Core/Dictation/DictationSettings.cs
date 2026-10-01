@@ -22,11 +22,23 @@ public sealed class DictationSettings
 
     public HotkeyDto HistoryHotkey { get; set; } = HotkeyDto.From(HotkeyGesture.DefaultHistory);
 
-    /// <summary>Model id from the WPF catalog (for example "base.en"). Whisper ONNX only for now.</summary>
+    /// <summary>Model id from the WPF catalog (for example "base.en"); read together with <see cref="TranscriptionBackend"/>.</summary>
     public string? SelectedModelId { get; set; }
 
-    [JsonConverter(typeof(JsonStringEnumConverter))]
+    [JsonConverter(typeof(LegacyBackendConverter))]
     public LegacyBackend TranscriptionBackend { get; set; } = LegacyBackend.Whisper;
+
+    /// <summary>
+    /// A model placed outside the managed folder: a model folder, or for Whisper.net the ggml file. Same name as the WPF setting, so
+    /// the one the WPF app saved is carried over. When it validates for <see cref="TranscriptionBackend"/> it is the model used.
+    /// </summary>
+    public string? ModelPath { get; set; }
+
+    /// <summary>
+    /// Whether first-run setup was finished. The WPF app's flag, honoured on import. Null in a file that predates the flag, which
+    /// counts as finished (the file only exists because setup or a save happened).
+    /// </summary>
+    public bool? FirstRunCompleted { get; set; }
 
     public string? SelectedInputDeviceId { get; set; }
 
@@ -38,18 +50,49 @@ public sealed class DictationSettings
 
     public bool ReturnToStartTargetOnCommit { get; set; }
 
+    /// <summary>The WPF "Request exclusive mic access while dictating" setting (same name, so it imports as is). Windows only.</summary>
+    public bool ExclusiveMicAccessWhileDictating { get; set; }
+
     public bool PlayAudioCues { get; set; } = true;
 
     /// <summary>Where the ONNX speech models run: <c>auto</c>, <c>cpu</c> or <c>cuda</c>. Applies at the next start; PRIMEDICTATE_ONNX_DEVICE overrides it.</summary>
     public string OnnxDevice { get; set; } = "auto";
 
+    /// <summary>
+    /// The WPF app's compute setting (<c>Cpu</c>, <c>Gpu</c> or <c>Npu</c>), read from its <c>settings.json</c>. Null when the file had none.
+    /// Only used for Whisper.net, and only until <see cref="WhisperNetDevice"/> is chosen in this app.
+    /// </summary>
+    [JsonConverter(typeof(LegacyComputeInterfaceConverter))]
+    public LegacyComputeInterface? TranscriptionComputeInterface { get; set; }
+
+    /// <summary>Where Whisper.net models run: <c>auto</c>, <c>cpu</c> or <c>gpu</c>. Null follows the WPF value, else Auto. Applies at the next start; PRIMEDICTATE_WHISPERNET_DEVICE overrides it.</summary>
+    public string? WhisperNetDevice { get; set; }
+
+    /// <summary>The Whisper.net device this configuration asks for: an explicit choice, else the WPF compute setting, else Auto.</summary>
+    public WhisperNetDevicePreference ResolveWhisperNetDevice() =>
+        this.WhisperNetDevice is { Length: > 0 } chosen
+            ? WhisperNetDevicePreferences.Parse(chosen)
+            : this.TranscriptionComputeInterface switch
+            {
+                LegacyComputeInterface.Cpu => WhisperNetDevicePreference.Cpu,
+                LegacyComputeInterface.Gpu => WhisperNetDevicePreference.Gpu,
+                LegacyComputeInterface.Npu => WhisperNetDevicePreference.Npu,
+                _ => WhisperNetDevicePreference.Auto
+            };
+
     /// <summary>Typing speed used for the time-saved figure. Valid range 20 to 120.</summary>
     public int BaselineTypingSpeedWpm { get; set; } = DictationStatsStore.DefaultBaselineWpm;
 
-    [JsonConverter(typeof(JsonStringEnumConverter))]
+    [JsonConverter(typeof(OverlayStyleConverter))]
     public OverlayStyle OverlayMode { get; set; } = OverlayStyle.CompactMicrophone;
 
     public bool IsOverlaySticky { get; set; }
+
+    /// <summary>
+    /// Hide the compact microphone while idle. On by default: Justin asked for the overlay to show only while dictating after his first
+    /// Windows run. Turning it off gives the WPF behavior (the compact microphone stays on screen; see <see cref="OverlayRules.ShouldShow"/>).
+    /// </summary>
+    public bool HideOverlayWhenIdle { get; set; } = true;
 
     /// <summary>
     /// Where the user dragged the overlay: the bottom-center point it grows up from, in screen pixels. Null keeps the
@@ -58,6 +101,17 @@ public sealed class DictationSettings
     public int? OverlayAnchorX { get; set; }
 
     public int? OverlayAnchorY { get; set; }
+
+    /// <summary>The automatic update check on launch (at most daily). The tray's "Check for updates..." always works. Same name and meaning as the WPF setting.</summary>
+    public bool CheckForUpdatesAutomatically { get; set; } = true;
+
+    /// <summary>What clicking the tray icon does. The WPF default (double click) is kept.</summary>
+    [JsonConverter(typeof(TrayClickBehaviorConverter))]
+    public TrayClickBehavior TrayClickBehavior { get; set; } = TrayClickBehavior.DoubleClickOpensWorkspace;
+
+    /// <summary>Light, dark or the system setting. Dark by default, as the WPF app always was.</summary>
+    [JsonConverter(typeof(AppThemeConverter))]
+    public AppTheme Theme { get; set; } = AppTheme.Dark;
 
     public List<ReplacementDto> TranscriptReplacements { get; set; } = [];
 
@@ -74,12 +128,18 @@ public sealed class DictationSettings
 
     public string VoiceHistoryPhrase { get; set; } = VoiceCommandProcessor.DefaultHistoryPhrase;
 
+    /// <summary>
+    /// Phrases that run a command on this computer while dictating. Same shape as the WPF app's list, so imported commands
+    /// keep their On state (the user chose them there). Commands added in this app start Off.
+    /// </summary>
+    public List<VoiceShellCommand> VoiceShellCommands { get; set; } = [];
+
     public VoiceCommandOptions ToVoiceCommandOptions() => new(
         this.EnableVoiceCommands,
         this.VoiceDictationPhrase?.Trim() ?? string.Empty,
         this.VoiceStopPhrase?.Trim() ?? string.Empty,
         this.VoiceHistoryPhrase?.Trim() ?? string.Empty,
-        []);
+        (this.VoiceShellCommands ?? []).Where(c => c is not null).ToList());
 
     public bool EnableOllamaPostProcessing { get; set; }
 
@@ -87,6 +147,7 @@ public sealed class DictationSettings
 
     public string OllamaModel { get; set; } = "gemma:2b";
 
+    [JsonConverter(typeof(OllamaModeConverter))]
     public OllamaMode OllamaMode { get; set; } = OllamaMode.Default;
 
     /// <summary>New: allow a non-loopback Ollama endpoint. Off by default so speech stays on this computer.</summary>
@@ -105,7 +166,11 @@ public sealed class DictationSettings
         AutoCommitSilence = TimeSpan.FromSeconds(this.AutoCommitSilenceSeconds),
         SendEnterAfterCommit = this.SendEnterAfterCommit,
         ReturnToStartTarget = this.ReturnToStartTargetOnCommit,
+        ExclusiveMicAccess = this.ExclusiveMicAccessWhileDictating,
         TypeWithoutFocusGuard = this.TypeWithoutFocusGuard,
+        // The WPF app forced English for Whisper (sherpa-onnx and Whisper.net); a multilingual model would otherwise guess the language
+        // from each short dictation. The transcription workspace keeps its own explicit language choice and does not use these options.
+        Language = "en",
         Replacements = this.TranscriptReplacements
             .Where(r => !string.IsNullOrWhiteSpace(r.Find))
             .Select(r => new ReplacementRule(r.Find, r.Replace))
@@ -132,6 +197,34 @@ public enum LegacyBackend
     Moonshine = 2,
     WhisperNet = 3,
     QualcommQnn = 4
+}
+
+/// <summary>The WPF app's <c>TranscriptionComputeInterface</c> values.</summary>
+public enum LegacyComputeInterface
+{
+    Cpu = 0,
+    Gpu = 1,
+    Npu = 2
+}
+
+/// <summary>Where Whisper.net runs. Npu is the WPF OpenVINO option and only takes effect when the model's OpenVINO files are installed.</summary>
+public enum WhisperNetDevicePreference
+{
+    Auto = 0,
+    Cpu = 1,
+    Gpu = 2,
+    Npu = 3
+}
+
+public static class WhisperNetDevicePreferences
+{
+    public static WhisperNetDevicePreference Parse(string? text) => text?.Trim().ToLowerInvariant() switch
+    {
+        "cpu" => WhisperNetDevicePreference.Cpu,
+        "gpu" or "cuda" => WhisperNetDevicePreference.Gpu,
+        "npu" => WhisperNetDevicePreference.Npu,
+        _ => WhisperNetDevicePreference.Auto
+    };
 }
 
 public sealed class HotkeyDto
@@ -194,16 +287,25 @@ public sealed class DictationSettingsStore(AppDataPaths paths)
                 var settings = JsonSerializer.Deserialize<DictationSettings>(File.ReadAllText(file), JsonOptions);
                 if (settings is not null)
                 {
+                    settings.FirstRunCompleted ??= true;
+                    if (imported && settings.EnableOllamaPostProcessing && DictationSettingsValidator.IsRemoteEndpoint(settings.OllamaEndpoint))
+                    {
+                        // The WPF app posted to any endpoint; this app asks first. Someone who set a remote one up there keeps it working.
+                        settings.OllamaAllowRemoteEndpoint = true;
+                    }
+
+                    DictationSettingsValidator.Normalize(settings);
                     return new DictationSettingsLoad(settings, imported, null);
                 }
             }
             catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
             {
-                return new DictationSettingsLoad(new DictationSettings(), false, $"Could not read {file}: {ex.Message}. Using defaults; the file was left untouched.");
+                // An unreadable file must not look like a finished setup: first run shows again so the user can choose a model and shortcuts.
+                return new DictationSettingsLoad(new DictationSettings { FirstRunCompleted = false }, false, $"Could not read {file}: {ex.Message}. Using defaults; the file was left untouched.");
             }
         }
 
-        return new DictationSettingsLoad(new DictationSettings(), false, null);
+        return new DictationSettingsLoad(new DictationSettings { FirstRunCompleted = false }, false, null);
     }
 
     public void Save(DictationSettings settings)
@@ -221,6 +323,8 @@ public static class LegacyBackendExtensions
     {
         LegacyBackend.Parakeet => "parakeet-onnx",
         LegacyBackend.Moonshine => "moonshine-onnx",
+        LegacyBackend.WhisperNet => "whisper-net",
+        LegacyBackend.QualcommQnn => "qualcomm-qnn",
         _ => "whisper-onnx"
     };
 }

@@ -6,8 +6,10 @@ using Avalonia.Media.Imaging;
 using PrimeDictate.Core.Dictation;
 using PrimeDictate.Core.Storage;
 using PrimeDictate.Desktop.Dictation;
+using PrimeDictate.Desktop.Updates;
 using PrimeDictate.Platforms.Speech;
 using PrimeDictate.Platforms.Startup;
+using PrimeDictate.Platforms.Updates;
 
 namespace PrimeDictate.Desktop;
 
@@ -17,6 +19,7 @@ public sealed class App : Application
     internal static SingleInstance? Instance { get; set; }
 
     private int exiting;
+    private UpdateController? updates;
 
     public override void Initialize() => AvaloniaXamlLoader.Load(this);
 
@@ -36,15 +39,19 @@ public sealed class App : Application
             // ONNX Runtime is one library per process: the GPU build must be in place before any speech model is created.
             if (!IsSmokeRun(desktop.Args))
             {
-                var saved = new DictationSettingsStore(AppDataPaths.Default).Load().Settings.OnnxDevice;
-                OnnxRuntimeDevice.Configure(OnnxRuntimeDevice.Effective(saved));
+                var savedSettings = new DictationSettingsStore(AppDataPaths.Default).Load().Settings;
+                // A GPU or NPU choice copied from another PC is judged against this one before the runtime is picked (in memory only).
+                HardwareNormalization.Normalize(savedSettings, MachineSupport.Current, AppDataPaths.Default.ModelsDirectory);
+                OnnxRuntimeDevice.Configure(OnnxRuntimeDevice.Effective(savedSettings.OnnxDevice));
+                // Whisper.net picks its native build once too, before the first model loads.
+                WhisperNetRuntime.Configure(WhisperNetRuntime.Effective(savedSettings));
             }
 
             var window = new MainWindow();
 
             // The window is the default start, so --show and --workspace (the WPF app's flags) are accepted and mean the same.
             // --background starts in the tray only, where the tray exists (Windows, macOS).
-            var background = launch.Contains("--background") && !launch.Contains("--show") && !launch.Contains("--workspace") && CanHideToTray;
+            var background = IsBackgroundLaunch(launch) && !launch.Contains("--show") && !launch.Contains("--workspace") && CanHideToTray;
             if (!background)
             {
                 desktop.MainWindow = window;
@@ -72,6 +79,36 @@ public sealed class App : Application
         base.OnFrameworkInitializationCompleted();
     }
 
+    /// <summary>
+    /// <c>--background</c> is what the installer's Startup shortcut and the Run value pass. <c>--from-login</c> is what the 6.0.0 shortcut
+    /// passed; it means the same, so a shortcut left over from 6.0.0 still starts in the tray.
+    /// </summary>
+    internal static bool IsBackgroundLaunch(string[] args) => args.Contains("--background") || args.Contains("--from-login");
+
+    /// <summary>Windows only: the tray's "Check for updates..." item, the automatic check on launch, and the clean-up of 6.0.0 startup entries.</summary>
+    private void StartUpdates(IClassicDesktopStyleApplicationLifetime desktop, MainWindow window, DictationShell shell)
+    {
+        // A run with its own data folder (PRIMEDICTATE_DATA_DIR, used for tests) is an isolated profile: it must not touch the real startup entries or update record.
+        if (!OperatingSystem.IsWindows() || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PRIMEDICTATE_DATA_DIR")))
+        {
+            return;
+        }
+
+        var launch = new LaunchAtLogin();
+        launch.MigrateLegacyEntries();
+        var root = AppDataPaths.Default.Root;
+        this.updates = new UpdateController(
+            GitHubUpdateService.CurrentApplicationVersion(typeof(App).Assembly),
+            Path.Combine(root, "updates"),
+            new UpdateCheckState(Path.Combine(root, "update-check.json"), Path.Combine(root, "settings.json")),
+            launch,
+            () => this.ExitAsync(desktop, window, shell),
+            () => shell.Host.Settings.CheckForUpdatesAutomatically,
+            () => !shell.Host.IsFirstRun);
+        shell.UpdateMenu = this.updates;
+        _ = this.updates.CheckOnLaunchAsync();
+    }
+
     private static bool CanHideToTray => OperatingSystem.IsWindows() || OperatingSystem.IsMacOS();
 
     private static void RenderTrayIcons(string directory)
@@ -88,7 +125,8 @@ public sealed class App : Application
 
     private void StartDictation(IClassicDesktopStyleApplicationLifetime desktop, MainWindow window)
     {
-        var shell = new DictationShell(desktop, window.Workspace, () => ShowWorkspace(window));
+        var shell = new DictationShell(desktop, window, () => ShowWorkspace(window));
+        this.StartUpdates(desktop, window, shell);
         shell.Start(this);
         shell.ExitRequested += () => _ = this.ExitAsync(desktop, window, shell);
         desktop.Exit += (_, _) => this.Cleanup(window, shell);
@@ -164,6 +202,7 @@ public sealed class App : Application
         shell.DisposeAsync().AsTask().GetAwaiter().GetResult();
         // A window that was never shown never raises Closed, so the workspace (and with it the speech worker) is released here.
         window.Workspace.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(10));
+        this.updates?.Dispose();
         Instance?.Dispose();
     }
 

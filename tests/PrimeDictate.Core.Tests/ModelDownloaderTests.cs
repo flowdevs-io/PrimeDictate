@@ -96,7 +96,8 @@ public sealed class ModelDownloaderTests : IDisposable
     {
         Assert.Equal("sherpa-onnx-whisper-base.en", SpeechModelCatalog.Options.First(o => o.Id == "base.en").InstallDirectoryName);
         Assert.EndsWith("/asr-models/sherpa-onnx-whisper-base.en.tar.bz2", Tiny.DownloadUri.AbsoluteUri.Replace("tiny.en", "base.en"));
-        Assert.Equal(12, SpeechModelCatalog.Options.Count);
+        Assert.Equal(12, SpeechModelCatalog.Options.Count(o => o.Backend is not (PrimeDictate.Core.Dictation.LegacyBackend.WhisperNet or PrimeDictate.Core.Dictation.LegacyBackend.QualcommQnn)));
+        Assert.Equal(4, SpeechModelCatalog.Options.Count(o => o.Backend == PrimeDictate.Core.Dictation.LegacyBackend.WhisperNet));
         Assert.Equal("parakeet-onnx:parakeet-tdt-0.6b-v3", SpeechModelCatalog.Options.First(o => o.Backend == PrimeDictate.Core.Dictation.LegacyBackend.Parakeet).ModelId);
     }
 }

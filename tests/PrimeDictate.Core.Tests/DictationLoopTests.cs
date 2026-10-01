@@ -156,6 +156,69 @@ public sealed class DictationLoopTests
         Assert.True(source.Lease.Disposed);
     }
 
+    [Theory]
+    [InlineData(false, MicAccessMode.Exclusive, MicAccessMode.Shared, MicAccessMode.Shared)]
+    [InlineData(true, MicAccessMode.Exclusive, MicAccessMode.Exclusive, MicAccessMode.Exclusive)]
+    [InlineData(true, MicAccessMode.Shared, MicAccessMode.Exclusive, MicAccessMode.Shared)]
+    public async Task Exclusive_mic_is_requested_only_when_set_and_the_granted_mode_is_reported(
+        bool exclusiveSetting, MicAccessMode deviceGrants, MicAccessMode expectedRequest, MicAccessMode expectedActive)
+    {
+        var source = new FakeSource { GrantsExclusive = deviceGrants };
+        await using var controller = new DictationController(source, () => new FakeProvider("x"), new FakeGuard(), new FakeInjector());
+        controller.Options = new DictationOptions { ExclusiveMicAccess = exclusiveSetting, AutoCommitSilence = TimeSpan.Zero };
+        Assert.Null(controller.ActiveMicAccess);
+
+        await controller.ToggleAsync();
+
+        Assert.Equal(exclusiveSetting ? expectedRequest : MicAccessMode.Shared, source.RequestedAccess);
+        Assert.Equal(expectedActive, controller.ActiveMicAccess);
+        await controller.DiscardAsync();
+        Assert.Null(controller.ActiveMicAccess);
+    }
+
+    [Fact]
+    public async Task Microphone_fallback_passes_the_access_request_through()
+    {
+        var source = new FakeSource();
+        var fallback = new DefaultMicrophoneFallback(source, _ => { });
+
+        var lease = await fallback.OpenAsync(null, MicAccessMode.Exclusive, CancellationToken.None);
+
+        Assert.Equal(MicAccessMode.Exclusive, source.RequestedAccess);
+        Assert.Equal(MicAccessMode.Exclusive, lease.AccessMode);
+    }
+
+    [Fact]
+    public void Exclusive_mic_setting_imports_from_the_wpf_file_by_name()
+    {
+        var s = System.Text.Json.JsonSerializer.Deserialize<DictationSettings>("""{ "ExclusiveMicAccessWhileDictating": true }""")!;
+
+        Assert.True(s.ToOptions().ExclusiveMicAccess);
+        Assert.False(new DictationSettings().ToOptions().ExclusiveMicAccess);
+    }
+
+    [Fact]
+    public async Task Activity_feed_records_the_session_status_and_app_but_never_the_text()
+    {
+        var source = new FakeSource();
+        var commits = new List<DictationCommit>();
+        await using var controller = new DictationController(source, () => new FakeProvider("zebra crossing secret"), new FakeGuard(), new FakeInjector());
+        controller.Committed += commits.Add;
+        controller.Options = new DictationOptions { AutoCommitSilence = TimeSpan.Zero };
+
+        await controller.ToggleAsync();
+        source.Lease!.Push(Tone(1.0));
+        await controller.ToggleAsync();
+
+        var id = Assert.Single(commits).SessionId;
+        var session = Assert.Single(Diagnostics.AppLog.Feed.Sessions(), s => s.Id == id);
+        Assert.Equal(Diagnostics.DictationSessionStatus.Typed, session.Status);
+        var log = Diagnostics.AppLog.Feed.SessionEntries(id);
+        Assert.NotEmpty(log);
+        Assert.DoesNotContain(log, e => e.Message.Contains("zebra", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain("zebra", Diagnostics.ActivityText.Join(Diagnostics.AppLog.Feed.Entries()), StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public async Task Silence_commits_on_its_own_after_speech()
     {
@@ -299,6 +362,192 @@ public sealed class DictationLoopTests
         public override DateTimeOffset GetUtcNow() => DateTimeOffset.UtcNow;
     }
 
+    private static readonly VoiceCommandOptions ShellOptionsBase = new(true, "thank you", "potato farmer", "show me the money", []);
+
+    private static async Task<(List<DictationCommit> Commits, FakeInjector Injector, FakeShellRunner Runner)> DictateAsync(
+        string transcript,
+        VoiceShellCommand[] commands,
+        FakeShellRunner? runner = null,
+        bool withRunner = true)
+    {
+        runner ??= new FakeShellRunner();
+        var source = new FakeSource();
+        var inj = new FakeInjector();
+        var commits = new List<DictationCommit>();
+        var processor = new VoiceCommandProcessor(() => ShellOptionsBase with { ShellCommands = commands });
+        await using var controller = new DictationController(
+            source, () => new FakeProvider(transcript), new FakeGuard(), inj, voiceCommands: processor, shellRunner: withRunner ? runner : null);
+        controller.Options = new DictationOptions { AutoCommitSilence = TimeSpan.Zero };
+        controller.Committed += commits.Add;
+        await controller.ToggleAsync();
+        source.Lease!.Push(Tone(1.0));
+        await WaitFor(() => controller.IsRecording);
+        await controller.ToggleAsync();
+        return (commits, inj, runner);
+    }
+
+    [Fact]
+    public async Task Shell_command_runs_the_saved_command_and_stop_types_nothing()
+    {
+        var saved = new VoiceShellCommand { Phrase = "open notes", Command = "notepad.exe C:\\todo.txt", Enabled = true };
+        var (commits, inj, runner) = await DictateAsync("please rm -rf everything open notes", [saved]);
+
+        // The runner receives the command exactly as saved, never words from the transcript.
+        Assert.Same(saved, Assert.Single(runner.Ran));
+        Assert.Equal("notepad.exe C:\\todo.txt", runner.Ran[0].Command);
+        Assert.Empty(inj.Typed);
+        var commit = Assert.Single(commits);
+        Assert.Equal(DictationDeliveryStatus.CommandExecuted, commit.Status);
+        Assert.Equal("Voice command: open notes", commit.Transcript);
+    }
+
+    [Fact]
+    public async Task Shell_command_with_continue_types_the_words_that_remain()
+    {
+        var saved = new VoiceShellCommand { Phrase = "open notes", Command = "notepad", CompletionBehavior = VoiceShellCommandCompletionBehavior.Continue };
+        var (commits, inj, runner) = await DictateAsync("open notes remember the milk", [saved]);
+
+        Assert.Single(runner.Ran);
+        Assert.Equal(["remember the milk"], inj.Typed);
+        Assert.Equal([DictationDeliveryStatus.CommandExecuted, DictationDeliveryStatus.Injected], commits.Select(c => c.Status).ToArray());
+    }
+
+    [Fact]
+    public async Task Shell_command_with_continue_and_nothing_left_ends_silently_without_a_no_text_notice()
+    {
+        var saved = new VoiceShellCommand { Phrase = "open notes", Command = "notepad", CompletionBehavior = VoiceShellCommandCompletionBehavior.Continue };
+        var source = new FakeSource();
+        var notices = new List<string>();
+        var commits = new List<DictationCommit>();
+        var processor = new VoiceCommandProcessor(() => ShellOptionsBase with { ShellCommands = [saved] });
+        await using var controller = new DictationController(
+            source, () => new FakeProvider("open notes"), new FakeGuard(), new FakeInjector(), voiceCommands: processor, shellRunner: new FakeShellRunner());
+        controller.Options = new DictationOptions { AutoCommitSilence = TimeSpan.Zero };
+        controller.Notice += notices.Add;
+        controller.Committed += commits.Add;
+        await controller.ToggleAsync();
+        source.Lease!.Push(Tone(1.0));
+        await WaitFor(() => controller.IsRecording);
+        await controller.ToggleAsync();
+
+        Assert.DoesNotContain(notices, n => n.Contains("No text was recognized", StringComparison.Ordinal));
+        Assert.Equal(DictationDeliveryStatus.CommandExecuted, Assert.Single(commits).Status);
+        // The history target of a computer command is the WPF one.
+        Assert.Equal("Command Prompt", commits[0].TargetDisplayName);
+        Assert.Equal("Command Prompt", commits[0].TargetAppName);
+        Assert.Equal("Command Prompt", commits[0].TargetWindowTitle);
+    }
+
+    private sealed class StubRewriter(bool active) : ITranscriptRewriter
+    {
+        public bool IsActive => active;
+
+        public ValueTask<RewriteResult> RewriteAsync(string transcript, IForegroundTarget? target, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(new RewriteResult("polished", "prompt", true));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task The_overlay_shows_the_ai_status_before_a_rewrite_only_when_rewriting_is_on(bool active)
+    {
+        var source = new FakeSource();
+        var shown = new List<string>();
+        await using var controller = new DictationController(
+            source, () => new FakeProvider("hello there"), new FakeGuard(), new FakeInjector(), rewriter: new StubRewriter(active));
+        controller.Options = new DictationOptions { AutoCommitSilence = TimeSpan.Zero };
+        controller.PartialTranscript += (_, text) => shown.Add(text);
+        await controller.ToggleAsync();
+        source.Lease!.Push(Tone(1.0));
+        await WaitFor(() => controller.IsRecording);
+        await controller.ToggleAsync();
+
+        Assert.Equal(active, shown.Contains("[AI is processing transcript...]"));
+        if (active)
+        {
+            Assert.True(shown.IndexOf("[AI is processing transcript...]") < shown.IndexOf("polished"));
+        }
+    }
+
+    [Fact]
+    public async Task Shell_command_with_continue_and_nothing_left_types_nothing()
+    {
+        var saved = new VoiceShellCommand { Phrase = "open notes", Command = "notepad", CompletionBehavior = VoiceShellCommandCompletionBehavior.Continue };
+        var (_, inj, runner) = await DictateAsync("open notes", [saved]);
+
+        Assert.Single(runner.Ran);
+        Assert.Empty(inj.Typed);
+    }
+
+    [Fact]
+    public async Task Disabled_or_unmatched_shell_commands_never_run_and_the_text_is_typed()
+    {
+        var off = new VoiceShellCommand { Phrase = "open notes", Command = "notepad", Enabled = false };
+        var (_, inj, runner) = await DictateAsync("open notes today", [off]);
+        Assert.Empty(runner.Ran);
+        Assert.Equal(["open notes today"], inj.Typed);
+    }
+
+    [Fact]
+    public async Task Shell_command_failure_is_reported_and_nothing_is_typed()
+    {
+        var saved = new VoiceShellCommand { Phrase = "open notes", Command = "notepad", CompletionBehavior = VoiceShellCommandCompletionBehavior.Continue };
+        var (commits, inj, _) = await DictateAsync("open notes hello", [saved], new FakeShellRunner { Fail = true });
+
+        Assert.Empty(inj.Typed);
+        var commit = Assert.Single(commits);
+        Assert.Equal(DictationDeliveryStatus.CommandFailed, commit.Status);
+        Assert.Equal("cannot start", commit.Error);
+    }
+
+    [Fact]
+    public async Task Without_a_runner_the_phrase_is_just_dictated_text()
+    {
+        var saved = new VoiceShellCommand { Phrase = "open notes", Command = "notepad" };
+        var (_, inj, runner) = await DictateAsync("open notes", [saved], withRunner: false);
+        Assert.Empty(runner.Ran);
+        Assert.Equal(["open notes"], inj.Typed);
+    }
+
+    [Fact]
+    public async Task A_live_preview_never_runs_a_shell_command()
+    {
+        var saved = new VoiceShellCommand { Phrase = "open notes", Command = "notepad" };
+        var runner = new FakeShellRunner();
+        var source = new FakeSource();
+        var partials = new List<string>();
+        var processor = new VoiceCommandProcessor(() => ShellOptionsBase with { ShellCommands = [saved] });
+        await using var controller = new DictationController(
+            source, () => new FakeProvider("open notes"), new FakeGuard(), new FakeInjector(), voiceCommands: processor, shellRunner: runner);
+        controller.Options = new DictationOptions { AutoCommitSilence = TimeSpan.Zero };
+        controller.PartialTranscript += (_, t) => partials.Add(t);
+        await controller.ToggleAsync();
+        source.Lease!.Push(Tone(1.0));
+        await WaitFor(() => partials.Count > 0);
+
+        Assert.Empty(runner.Ran);
+        await controller.DiscardAsync();
+        Assert.Empty(runner.Ran);
+    }
+
+    private sealed class FakeShellRunner : IVoiceShellCommandRunner
+    {
+        public List<VoiceShellCommand> Ran { get; } = [];
+
+        public bool Fail { get; init; }
+
+        public VoiceShellCommandResult Run(VoiceShellCommand command)
+        {
+            if (this.Fail)
+            {
+                throw new InvalidOperationException("cannot start");
+            }
+
+            this.Ran.Add(command);
+            return new VoiceShellCommandResult(42);
+        }
+    }
+
     private sealed class StopWordCommands : IVoiceCommandProcessor
     {
         public VoiceCommandResult Apply(string transcript) =>
@@ -383,15 +632,29 @@ public sealed class DictationLoopTests
     {
         public FakeLease? Lease { get; private set; }
 
+        public MicAccessMode? RequestedAccess { get; private set; }
+
+        /// <summary>What the "device" grants when exclusive is asked for (a device can refuse and open shared).</summary>
+        public MicAccessMode GrantsExclusive { get; init; } = MicAccessMode.Exclusive;
+
         public ValueTask<IReadOnlyList<AudioInputDevice>> ListDevicesAsync(CancellationToken cancellationToken) =>
             ValueTask.FromResult<IReadOnlyList<AudioInputDevice>>([new AudioInputDevice("fake", "Fake mic", true)]);
 
         public ValueTask<IAudioCaptureLease> OpenAsync(string? deviceId, CancellationToken cancellationToken) =>
-            ValueTask.FromResult<IAudioCaptureLease>(this.Lease = new FakeLease());
+            this.OpenAsync(deviceId, MicAccessMode.Shared, cancellationToken);
+
+        public ValueTask<IAudioCaptureLease> OpenAsync(string? deviceId, MicAccessMode access, CancellationToken cancellationToken)
+        {
+            this.RequestedAccess = access;
+            this.Lease = new FakeLease { AccessMode = access == MicAccessMode.Exclusive ? this.GrantsExclusive : MicAccessMode.Shared };
+            return ValueTask.FromResult<IAudioCaptureLease>(this.Lease);
+        }
     }
 
     private sealed class FakeLease : IAudioCaptureLease
     {
+        public MicAccessMode AccessMode { get; init; } = MicAccessMode.Shared;
+
         private readonly Channel<AudioFrame> frames = Channel.CreateUnbounded<AudioFrame>();
         private long offset;
         private long sequence;

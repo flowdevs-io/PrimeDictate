@@ -58,7 +58,14 @@ public sealed class MiniAudioCaptureSource : IAudioSource, IDisposable
         return ValueTask.FromResult(devices);
     }
 
-    public ValueTask<IAudioCaptureLease> OpenAsync(string? deviceId, CancellationToken cancellationToken)
+    public ValueTask<IAudioCaptureLease> OpenAsync(string? deviceId, CancellationToken cancellationToken) =>
+        this.OpenAsync(deviceId, MicAccessMode.Shared, cancellationToken);
+
+    /// <summary>
+    /// Exclusive is honoured only on Windows (WASAPI exclusive mode). If the device refuses it, the open is retried
+    /// shared and logged, as the WPF app does; the lease's <see cref="IAudioCaptureLease.AccessMode"/> reports the result.
+    /// </summary>
+    public ValueTask<IAudioCaptureLease> OpenAsync(string? deviceId, MicAccessMode access, CancellationToken cancellationToken)
     {
         this.engine.UpdateAudioDevicesInfo();
         DeviceInfo? device = null;
@@ -87,16 +94,25 @@ public sealed class MiniAudioCaptureSource : IAudioSource, IDisposable
             Layout = SfAudioFormat.GetLayoutFromChannels(1)
         };
 
-        AudioCaptureDevice OpenDevice()
+        AudioCaptureDevice OpenDevice(bool exclusive)
         {
             try
             {
-                return this.engine.InitializeCaptureDevice(device, format, new MiniAudioDeviceConfig
+                // WASAPI exclusive mode needs a concrete endpoint: miniaudio's "default" entry (automatic stream
+                // routing) cannot be exclusive (ShareModeNotSupported). Resolve the Windows default by its name.
+                var chosen = device;
+                if (chosen is null && exclusive && OperatingSystem.IsWindows() && WindowsAudioEndpoints.DefaultCaptureName() is { } defaultName)
+                {
+                    chosen = this.engine.CaptureDevices.FirstOrDefault(d => d.Name == defaultName);
+                }
+
+                return this.engine.InitializeCaptureDevice(chosen, format, new MiniAudioDeviceConfig
                 {
                     // Without an explicit period, PulseAudio defaults to roughly 2 s of buffering,
                     // which delays the first frame and is lost when the device closes.
                     PeriodSizeInMilliseconds = this.PeriodMilliseconds,
-                    Periods = 3
+                    Periods = 3,
+                    Capture = new DeviceSubConfig { ShareMode = exclusive ? ShareMode.Exclusive : ShareMode.Shared }
                 });
             }
             catch (Exception ex)
@@ -105,7 +121,8 @@ public sealed class MiniAudioCaptureSource : IAudioSource, IDisposable
             }
         }
 
-        var lease = new CaptureLease(OpenDevice, new CoreAudioFormat(this.CaptureSampleRate, 1, AudioSampleFormat.Float32), device?.Name, this.MaxQueuedAudio);
+        var exclusive = access == MicAccessMode.Exclusive && OperatingSystem.IsWindows();
+        var lease = new CaptureLease(OpenDevice, exclusive, new CoreAudioFormat(this.CaptureSampleRate, 1, AudioSampleFormat.Float32), device?.Name, this.MaxQueuedAudio);
         lease.Start();
         return ValueTask.FromResult<IAudioCaptureLease>(lease);
     }
@@ -126,7 +143,8 @@ public sealed class MiniAudioCaptureSource : IAudioSource, IDisposable
     /// </remarks>
     private sealed class CaptureLease : IAudioCaptureLease
     {
-        private readonly Func<AudioCaptureDevice> openDevice;
+        private readonly Func<bool, AudioCaptureDevice> openDevice;
+        private volatile bool exclusive;
         private readonly Channel<AudioFrame> frames;
         private readonly object sync = new();
         private AudioCaptureDevice? device;
@@ -135,9 +153,10 @@ public sealed class MiniAudioCaptureSource : IAudioSource, IDisposable
         private long droppedSamples;
         private bool disposed;
 
-        public CaptureLease(Func<AudioCaptureDevice> openDevice, CoreAudioFormat format, string? name, TimeSpan maxQueued)
+        public CaptureLease(Func<bool, AudioCaptureDevice> openDevice, bool exclusive, CoreAudioFormat format, string? name, TimeSpan maxQueued)
         {
             this.openDevice = openDevice;
+            this.exclusive = exclusive;
             this.Format = format;
             this.DeviceId = name ?? "default";
             this.DeviceName = name ?? "Default microphone";
@@ -157,6 +176,8 @@ public sealed class MiniAudioCaptureSource : IAudioSource, IDisposable
 
         public string DeviceName { get; }
 
+        public MicAccessMode AccessMode => this.exclusive ? MicAccessMode.Exclusive : MicAccessMode.Shared;
+
         /// <summary>Samples lost because the consumer fell behind; the offset skips ahead so the gap is visible.</summary>
         public long DroppedSamples => Interlocked.Read(ref this.droppedSamples);
 
@@ -170,10 +191,37 @@ public sealed class MiniAudioCaptureSource : IAudioSource, IDisposable
                     return;
                 }
 
-                var opened = this.openDevice();
+                AudioCaptureDevice opened;
+                try
+                {
+                    opened = this.OpenAndStart(this.exclusive);
+                }
+                catch (Exception ex) when (this.exclusive)
+                {
+                    // The device refused exclusive mode (in use, or no exclusive format): shared still records.
+                    PrimeDictate.Core.Diagnostics.AppLog.Event("microphone", $"Exclusive microphone mode failed ({ex.GetType().Name}: {ex.InnerException?.Message ?? ex.Message}); falling back to shared mode.");
+                    this.exclusive = false;
+                    opened = this.OpenAndStart(false);
+                }
+
+                this.device = opened;
+            }
+        }
+
+        private AudioCaptureDevice OpenAndStart(bool exclusiveMode)
+        {
+            var opened = this.openDevice(exclusiveMode);
+            try
+            {
                 opened.OnAudioProcessed += this.OnAudio;
                 opened.Start();
-                this.device = opened;
+                return opened;
+            }
+            catch
+            {
+                opened.OnAudioProcessed -= this.OnAudio;
+                opened.Dispose();
+                throw;
             }
         }
 

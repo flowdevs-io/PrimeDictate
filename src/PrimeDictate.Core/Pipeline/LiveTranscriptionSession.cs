@@ -249,7 +249,7 @@ public sealed class LiveTranscriptionSession : IAsyncDisposable
         catch (TimeoutException)
         {
             this.failure ??= new TimeoutException("The audio capture did not stop in time.");
-            Diagnostics.AppLog.Event("capture", "The audio capture did not stop within 30 s of Stop.");
+            Diagnostics.AppLog.Event("capture", "The audio capture did not stop within 30 s of Stop.", Diagnostics.ActivityLevel.Warning);
             this.Error?.Invoke("The audio capture did not stop in time. What was recorded so far is kept.");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

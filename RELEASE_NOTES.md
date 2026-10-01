@@ -1,3 +1,29 @@
+# PrimeDictate 6.1.0
+
+## Highlights
+
+- Transcription and meetings are a **preview** in 6.1.0: they work, but have had far less real-world use than dictation. Dictation is the same daily-use feature set as 6.0.0.
+- One app. The installers now ship the new PrimeDictate that does both jobs in one process: hotkey dictation from the tray, and the transcription and meeting workspace (recordings, speaker timeline, sessions). It is still `PrimeDictate.exe`, so shortcuts, winget, Chocolatey and the updater keep working, and 6.1.0 upgrades 6.0.0 in place.
+- Your setup carries over. The new app reads the 6.0.0 settings and history once (it never rewrites them), keeps the same model folders under `%LocalAppData%\PrimeDictate\models`, and keeps the lifetime stats.
+- Launch at login is one thing again. The installer's Startup shortcut now starts PrimeDictate in the tray (`--background`), and the app's "Start PrimeDictate when I sign in" checkbox turns that same shortcut on or off for you without administrator rights. `LAUNCHATLOGIN=0` still leaves it out; the checkbox then uses a per-user startup entry instead. The 6.0.0 per-user startup entries are cleaned up on first start.
+- Record a meeting from the tray. "Record meeting" starts a microphone and system-audio recording in the workspace; the same item stops it. The main window shows dictation status and opens history, stats and Settings, and there is one Settings window for dictation and for transcription and meetings.
+- Same models everywhere. Dictation and transcription pick from the same installed models, including Whisper.net (ggml) models on the GPU (CUDA or Vulkan); one loaded copy of a model is shared by both.
+- NPU models carry over. On Snapdragon (Windows ARM64) PCs the ARM64 installer includes the Qualcomm QNN runtime, and Settings and first-run setup offer the Qualcomm AI Hub Whisper Small download and Moonshine on the NPU, with a saved 6.0.0 Qualcomm choice picked up as it was. On Intel PCs the Whisper.net device list now has the NPU (OpenVINO) choice, the large-v3 download fetches Intel's OpenVINO bundle, and "Auto" means the GPU, else the NPU when the model has its OpenVINO files, else the CPU. Choices the PC cannot run are not listed, and a saved choice that does not fit the PC falls back to what does.
+- Voice shell commands run again in dictation (never in transcription). Commands from 6.0.0 keep their on/off state; new ones start off.
+- Text delivery as in 6.0.0 on Windows: the final text goes straight into the focused edit control when there is one (keystrokes otherwise, never the clipboard), "return to the starting window" inserts into that window without bringing it forward unless coding-mode Enter is on, the Windows Mouse Sonar pulse marks start and stop, and "Request exclusive microphone access while dictating" is back (shared if the microphone refuses).
+- Updates: "Check for updates..." in the tray menu, plus an automatic check at most once a day that you can turn off in Settings (the 6.0.0 choice and last-check time carry over). Nothing installs without your OK, the MSI is verified against its published SHA-256 first, and PrimeDictate closes the normal way (an active meeting recording is saved) before Windows Installer starts.
+- The overlay has its 6.0.0 controls back: pin (keep it on screen), copy (the last transcript, only when you click it), settings, collapse and expand, the elapsed time, the "Local only" badge and the model in its header, and the compact microphone has its ripple animation and a Settings option keeps it on screen while idle, as 6.0.0 did (by default it shows only while dictating).
+- The tray icon: single or double click (or neither) opens PrimeDictate, as chosen in Settings; it shows "needs attention" for 10 seconds after an error and when the wake word could not start, and its tooltip names the model and the wake phrase.
+- Settings: start at sign-in for just you or for everyone on this PC (asks for administrator permission, as in 6.0.0; the `--enable-launch-at-login` and `--disable-launch-at-login` command-line switches work again), the typing speed that time saved is compared with (also in the stats window), a color scheme (dark by default, as in 6.0.0, or light, or follow the system), and the tray click choice.
+- History window: filters for typed or not typed, app and window, "Clear filters", and "Copy details"; the stats window shows the achievements and daily word counts as before.
+- The wake word listens with a small model of the same kind as your dictation model (Whisper.net tiny or base, Moonshine tiny or base, or a small Whisper), as in 6.0.0, and falls back to the dictation model.
+
+## Not in 6.1.0 yet
+
+Nothing from the 6.0.0 app is left out.
+
+The old WPF app stays in the repository and still builds; it is just not shipped.
+
 # PrimeDictate 6.0.0
 
 ## Highlights

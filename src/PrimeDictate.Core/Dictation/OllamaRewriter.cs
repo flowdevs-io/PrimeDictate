@@ -6,7 +6,7 @@ using System.Text.Json.Serialization;
 namespace PrimeDictate.Core.Dictation;
 
 /// <summary>Rewrite styles, numbered as in the WPF settings file.</summary>
-[JsonConverter(typeof(JsonStringEnumConverter<OllamaMode>))]
+[JsonConverter(typeof(OllamaModeConverter))]
 public enum OllamaMode
 {
     Default = 0,
@@ -23,6 +23,9 @@ public sealed record RewriteResult(string Text, string? SystemPrompt, bool Rewri
 /// <summary>Optional last step before typing: a local model rewrites the transcript. Any failure keeps the raw text.</summary>
 public interface ITranscriptRewriter
 {
+    /// <summary>True when a rewrite will be attempted (the controller then shows the "AI is processing" status in the overlay while it runs).</summary>
+    bool IsActive => true;
+
     ValueTask<RewriteResult> RewriteAsync(string transcript, IForegroundTarget? target, CancellationToken cancellationToken);
 }
 
@@ -39,6 +42,8 @@ public sealed class OllamaRewriter(Func<OllamaOptions> options, HttpClient? http
 {
     private static readonly HttpClient Shared = new() { Timeout = TimeSpan.FromSeconds(60) };
     private readonly HttpClient client = http ?? Shared;
+
+    public bool IsActive => options().Enabled;
 
     public async ValueTask<RewriteResult> RewriteAsync(string transcript, IForegroundTarget? target, CancellationToken cancellationToken)
     {

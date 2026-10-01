@@ -91,6 +91,18 @@ public sealed class WindowsForegroundGuard : IForegroundTargetGuard
             return currentPid == processId;
         }
 
+        public bool TryInjectDirectly(string text)
+        {
+            if (focused == IntPtr.Zero ||
+                !Win32.IsWindow(focused) ||
+                (focused != window && !Win32.IsChild(window, focused)))
+            {
+                return false;
+            }
+
+            return WindowsFocusedTextControl.TryReplaceSelection(focused, text);
+        }
+
         public bool TryRestore()
         {
             if (!Win32.IsWindow(window))

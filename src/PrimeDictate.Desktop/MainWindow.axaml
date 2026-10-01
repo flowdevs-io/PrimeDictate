@@ -5,14 +5,30 @@
         Title="PrimeDictate" Width="1100" Height="720" MinWidth="720" MinHeight="480">
   <DockPanel>
     <Border DockPanel.Dock="Top" Padding="16,10" Background="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}">
-      <StackPanel Orientation="Horizontal" Spacing="12">
-        <TextBlock Text="PrimeDictate" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center" />
-        <TextBlock Text="Transcription" Opacity="0.7" VerticalAlignment="Center" />
-        <TextBlock x:Name="PlatformText" Opacity="0.5" VerticalAlignment="Center" FontSize="12" />
-      </StackPanel>
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <Button x:Name="HistoryButton" Content="Dictation history" IsEnabled="False"
+                  ToolTip.Tip="What you dictated, with search." />
+          <Button x:Name="StatsButton" Content="Stats" IsEnabled="False" />
+          <Button x:Name="ActivityButton" Content="Activity" IsEnabled="False"
+                  ToolTip.Tip="Dictation sessions and the app's activity log, for troubleshooting. Never shows what you said." />
+          <Button x:Name="SettingsButton" Content="Settings" IsEnabled="False"
+                  ToolTip.Tip="Dictation, transcription and meeting settings, voice commands." />
+        </StackPanel>
+        <StackPanel Orientation="Vertical" Spacing="2" Margin="0,0,16,0">
+          <StackPanel Orientation="Horizontal" Spacing="12">
+            <TextBlock Text="PrimeDictate" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center" />
+            <TextBlock Text="Dictate anywhere. Transcribe meetings and files." Opacity="0.7" VerticalAlignment="Center" />
+          </StackPanel>
+          <TextBlock x:Name="DictationStatusText" Text="Dictation: not running" FontSize="12" Opacity="0.8" TextTrimming="CharacterEllipsis" />
+        </StackPanel>
+      </DockPanel>
     </Border>
     <Border DockPanel.Dock="Bottom" Padding="16,6">
-      <TextBlock x:Name="StatusText" TextWrapping="Wrap" />
+      <DockPanel>
+        <TextBlock x:Name="PlatformText" DockPanel.Dock="Right" Opacity="0.5" VerticalAlignment="Center" FontSize="12" Margin="12,0,0,0" />
+        <TextBlock x:Name="StatusText" TextWrapping="Wrap" />
+      </DockPanel>
     </Border>
     <Grid ColumnDefinitions="280,*" Margin="12">
       <DockPanel Grid.Column="0" Margin="0,0,12,0">

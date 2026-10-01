@@ -1,12 +1,17 @@
 using PrimeDictate.Core.Dictation;
+using PrimeDictate.Platforms.Speech.Qualcomm;
 
 namespace PrimeDictate.Platforms.Speech;
 
 /// <summary>An installed speech model of any family, as dictation sees it.</summary>
-public sealed record InstalledSpeechModel(LegacyBackend Backend, string Id, string DisplayName, string Directory, bool IsEnglishOnly)
+/// <remarks><see cref="Directory"/> is the model folder, except for Whisper.net where it is the path of the ggml <c>.bin</c> file.</remarks>
+public sealed record InstalledSpeechModel(LegacyBackend Backend, string Id, string DisplayName, string Directory, bool IsEnglishOnly, bool IsCustom = false)
 {
     /// <summary>Stable id such as <c>whisper-onnx:base.en</c> or <c>parakeet-onnx:parakeet-tdt-0.6b-v3</c>.</summary>
     public string ModelId => $"{SpeechModelLocator.Prefix(this.Backend)}:{this.Id}";
+
+    /// <summary>Id plus folder: what decides whether a loaded recognizer is still the right one (a custom model path can reuse an id).</summary>
+    public string ProviderKey => $"{this.ModelId}|{this.Directory}";
 }
 
 public sealed record MoonshineFiles(string Tokens, string Encoder, string? MergedDecoder, string? Preprocessor, string? UncachedDecoder, string? CachedDecoder);
@@ -19,13 +24,29 @@ public sealed record ModelDownloadOption(
     string Description,
     long ApproximateBytes,
     string InstallDirectoryName,
-    bool Recommended = false)
+    bool Recommended = false,
+    string? FileName = null,
+    Uri? Source = null,
+    string? OpenVinoBundleFileName = null)
 {
+    /// <summary>True for a model that is one file (Whisper.net ggml <c>.bin</c>) rather than an archive that unpacks to a folder.</summary>
+    public bool IsSingleFile => this.FileName is not null;
+
     public string SubFolder => SpeechModelLocator.SubFolder(this.Backend);
 
-    public string ArchiveFileName => $"{this.InstallDirectoryName}.tar.bz2";
+    /// <summary>The archive's file name: <c>.tar.bz2</c> for the sherpa-onnx releases, or the name in <see cref="Source"/> (the Qualcomm AI Hub zip).</summary>
+    public string ArchiveFileName => this.Source is { } source ? Path.GetFileName(source.AbsolutePath) : $"{this.InstallDirectoryName}.tar.bz2";
 
-    public Uri DownloadUri => new($"https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/{this.ArchiveFileName}");
+    public Uri DownloadUri => this.Source ?? (this.FileName is { } file
+        ? new($"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{file}")
+        : new($"https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/{this.ArchiveFileName}"));
+
+    /// <summary>Intel's zip with the ggml model and its OpenVINO encoder files (the NPU sidecars). Only some models have one.</summary>
+    public bool SupportsOpenVinoBundle => !string.IsNullOrWhiteSpace(this.OpenVinoBundleFileName);
+
+    public Uri? OpenVinoBundleUri => this.OpenVinoBundleFileName is { Length: > 0 } bundle
+        ? new($"https://huggingface.co/Intel/whisper.cpp-openvino-models/resolve/main/{bundle}")
+        : null;
 
     public string ModelId => $"{SpeechModelLocator.Prefix(this.Backend)}:{this.Id}";
 }
@@ -45,10 +66,38 @@ public static class SpeechModelCatalog
         new(LegacyBackend.Parakeet, "parakeet-tdt-0.6b-v2", "Parakeet TDT 0.6B v2", "The earlier English Parakeet release.", 690L * 1024 * 1024, "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"),
         new(LegacyBackend.Parakeet, "parakeet-tdt-0.6b-v2-fp16", "Parakeet TDT 0.6B v2 (fp16, for the GPU)", "English Parakeet in half precision. Made for CUDA; large and slower on the CPU.", 1_120_982_957, "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16"),
         new(LegacyBackend.Moonshine, "moonshine-tiny-v2-en", "Moonshine Tiny v2 (English)", "Very small and fast English model.", 83_886_080, "sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27", true),
-        new(LegacyBackend.Moonshine, "moonshine-base-en", "Moonshine Base (English) v1", "The original Moonshine model.", 250_807_309, "sherpa-onnx-moonshine-base-en-int8")
+        new(LegacyBackend.Moonshine, "moonshine-base-en", "Moonshine Base (English) v1", "The original Moonshine model.", 250_807_309, "sherpa-onnx-moonshine-base-en-int8"),
+        GgmlWhisper("large-v3-turbo", "Large V3 Turbo (GGML, Whisper.net)", "The fastest Whisper V3 option. Runs on the GPU (CUDA or Vulkan) when available.", 1_618_426_976),
+        GgmlWhisper("large-v3", "Large V3 (GGML, Whisper.net)", "The highest-accuracy Whisper V3 model. Runs on the GPU when available; Intel publishes a matching OpenVINO bundle for the NPU.", 4_277_163_902, recommended: true, openVinoBundle: "ggml-large-v3-models.zip"),
+        GgmlWhisper("base.en", "Base English (GGML, Whisper.net)", "Standard English GGML model.", 147_964_352),
+        GgmlWhisper("tiny.en", "Tiny English (GGML, Whisper.net)", "Very small English GGML model.", 77_720_256),
+        QualcommAihub()
     ];
 
-    public static string FormatSize(long bytes) => $"{bytes / (1024d * 1024d):N0} MB";
+    /// <summary>
+    /// What the machine can run: the whole catalog, minus the Qualcomm NPU models unless this is a native Windows ARM64 process with the QNN
+    /// natives. This is the list Settings and first run offer for download.
+    /// </summary>
+    public static IReadOnlyList<ModelDownloadOption> AvailableOptions(MachineSupport support) =>
+        [.. Options.Where(o => o.Backend != LegacyBackend.QualcommQnn || support.QualcommQnn)];
+
+    public static string FormatSize(long bytes) => bytes >= 1024L * 1024 * 1024 ? $"{bytes / (1024d * 1024d * 1024d):N1} GB" : $"{bytes / (1024d * 1024d):N0} MB";
+
+    /// <summary>The Qualcomm AI Hub Whisper package, described by <see cref="QualcommAihubWhisperCatalog"/>, as a downloadable option. Same id, folder and URL as the WPF catalog.</summary>
+    private static ModelDownloadOption QualcommAihub()
+    {
+        var option = QualcommAihubWhisperCatalog.Options[0];
+        return new ModelDownloadOption(
+            LegacyBackend.QualcommQnn, option.Id, option.DisplayName, option.Description, option.ApproximateBytes, option.InstallDirectoryName, option.Recommended,
+            Source: option.DownloadUri);
+    }
+
+    /// <summary>
+    /// A Whisper.net ggml model: one <c>ggml-{id}.bin</c> under <c>models/whisper.net/</c>, downloaded from the whisper.cpp repository on Hugging Face.
+    /// Same ids, file names and sizes as the WPF catalog, so both apps share the installed file.
+    /// </summary>
+    private static ModelDownloadOption GgmlWhisper(string id, string name, string description, long bytes, bool recommended = false, string? openVinoBundle = null) =>
+        new(LegacyBackend.WhisperNet, id, name, description, bytes, $"ggml-{id}.bin", recommended, FileName: $"ggml-{id}.bin", OpenVinoBundleFileName: openVinoBundle);
 
     private static ModelDownloadOption Whisper(string id, string name, string description, long bytes, bool recommended = false) =>
         new(LegacyBackend.Whisper, id, name, description, bytes, $"sherpa-onnx-whisper-{id}", recommended);
@@ -63,13 +112,28 @@ public static class SpeechModelLocator
     {
         LegacyBackend.Parakeet => "parakeet",
         LegacyBackend.Moonshine => "moonshine",
+        LegacyBackend.WhisperNet => "whisper.net",
+        LegacyBackend.QualcommQnn => QualcommAihubWhisperCatalog.SubFolder,
         _ => "whisper"
     };
 
+    /// <summary>
+    /// A ggml file is valid when it exists and is at least half the catalog size. The sizes are approximate (the published file
+    /// can differ by a few MB), so this only rejects an empty or cut-off file, not a slightly different build.
+    /// </summary>
+    public static bool IsValidGgml(ModelDownloadOption option, string path)
+    {
+        var info = new FileInfo(path);
+        return info.Exists && info.Length > 0 && info.Length >= option.ApproximateBytes / 2;
+    }
+
+    /// <summary>For a directory-based model, the folder; for a single-file model, the file path.</summary>
     public static bool IsValid(ModelDownloadOption option, string directory) => option.Backend switch
     {
+        LegacyBackend.WhisperNet => IsValidGgml(option, directory),
         LegacyBackend.Parakeet => IsParakeet(directory),
         LegacyBackend.Moonshine => ResolveMoonshine(directory) is not null,
+        LegacyBackend.QualcommQnn => QualcommAihubWhisperCatalog.IsValidModelDirectory(directory),
         _ => WhisperOnnxModelLocator.TryResolve(directory, out _)
     };
 
@@ -112,29 +176,294 @@ public static class SpeechModelLocator
             : null;
     }
 
-    /// <summary>Every installed model of every family that is in the download catalog, plus any Whisper folder that validates.</summary>
-    public static IReadOnlyList<InstalledSpeechModel> Discover(string modelsRoot)
+    /// <summary>
+    /// Every installed model of every family that is in the download catalog, plus any Whisper folder that validates.
+    /// <paramref name="extraRoots"/> are further models roots (each holding <c>whisper</c>, <c>parakeet</c>, <c>moonshine</c> and
+    /// <c>whisper.net</c> folders), searched after the managed one; the first valid install of a model wins. See <see cref="DevelopmentRoots"/>.
+    /// The Qualcomm NPU models are listed only where <paramref name="support"/> (this machine, when null) can run them: the AI Hub Whisper
+    /// package, and each installed Moonshine model that has prepared QNN files (listed again as a Qualcomm NPU model, with the same id).
+    /// </summary>
+    public static IReadOnlyList<InstalledSpeechModel> Discover(string modelsRoot, IEnumerable<string>? extraRoots = null, MachineSupport? support = null)
     {
+        var qnn = (support ?? MachineSupport.Current).QualcommQnn;
+        var roots = new List<string> { modelsRoot };
+        if (extraRoots is not null)
+        {
+            roots.AddRange(extraRoots);
+        }
+
         var found = new List<InstalledSpeechModel>();
-        foreach (var w in WhisperOnnxModelLocator.Discover(modelsRoot))
+        var whisperFolders = roots.Skip(1).Select(r => Path.Combine(r, SubFolder(LegacyBackend.Whisper)));
+        foreach (var w in WhisperOnnxModelLocator.Discover(modelsRoot, whisperFolders))
         {
             found.Add(new InstalledSpeechModel(LegacyBackend.Whisper, w.Id, w.DisplayName, w.Directory, w.IsEnglishOnly));
         }
 
         foreach (var option in SpeechModelCatalog.Options.Where(o => o.Backend != LegacyBackend.Whisper))
         {
-            var dir = Path.Combine(modelsRoot, option.SubFolder, option.InstallDirectoryName);
-            if (IsValid(option, dir))
+            if (option.Backend == LegacyBackend.QualcommQnn && !qnn)
             {
-                found.Add(new InstalledSpeechModel(option.Backend, option.Id, option.DisplayName, Path.GetFullPath(dir), option.Id is "parakeet-tdt-0.6b-v2" or "parakeet-tdt-0.6b-v2-fp16" || option.Id.EndsWith("-en", StringComparison.Ordinal)));
+                continue;
+            }
+
+            foreach (var root in roots)
+            {
+                var dir = InstallPath(root, option);
+                if (!IsValid(option, dir))
+                {
+                    continue;
+                }
+
+                found.Add(new InstalledSpeechModel(option.Backend, option.Id, option.DisplayName, Path.GetFullPath(dir), IsEnglishOnly(option)));
+                if (qnn && option.Backend == LegacyBackend.Moonshine && MoonshineQnnArtifacts.IsPrepared(dir))
+                {
+                    found.Add(new InstalledSpeechModel(LegacyBackend.QualcommQnn, option.Id, $"{option.DisplayName} (Qualcomm NPU)", Path.GetFullPath(dir), IsEnglishOnly(option)));
+                }
+
+                break;
             }
         }
 
         return found;
     }
 
+    /// <summary>The same as the overload with extra roots, for a machine described by <paramref name="support"/> (tests).</summary>
+    public static IReadOnlyList<InstalledSpeechModel> Discover(string modelsRoot, MachineSupport support) => Discover(modelsRoot, null, support);
+
+    /// <summary>True for a Qualcomm NPU entry that runs the AI Hub Whisper package (as the WPF engine chose: by catalog id), false for Moonshine on the NPU.</summary>
+    public static bool IsQualcommAihubWhisper(InstalledSpeechModel model) =>
+        model.Backend == LegacyBackend.QualcommQnn && QualcommAihubWhisperCatalog.TryGetById(model.Id, out _);
+
+    /// <summary>
+    /// Finds the installed model a settings file selects. An exact id match wins. A Qualcomm selection that cannot be met (a PC without the
+    /// NPU, or a Moonshine model without prepared QNN files) uses the same Moonshine model on the CPU, as the WPF app did.
+    /// </summary>
+    public static InstalledSpeechModel? Resolve(IReadOnlyList<InstalledSpeechModel> installed, DictationSettings settings)
+    {
+        var wanted = WantedModelId(settings);
+        if (wanted is null)
+        {
+            return null;
+        }
+
+        var exact = installed.FirstOrDefault(m => m.ModelId == wanted);
+        if (exact is not null || settings.TranscriptionBackend != LegacyBackend.QualcommQnn || QualcommAihubWhisperCatalog.TryGetById(settings.SelectedModelId, out _))
+        {
+            return exact;
+        }
+
+        var moonshineId = $"{LegacyBackend.Moonshine.ModelIdPrefix()}:{settings.SelectedModelId!.Trim()}";
+        return installed.FirstOrDefault(m => m.ModelId == moonshineId);
+    }
+
+    /// <summary>
+    /// Places the WPF app also looked in besides the managed folder, as models roots: <c>models</c> next to the app, and <c>models</c> in the
+    /// working directory and each of its parents (so a model staged in a repository checkout is found when running from it).
+    /// </summary>
+    public static IReadOnlyList<string> DevelopmentRoots(string? baseDirectory = null, string? workingDirectory = null)
+    {
+        var roots = new List<string> { Path.Combine(baseDirectory ?? AppContext.BaseDirectory, "models") };
+        var dir = new DirectoryInfo(workingDirectory ?? Directory.GetCurrentDirectory());
+        for (var depth = 0; depth < 8 && dir is not null; depth++)
+        {
+            roots.Add(Path.Combine(dir.FullName, "models"));
+            dir = dir.Parent;
+        }
+
+        return roots.Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    /// <summary>
+    /// What dictation can use: the managed folder, the development roots, and the model the settings point at with <c>ModelPath</c>
+    /// when it validates (it replaces an installed model with the same id, and comes first). One place, so Settings, the host and the
+    /// transcription workspace all see the same list.
+    /// </summary>
+    public static IReadOnlyList<InstalledSpeechModel> DiscoverFor(string modelsRoot, DictationSettings settings, IEnumerable<string>? extraRoots = null, MachineSupport? support = null)
+    {
+        var found = Discover(modelsRoot, extraRoots ?? DevelopmentRoots().Where(r => !SamePath(r, modelsRoot)), support).ToList();
+        // A custom Qualcomm package or Moonshine-on-NPU path only counts where the NPU can run it (otherwise normalization has already moved the setup).
+        if (CustomModel(settings) is { } custom && (custom.Backend != LegacyBackend.QualcommQnn || (support ?? MachineSupport.Current).QualcommQnn))
+        {
+            found.RemoveAll(m => m.ModelId == custom.ModelId);
+            found.Insert(0, custom);
+        }
+
+        return found;
+    }
+
+    /// <summary>The model <c>ModelPath</c> names, when it is set and valid for the configured backend. Null otherwise (the managed list applies).</summary>
+    public static InstalledSpeechModel? CustomModel(DictationSettings settings) =>
+        !string.IsNullOrWhiteSpace(settings.ModelPath) && TryResolveCustom(settings.TranscriptionBackend, settings.ModelPath, out var model, out _) ? model : null;
+
+    /// <summary>The model id dictation wants: the custom path's model when there is one, else the selected catalog model.</summary>
+    public static string? WantedModelId(DictationSettings settings) => CustomModel(settings)?.ModelId ?? settings.ResolveModelId();
+
+    private static bool SamePath(string a, string b) =>
+        string.Equals(Path.GetFullPath(a).TrimEnd(Path.DirectorySeparatorChar), Path.GetFullPath(b).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsEnglishOnly(ModelDownloadOption option) => option.Backend == LegacyBackend.QualcommQnn || (option.Backend == LegacyBackend.WhisperNet
+        ? option.Id.EndsWith(".en", StringComparison.Ordinal)
+        : option.Id is "parakeet-tdt-0.6b-v2" or "parakeet-tdt-0.6b-v2-fp16" || option.Id.EndsWith("-en", StringComparison.Ordinal));
+
+    /// <summary>
+    /// A model the user pointed at (a folder, or for Whisper.net a ggml file) rather than one in a models root. The path is validated
+    /// with the same file rules as an installed model. <paramref name="preferred"/> breaks a tie when more than one family fits.
+    /// A path that is a catalog install keeps its catalog id, so it is the same model the downloader would have put there.
+    /// </summary>
+    public static bool TryResolveCustom(string? path, LegacyBackend? preferred, out InstalledSpeechModel model, out string problem)
+    {
+        model = null!;
+        problem = string.Empty;
+        var trimmed = path?.Trim().Trim('"');
+        if (string.IsNullOrEmpty(trimmed))
+        {
+            problem = "No model path was given.";
+            return false;
+        }
+
+        var full = Path.GetFullPath(trimmed);
+        var order = new[] { LegacyBackend.Whisper, LegacyBackend.Parakeet, LegacyBackend.Moonshine, LegacyBackend.WhisperNet };
+        if (preferred is { } first && (order.Contains(first) || first == LegacyBackend.QualcommQnn))
+        {
+            // The Qualcomm family is tried only when it is the configured one: a package folder is never mistaken for another family.
+            order = [first, .. order.Where(b => b != first)];
+        }
+
+        foreach (var backend in order)
+        {
+            if (TryResolveCustom(backend, full, out model, out _))
+            {
+                return true;
+            }
+        }
+
+        problem = File.Exists(full) || Directory.Exists(full)
+            ? "That is not a model PrimeDictate can use. " + RequiredFiles(preferred ?? LegacyBackend.Whisper)
+            : "That path does not exist.";
+        return false;
+    }
+
+    /// <summary>The same for one family. On failure <paramref name="problem"/> says what that family needs.</summary>
+    public static bool TryResolveCustom(LegacyBackend backend, string? path, out InstalledSpeechModel model, out string problem)
+    {
+        model = null!;
+        problem = string.Empty;
+        var trimmed = path?.Trim().Trim('"');
+        if (string.IsNullOrEmpty(trimmed))
+        {
+            problem = "No model path was given.";
+            return false;
+        }
+
+        var full = Path.GetFullPath(trimmed);
+        var name = Path.GetFileName(full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        switch (backend)
+        {
+            case LegacyBackend.Whisper:
+                if (WhisperOnnxModelLocator.TryResolve(full, out var whisper))
+                {
+                    model = new InstalledSpeechModel(LegacyBackend.Whisper, whisper.Id, $"Custom: {whisper.DisplayName}", whisper.Directory, whisper.IsEnglishOnly, IsCustom: true);
+                    return true;
+                }
+
+                break;
+            case LegacyBackend.Parakeet when Directory.Exists(full) && IsParakeet(full):
+                var parakeet = SpeechModelCatalog.Options.FirstOrDefault(o => o.Backend == backend && string.Equals(o.InstallDirectoryName, name, StringComparison.OrdinalIgnoreCase));
+                model = parakeet is null
+                    ? new InstalledSpeechModel(backend, name, $"Custom: Parakeet {name}", full, false, IsCustom: true)
+                    : new InstalledSpeechModel(backend, parakeet.Id, $"Custom: {parakeet.DisplayName}", full, IsEnglishOnly(parakeet), IsCustom: true);
+                return true;
+            case LegacyBackend.Moonshine when ResolveMoonshine(full) is not null:
+                var moonshine = SpeechModelCatalog.Options.FirstOrDefault(o => o.Backend == backend && string.Equals(o.InstallDirectoryName, name, StringComparison.OrdinalIgnoreCase));
+                model = moonshine is null
+                    ? new InstalledSpeechModel(backend, name, $"Custom: Moonshine {name}", full, name.Contains("-en", StringComparison.OrdinalIgnoreCase), IsCustom: true)
+                    : new InstalledSpeechModel(backend, moonshine.Id, $"Custom: {moonshine.DisplayName}", full, IsEnglishOnly(moonshine), IsCustom: true);
+                return true;
+            case LegacyBackend.WhisperNet when File.Exists(full):
+                var ggml = SpeechModelCatalog.Options.FirstOrDefault(o => o.Backend == backend && string.Equals(o.FileName, name, StringComparison.OrdinalIgnoreCase));
+                if (ggml is not null)
+                {
+                    if (!IsValidGgml(ggml, full))
+                    {
+                        problem = "That ggml file is smaller than the published model, so it looks incomplete.";
+                        return false;
+                    }
+
+                    model = new InstalledSpeechModel(backend, ggml.Id, $"Custom: {ggml.DisplayName}", full, IsEnglishOnly(ggml), IsCustom: true);
+                    return true;
+                }
+
+                var stem = Path.GetFileNameWithoutExtension(name);
+                var id = stem.StartsWith("ggml-", StringComparison.OrdinalIgnoreCase) ? stem[5..] : stem;
+                if (new FileInfo(full).Length > 0 && name.EndsWith(".bin", StringComparison.OrdinalIgnoreCase))
+                {
+                    model = new InstalledSpeechModel(backend, id, $"Custom: Whisper.net {id}", full, id.EndsWith(".en", StringComparison.OrdinalIgnoreCase), IsCustom: true);
+                    return true;
+                }
+
+                break;
+            case LegacyBackend.QualcommQnn:
+                // As WPF: a folder holding a runnable AI Hub package, else a Moonshine folder (which runs on the NPU with its prepared qnn files, or on the CPU).
+                if (QualcommAihubWhisperCatalog.TryResolveDirectory(full, out var package))
+                {
+                    var aihub = QualcommAihubWhisperCatalog.TryGetByPath(package) ?? QualcommAihubWhisperCatalog.Options[0];
+                    model = new InstalledSpeechModel(backend, aihub.Id, $"Custom: {aihub.DisplayName}", package, true, IsCustom: true);
+                    return true;
+                }
+
+                if (QualcommAihubWhisperCatalog.IsRawContextOnlyDirectory(full))
+                {
+                    problem = "That folder contains the raw qnn_context_binary package only. PrimeDictate needs the matching precompiled_qnn_onnx package because ONNX Runtime loads Qualcomm context binaries through encoder.onnx and decoder.onnx wrapper files. Use Download model to install the runnable package.";
+                    return false;
+                }
+
+                if (Directory.Exists(full) && ResolveMoonshine(full) is not null)
+                {
+                    var qnnMoonshine = SpeechModelCatalog.Options.FirstOrDefault(o => o.Backend == LegacyBackend.Moonshine && string.Equals(o.InstallDirectoryName, name, StringComparison.OrdinalIgnoreCase));
+                    model = qnnMoonshine is null
+                        ? new InstalledSpeechModel(backend, name, $"Custom: Moonshine {name} (Qualcomm NPU)", full, name.Contains("-en", StringComparison.OrdinalIgnoreCase), IsCustom: true)
+                        : new InstalledSpeechModel(backend, qnnMoonshine.Id, $"Custom: {qnnMoonshine.DisplayName} (Qualcomm NPU)", full, IsEnglishOnly(qnnMoonshine), IsCustom: true);
+                    return true;
+                }
+
+                break;
+        }
+
+        problem = RequiredFiles(backend);
+        return false;
+    }
+
+    /// <summary>What a model of this family needs, in the wording of the WPF Settings window.</summary>
+    public static string RequiredFiles(LegacyBackend backend) => backend switch
+    {
+        LegacyBackend.Parakeet => "The model folder is incomplete. PrimeDictate needs encoder.int8.onnx, decoder.int8.onnx, joiner.int8.onnx, and tokens.txt (or the fp16 set).",
+        LegacyBackend.Moonshine => "The model folder is incomplete. PrimeDictate needs preprocess.onnx, encode.int8.onnx, uncached_decode.int8.onnx, cached_decode.int8.onnx, and tokens.txt (or the v2 encoder, merged decoder and tokens).",
+        LegacyBackend.WhisperNet => "The model file was not found. PrimeDictate needs a Whisper GGML .bin file.",
+        LegacyBackend.QualcommQnn => "Qualcomm AI Hub Whisper model folder not found or incomplete. Pick a folder containing encoder.onnx, decoder.onnx, encoder_qairt_context.bin, decoder_qairt_context.bin, metadata.json, and multilingual.tiktoken.",
+        _ => "The model folder is incomplete. PrimeDictate needs a Whisper ONNX encoder, decoder, and tokens file."
+    };
+
+    /// <summary>Where the model lives: its folder, or for a Whisper.net model the <c>.bin</c> file itself.</summary>
     public static string InstallPath(string modelsRoot, ModelDownloadOption option) =>
         Path.Combine(modelsRoot, option.SubFolder, option.InstallDirectoryName);
+
+    /// <summary>The catalog option for a Whisper.net model id such as <c>large-v3-turbo</c>, or null.</summary>
+    public static ModelDownloadOption? FindWhisperNet(string? id) =>
+        SpeechModelCatalog.Options.FirstOrDefault(o => o.Backend == LegacyBackend.WhisperNet && string.Equals(o.Id, id, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>OpenVINO encoder files that sit next to a ggml model (the WPF app downloads these for the Intel NPU). Null when either is missing.</summary>
+    public static string? WhisperNetOpenVinoEncoder(string modelPath)
+    {
+        var directory = Path.GetDirectoryName(modelPath);
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            return null;
+        }
+
+        var stem = Path.GetFileNameWithoutExtension(modelPath);
+        var xml = Path.Combine(directory, $"{stem}-encoder-openvino.xml");
+        return File.Exists(xml) && File.Exists(Path.Combine(directory, $"{stem}-encoder-openvino.bin")) ? xml : null;
+    }
 
     private static string? Find(string directory, params string[] names) =>
         names.Select(n => Path.Combine(directory, n)).FirstOrDefault(File.Exists);

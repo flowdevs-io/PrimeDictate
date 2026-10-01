@@ -9,6 +9,8 @@ using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using PrimeDictate.Core.Collections;
+using PrimeDictate.Core.Dictation;
+using PrimeDictate.Core.Settings;
 using PrimeDictate.Core.Coordination;
 using PrimeDictate.Core.Export;
 using PrimeDictate.Core.Pipeline;
@@ -43,12 +45,51 @@ public sealed partial class MainWindow : Window
     private IReadOnlyList<SpeechModelChoice> models = [];
     private SessionDocumentHost? host;
     private CancellationTokenSource? jobCancel;
-    private LiveTranscriptionSession? live;
+    private LiveTranscriptionSession? liveSession;
+    private readonly TranscriptionPrefsService prefs;
+    private readonly TaskCompletionSource ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private bool applyingPrefs;
+    private bool startingRecording;
     private int refreshQueued;
     private bool stickToBottom = true;
     private bool scrollingProgrammatically;
 
     public TranscriptionWorkspaceService Workspace => this.workspace;
+
+    /// <summary>The transcription and meeting options, shared with the Settings window.</summary>
+    public TranscriptionPrefsService Prefs => this.prefs;
+
+    /// <summary>Raised when a live recording starts or ends, whichever control (button or tray) did it.</summary>
+    public event Action? RecordingChanged;
+
+    /// <summary>Raised by the header buttons; the dictation shell opens the windows.</summary>
+    public event Action? DictationHistoryRequested;
+
+    public event Action? DictationStatsRequested;
+
+    public event Action? DictationActivityRequested;
+
+    public event Action? SettingsRequested;
+
+    /// <summary>True while a live recording (microphone, system audio or both) is running or paused.</summary>
+    public bool IsRecording => this.Live is not null;
+
+    /// <summary>What the current recording captures, for the tray tooltip (for example "microphone and system audio").</summary>
+    public string RecordingSourceLabel => this.recordingLabel;
+
+    private LiveTranscriptionSession? Live
+    {
+        get => this.liveSession;
+        set
+        {
+            var changed = (this.liveSession is null) != (value is null);
+            this.liveSession = value;
+            if (changed)
+            {
+                this.RecordingChanged?.Invoke();
+            }
+        }
+    }
 
     public MainWindow()
     {
@@ -56,6 +97,11 @@ public sealed partial class MainWindow : Window
         this.PlatformText.Text = $"{RuntimeInformation.OSDescription} · {RuntimeInformation.ProcessArchitecture} · .NET {Environment.Version}";
         var dataDir = Environment.GetEnvironmentVariable("PRIMEDICTATE_DATA_DIR");
         this.workspace = new TranscriptionWorkspaceService(string.IsNullOrWhiteSpace(dataDir) ? null : new AppDataPaths(dataDir));
+        this.prefs = new TranscriptionPrefsService(this.workspace.Paths);
+        this.HistoryButton.Click += (_, _) => this.DictationHistoryRequested?.Invoke();
+        this.StatsButton.Click += (_, _) => this.DictationStatsRequested?.Invoke();
+        this.ActivityButton.Click += (_, _) => this.DictationActivityRequested?.Invoke();
+        this.SettingsButton.Click += (_, _) => this.SettingsRequested?.Invoke();
         this.TranscriptList.ItemsSource = this.rows;
         this.workspace.Notice += this.Say;
         this.LanguageBox.ItemsSource = Languages.Select(l => l.Name).ToList();
@@ -70,11 +116,30 @@ public sealed partial class MainWindow : Window
 
         this.ImportButton.Click += async (_, _) => await this.RunSafelyAsync(() => this.PickFileAsync());
         this.SourceBox.ItemsSource = new[] { "Microphone", "System audio (speakers)", "Microphone + system audio" };
-        this.SourceBox.SelectedIndex = 0;
         this.LiveTextBox.ItemsSource = new[] { "Live text: off, transcribe after Stop", "Live text: fast draft, then final pass" };
-        this.LiveTextBox.SelectedIndex = LoadLiveTextChoice();
-        this.LiveTextBox.SelectionChanged += (_, _) => this.SaveLiveTextChoice();
-        this.FinalPassBox.IsCheckedChanged += (_, _) => this.LiveTextBox.IsEnabled = this.FinalPassBox.IsChecked == true && this.workspace.FinalPassAvailable;
+        this.ApplyPrefsToControls();
+        this.SourceBox.SelectionChanged += (_, _) => this.SavePrefs(p => p with { LastSource = SourceName(this.SourceBox.SelectedIndex) });
+        this.AutoGainBox.IsCheckedChanged += (_, _) => this.SavePrefs(p => p with { BoostQuietAudio = this.AutoGainBox.IsChecked == true });
+        this.LiveTextBox.SelectionChanged += (_, _) => this.SavePrefs(p => p with { LiveTextMode = this.LiveTextBox.SelectedIndex == 1 ? LiveTextModes.Draft : LiveTextModes.Off });
+        this.FinalPassBox.IsCheckedChanged += (_, _) =>
+        {
+            this.LiveTextBox.IsEnabled = this.FinalPassBox.IsChecked == true && this.workspace.FinalPassAvailable;
+            this.SavePrefs(p => p with { SpeakerLabelsAfterStop = this.FinalPassBox.IsChecked == true });
+        };
+        this.prefs.Changed += origin =>
+        {
+            if (!ReferenceEquals(origin, this))
+            {
+                this.ApplyPrefsToControls();
+            }
+        };
+        this.ModelBox.SelectionChanged += (_, _) =>
+        {
+            if (!this.applyingPrefs && this.SelectedModel is { } chosen)
+            {
+                this.SavePrefs(p => p with { AsrModelId = chosen.ModelId });
+            }
+        };
         this.RecordButton.Click += async (_, _) => await this.RunSafelyAsync(() => this.StartRecordingAsync());
         this.PauseButton.Click += async (_, _) => await this.RunSafelyAsync(() => this.TogglePauseAsync());
         this.StopButton.Click += async (_, _) => await this.RunSafelyAsync(() => this.StopRecordingAsync());
@@ -136,6 +201,62 @@ public sealed partial class MainWindow : Window
     /// <summary>True when closing the window only hides it (the app lives in the tray).</summary>
     public bool HidesOnClose { get; set; }
 
+    /// <summary>Shows the dictation state, model and hotkey in the header, and turns on the header buttons that open dictation's windows.</summary>
+    public void SetDictationStatus(string text)
+    {
+        this.DictationStatusText.Text = text;
+        this.HistoryButton.IsEnabled = true;
+        this.StatsButton.IsEnabled = true;
+        this.ActivityButton.IsEnabled = true;
+        this.SettingsButton.IsEnabled = true;
+    }
+
+    /// <summary>
+    /// The tray's "Record meeting": starts a live recording through the same path as the Record button, with the last-used
+    /// source when it captures system audio too (else microphone and system audio, else what this computer can record).
+    /// Shows the window first, because it is where the recording appears and where Stop is.
+    /// </summary>
+    public async Task StartMeetingRecordingAsync()
+    {
+        await this.ready.Task;
+        if (this.Live is not null || this.startingRecording)
+        {
+            return;
+        }
+
+        if (this.jobCancel is not null)
+        {
+            this.Say("PrimeDictate is still finishing the last transcript. Start the recording when it is done.");
+            return;
+        }
+
+        if (this.SelectedModel is null)
+        {
+            this.Say("No speech model is installed. Open Settings to download one, then start the recording.");
+            return;
+        }
+
+        var wanted = this.prefs.Current.LastSource is RecordingSources.System or RecordingSources.Meeting ? this.prefs.Current.LastSource : RecordingSources.Meeting;
+        var source = wanted switch
+        {
+            RecordingSources.System when this.workspace.CanRecordSystemAudio => RecordingSources.System,
+            RecordingSources.Meeting when this.workspace.CanRecordMicrophone && this.workspace.CanRecordSystemAudio => RecordingSources.Meeting,
+            _ when this.workspace.CanRecordMicrophone => RecordingSources.Microphone,
+            _ => RecordingSources.System
+        };
+        this.SourceBox.SelectedIndex = SourceIndex(source);
+        await this.RunSafelyAsync(this.StartRecordingAsync);
+    }
+
+    /// <summary>Stops the live recording exactly as the Stop button does (saves it and starts the speaker-label pass when planned).</summary>
+    public async Task StopMeetingRecordingAsync()
+    {
+        if (this.Live is not null)
+        {
+            await this.RunSafelyAsync(this.StopRecordingAsync);
+        }
+    }
+
     /// <summary>Selects the newest session; used by the smoke screenshot.</summary>
     public void SelectFirstSession() => this.SessionList.SelectedIndex = this.SessionList.ItemCount > 0 ? 0 : -1;
 
@@ -186,12 +307,14 @@ public sealed partial class MainWindow : Window
             await this.workspace.InitializeAsync(CancellationToken.None);
             this.models = this.workspace.AvailableModels();
             this.ModelBox.ItemsSource = this.models.Select(m => m.DisplayName).ToList();
-            this.ModelBox.SelectedIndex = this.models.Count > 0 ? 0 : -1;
+            this.applyingPrefs = true;
+            this.ModelBox.SelectedIndex = this.DefaultModelIndex();
+            this.applyingPrefs = false;
             await this.ReloadSessionsAsync();
             var notes = new List<string>();
             if (this.models.Count == 0)
             {
-                notes.Add($"No speech model is installed. Put a Whisper ONNX folder (for example sherpa-onnx-whisper-tiny.en) under {Path.Combine(this.workspace.Paths.ModelsDirectory, "whisper")}, or install one with the PrimeDictate Windows app.");
+                notes.Add($"No speech model is installed. Open Settings to download one (dictation uses the same models).");
             }
 
             if (!this.workspace.HasFfmpeg)
@@ -215,7 +338,9 @@ public sealed partial class MainWindow : Window
             this.LiveTextBox.IsEnabled = this.workspace.FinalPassAvailable;
             if (!this.workspace.FinalPassAvailable)
             {
+                this.applyingPrefs = true;
                 this.FinalPassBox.IsChecked = false;
+                this.applyingPrefs = false;
             }
             this.StatusText.Text = notes.Count == 0 ? "Ready." : string.Join(" ", notes);
         }
@@ -225,12 +350,93 @@ public sealed partial class MainWindow : Window
             this.ImportButton.IsEnabled = false;
             this.RecordButton.IsEnabled = false;
         }
+        finally
+        {
+            this.ready.TrySetResult();
+        }
+    }
+
+    /// <summary>
+    /// The model picked for transcription before; else the one dictation uses, when it is installed here too (same model ids);
+    /// else the first.
+    /// </summary>
+    private int DefaultModelIndex()
+    {
+        // A model picked for transcription before wins; otherwise the dictation model, then large-v3-turbo, then the first.
+        var saved = this.prefs.Current.AsrModelId;
+        if (!string.IsNullOrWhiteSpace(saved))
+        {
+            var index = this.models.ToList().FindIndex(m => string.Equals(m.ModelId, saved, StringComparison.Ordinal));
+            if (index >= 0)
+            {
+                return index;
+            }
+        }
+
+        return TranscriptionWorkspaceService.DefaultModelIndex(this.models, this.DictationModelId());
+    }
+
+    private string? DictationModelId()
+    {
+        try
+        {
+            return PrimeDictate.Platforms.Speech.SpeechModelLocator.WantedModelId(new DictationSettingsStore(this.workspace.Paths).Load().Settings);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    private static string SourceName(int index) => index switch
+    {
+        1 => RecordingSources.System,
+        2 => RecordingSources.Meeting,
+        _ => RecordingSources.Microphone
+    };
+
+    private static int SourceIndex(string? name) => name switch
+    {
+        RecordingSources.System => 1,
+        RecordingSources.Meeting => 2,
+        _ => 0
+    };
+
+    private void SavePrefs(Func<TranscriptionPreferences, TranscriptionPreferences> change)
+    {
+        if (!this.applyingPrefs)
+        {
+            this.prefs.Update(change, this);
+        }
+    }
+
+    /// <summary>Shows the saved options in the left column (at startup, and when the Settings window changed them).</summary>
+    private void ApplyPrefsToControls()
+    {
+        var p = this.prefs.Current;
+        this.applyingPrefs = true;
+        try
+        {
+            this.SourceBox.SelectedIndex = SourceIndex(p.LastSource);
+            this.AutoGainBox.IsChecked = p.BoostQuietAudio;
+            if (this.workspace.FinalPassAvailable || !this.ready.Task.IsCompleted)
+            {
+                this.FinalPassBox.IsChecked = p.SpeakerLabelsAfterStop;
+            }
+
+            this.LiveTextBox.SelectedIndex = p.LiveTextMode == LiveTextModes.Draft ? 1 : 0;
+            this.LiveTextBox.IsEnabled = this.jobCancel is null && this.FinalPassBox.IsChecked == true && this.workspace.FinalPassAvailable;
+        }
+        finally
+        {
+            this.applyingPrefs = false;
+        }
     }
 
     /// <summary>A meeting saved by an exit before its after-Stop pass ran is finished on the next launch, newest first, one per launch.</summary>
     private async Task ResumePendingFinalPassAsync()
     {
-        if (!this.workspace.FinalPassAvailable || this.live is not null)
+        if (!this.workspace.FinalPassAvailable || this.Live is not null)
         {
             return;
         }
@@ -299,7 +505,7 @@ public sealed partial class MainWindow : Window
         }
 
         this.Refresh();
-        if (newHost is not null && this.live is null && this.workspace.LoadOverlay(newHost.Document.SessionId) is { } saved)
+        if (newHost is not null && this.Live is null && this.workspace.LoadOverlay(newHost.Document.SessionId) is { } saved)
         {
             this.Timeline.SetOverlay(saved.MapTo(newHost.Document));
         }
@@ -364,9 +570,9 @@ public sealed partial class MainWindow : Window
 
         this.RefreshBackendBadge(document);
         this.RefreshSpeakers(document);
-        this.Timeline.SetDocument(document, this.live is not null);
+        this.Timeline.SetDocument(document, this.Live is not null);
         this.Timeline.Height = document is { Speakers.Count: > 0 } ? this.Timeline.DesiredContentHeight : 0;
-        if (this.live is not null && this.stickToBottom)
+        if (this.Live is not null && this.stickToBottom)
         {
             this.ScrollTranscriptToEnd();
         }
@@ -376,7 +582,7 @@ public sealed partial class MainWindow : Window
         this.EmptyText.IsVisible = this.rows.Count == 0;
         this.CopyButton.IsEnabled = has;
         this.ExportButton.IsEnabled = has;
-        var recording = this.live is not null;
+        var recording = this.Live is not null;
         var busy = recording || this.jobCancel is not null;
         this.DeleteButton.IsEnabled = document is not null && !busy;
         this.RerunButton.IsEnabled = document is not null && !busy && this.SelectedModel is not null
@@ -386,7 +592,7 @@ public sealed partial class MainWindow : Window
             this.StatusText.Text = $"{document.Title}: {document.Status}";
         }
 
-        if (this.live is { } session)
+        if (this.Live is { } session)
         {
             this.LevelText.Text = $"Recorded {(int)session.Elapsed.TotalMinutes}:{session.Elapsed.Seconds:00}" + (session.Backlog > TimeSpan.FromSeconds(5) ? $" · model is {session.Backlog.TotalSeconds:0}s behind" : string.Empty);
         }
@@ -430,7 +636,7 @@ public sealed partial class MainWindow : Window
         }
 
         // While recording, outline the box of whoever spoke most recently, in their timeline color.
-        var latest = this.live is null || document is null ? null : document.ActiveSegments.LastOrDefault(s => s.Speakers.Count > 0) is { } last ? document.ResolveSpeakerId(last.Speakers[0].SpeakerId) : null;
+        var latest = this.Live is null || document is null ? null : document.ActiveSegments.LastOrDefault(s => s.Speakers.Count > 0) is { } last ? document.ResolveSpeakerId(last.Speakers[0].SpeakerId) : null;
         foreach (var speaker in speakers)
         {
             var active = speaker.Id == latest;
@@ -528,7 +734,7 @@ public sealed partial class MainWindow : Window
     }
 
     private void UpdateJumpButton() =>
-        this.JumpToLiveButton.IsVisible = this.live is not null && (!this.Timeline.IsFollowing || !this.stickToBottom);
+        this.JumpToLiveButton.IsVisible = this.Live is not null && (!this.Timeline.IsFollowing || !this.stickToBottom);
 
     private void OnTimelineSegmentClicked(string segmentId)
     {
@@ -608,7 +814,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        if (this.jobCancel is not null || this.live is not null)
+        if (this.jobCancel is not null || this.Live is not null)
         {
             this.Say("Wait for the current job to finish, or stop it first.");
             return;
@@ -700,7 +906,7 @@ public sealed partial class MainWindow : Window
         this.FinalPassBox.IsEnabled = !active && this.workspace.FinalPassAvailable;
         this.LiveTextBox.IsEnabled = !active && this.FinalPassBox.IsChecked == true && this.workspace.FinalPassAvailable;
         this.StopButton.IsVisible = active && canStop;
-        this.StopButton.Content = this.live is null ? "Cancel" : "Stop";
+        this.StopButton.Content = this.Live is null ? "Cancel" : "Stop";
         this.ModelBox.IsEnabled = !active;
     }
 
@@ -719,11 +925,12 @@ public sealed partial class MainWindow : Window
 
     private async Task StartRecordingAsync()
     {
-        if (this.SelectedModel is not { } model || this.jobCancel is not null)
+        if (this.SelectedModel is not { } model || this.jobCancel is not null || this.startingRecording)
         {
             return;
         }
 
+        this.startingRecording = true;
         try
         {
             var mode = this.SourceBox.SelectedIndex switch { 1 => TranscriptSourceType.SystemAudio, 2 => TranscriptSourceType.Meeting, _ => TranscriptSourceType.Microphone };
@@ -744,14 +951,14 @@ public sealed partial class MainWindow : Window
                 model = draft;
             }
 
-            this.live = await this.workspace.StartLiveAsync(model, null, AudioRetention.KeepAudio, $"{(mode == TranscriptSourceType.Microphone ? "Recording" : "Meeting")} {DateTime.Now:g}", CancellationToken.None, mode, null, this.AutoGainBox.IsChecked == true);
+            this.Live = await this.workspace.StartLiveAsync(model, null, AudioRetention.KeepAudio, $"{(mode == TranscriptSourceType.Microphone ? "Recording" : "Meeting")} {DateTime.Now:g}", CancellationToken.None, mode, null, this.AutoGainBox.IsChecked == true);
             this.recordingLabel = label;
             // With a fast model live and Nemotron available, the live text is a draft and Stop starts the final pass.
             this.twoPassPlanned = twoPass && !model.ModelId.StartsWith("nemotron:", StringComparison.Ordinal);
             this.RecordingIndicator.Text = "● Recording " + label + (this.twoPassPlanned ? (recordOnly ? " (transcribed after Stop)" : " (draft text, speaker labels after Stop)") : string.Empty);
             this.RecordingIndicator.IsVisible = true;
-            this.live.Error += this.Say;
-            this.live.LevelChanged += level => Dispatcher.UIThread.Post(() => this.LevelText.Text = $"Level {new string('█', (int)Math.Min(20, level * 60))}");
+            this.Live.Error += this.Say;
+            this.Live.LevelChanged += level => Dispatcher.UIThread.Post(() => this.LevelText.Text = $"Level {new string('█', (int)Math.Min(20, level * 60))}");
             this.jobCancel = new CancellationTokenSource();
             this.SetJobUi(active: true, canStop: true);
             this.Progress.IsVisible = false;
@@ -762,11 +969,11 @@ public sealed partial class MainWindow : Window
             this.Timeline.FollowLive();
             if (this.twoPassPlanned)
             {
-                this.workspace.MarkFinalPassPending(this.live.Host!.Document.SessionId);
+                this.workspace.MarkFinalPassPending(this.Live.Host!.Document.SessionId);
             }
 
-            this.Attach(this.live.Host!);
-            await this.ReloadSessionsAsync(this.live.Host!.Document.SessionId);
+            this.Attach(this.Live.Host!);
+            await this.ReloadSessionsAsync(this.Live.Host!.Document.SessionId);
             this.Say(recordOnly
                 ? "Recording only. Nothing is transcribed during the call; after Stop, Nemotron transcribes the whole recording on the GPU."
                 : this.twoPassPlanned
@@ -786,11 +993,15 @@ public sealed partial class MainWindow : Window
                 _ => "Audio problem: " + ex.Message
             });
         }
+        finally
+        {
+            this.startingRecording = false;
+        }
     }
 
     private async Task TogglePauseAsync()
     {
-        if (this.live is not { } session)
+        if (this.Live is not { } session)
         {
             return;
         }
@@ -813,7 +1024,7 @@ public sealed partial class MainWindow : Window
 
     private async Task StopRecordingAsync()
     {
-        if (this.live is null)
+        if (this.Live is null)
         {
             this.jobCancel?.Cancel();
             return;
@@ -823,7 +1034,7 @@ public sealed partial class MainWindow : Window
         this.Say("Finishing the last words…");
         this.StopButton.IsEnabled = false;
         await this.workspace.StopLiveAsync(CancellationToken.None);
-        this.live = null;
+        this.Live = null;
         this.StopButton.IsEnabled = true;
         this.EndJob();
         this.Say(target?.Document.Status == TranscriptSessionStatus.Completed ? "Saved." : $"Stopped: {target?.Document.Status}. What was captured is kept.");
@@ -841,39 +1052,6 @@ public sealed partial class MainWindow : Window
     }
 
     private bool twoPassPlanned;
-
-    private string LiveTextPrefsPath => Path.Combine(this.workspace.Paths.Root, "meeting-live-text.txt");
-
-    /// <summary>0 = off (record only, the default), 1 = fast draft. Remembered between runs.</summary>
-    private int LoadLiveTextChoice()
-    {
-        try
-        {
-            return File.Exists(this.LiveTextPrefsPath) && File.ReadAllText(this.LiveTextPrefsPath).Trim() == "draft" ? 1 : 0;
-        }
-        catch (IOException)
-        {
-            return 0;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return 0;
-        }
-    }
-
-    private void SaveLiveTextChoice()
-    {
-        try
-        {
-            File.WriteAllText(this.LiveTextPrefsPath, this.LiveTextBox.SelectedIndex == 1 ? "draft" : "off");
-        }
-        catch (IOException)
-        {
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
-    }
 
     /// <summary>Second pass of a two-pass meeting: the final transcript with speaker labels replaces the live draft.</summary>
     private async Task FinalPassAsync(SessionDocumentHost target)
@@ -913,7 +1091,7 @@ public sealed partial class MainWindow : Window
     {
         var id = this.host?.Document.SessionId;
         await this.workspace.DiscardLiveAsync();
-        this.live = null;
+        this.Live = null;
         this.EndJob();
         this.Say("Recording canceled. You can delete it from the list if you don't want to keep it.");
         await this.ReloadSessionsAsync(id);
@@ -973,7 +1151,7 @@ public sealed partial class MainWindow : Window
         var result = await this.workspace.DeleteSessionAsync(this.host.Document.SessionId, CancellationToken.None);
         if (wasRecording)
         {
-            this.live = null;
+            this.Live = null;
             this.EndJob();
         }
 

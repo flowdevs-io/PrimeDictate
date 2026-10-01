@@ -54,6 +54,34 @@ public sealed class DictationSettingsTests : IDisposable
     }
 
     [Fact]
+    public void Wpf_voice_shell_commands_are_imported_with_their_enabled_state_and_new_ones_round_trip()
+    {
+        var paths = new AppDataPaths(this.root);
+        File.WriteAllText(Path.Combine(this.root, "settings.json"), """
+            {
+              "VoiceShellCommands": [
+                { "Enabled": true, "Phrase": "open notes", "CompletionBehavior": "Continue", "Command": "notepad" },
+                { "Enabled": false, "Phrase": "lock screen", "CompletionBehavior": "Stop", "Command": "rundll32 user32.dll,LockWorkStation" }
+              ]
+            }
+            """);
+        var store = new DictationSettingsStore(paths);
+        var load = store.Load();
+        var commands = load.Settings.VoiceShellCommands;
+        Assert.Equal(2, commands.Count);
+        Assert.True(commands[0].Enabled);
+        Assert.Equal(VoiceShellCommandCompletionBehavior.Continue, commands[0].CompletionBehavior);
+        Assert.False(commands[1].Enabled);
+        Assert.Equal(2, load.Settings.ToVoiceCommandOptions().ShellCommands.Count);
+
+        store.Save(load.Settings);
+        var again = store.Load().Settings.VoiceShellCommands;
+        Assert.Equal(["open notes", "lock screen"], again.Select(c => c.Phrase).ToArray());
+        Assert.Equal([true, false], again.Select(c => c.Enabled).ToArray());
+        Assert.Empty(new DictationSettings().VoiceShellCommands);
+    }
+
+    [Fact]
     public void Missing_or_broken_files_fall_back_to_defaults_without_touching_them()
     {
         var store = new DictationSettingsStore(new AppDataPaths(this.root));
