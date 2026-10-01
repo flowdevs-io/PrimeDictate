@@ -9,7 +9,7 @@ namespace PrimeDictate.Platforms.Audio;
 /// Windows endpoint ids ("{0.0.1.00000000}.{guid}") are what the WPF app saved as the chosen microphone; miniaudio lists
 /// devices by name. This finds the name Windows gives such an id, so an imported choice still selects its device.
 /// </summary>
-internal static partial class WindowsAudioEndpoints
+public static partial class WindowsAudioEndpoints
 {
     public static bool IsEndpointId(string id) => EndpointId().IsMatch(id);
 

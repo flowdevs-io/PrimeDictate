@@ -440,7 +440,9 @@ public sealed class DictationController : IAsyncDisposable
             var match = this.shellRunner is null ? this.voiceCommands.Apply(spoken) : this.voiceCommands.ApplyFinal(spoken);
             if (match.Shell is { } shell && this.shellRunner is not null)
             {
-                if (!await this.RunShellCommandAsync(s, shell, this.shellRunner, duration).ConfigureAwait(false))
+                // Stop ends the dictation. Continue with nothing left after the phrase also ends it, silently (as the WPF app did):
+                // the command was the whole utterance, so "No text was recognized" would be wrong.
+                if (!await this.RunShellCommandAsync(s, shell, this.shellRunner, duration).ConfigureAwait(false) || string.IsNullOrWhiteSpace(match.CleanedText))
                 {
                     return;
                 }
@@ -482,6 +484,12 @@ public sealed class DictationController : IAsyncDisposable
         string? rewritePrompt = null;
         if (this.rewriter is not null)
         {
+            if (this.rewriter.IsActive)
+            {
+                // The overlay shows this status while the model works, as the WPF app did.
+                this.PartialTranscript?.Invoke(s.Id, RewriteStatusText);
+            }
+
             try
             {
                 var rewrite = await this.rewriter.RewriteAsync(transcript, s.Target, CancellationToken.None).ConfigureAwait(false);
@@ -548,6 +556,9 @@ public sealed class DictationController : IAsyncDisposable
         }
     }
 
+    /// <summary>What the overlay shows while a rewrite runs (the WPF text).</summary>
+    public const string RewriteStatusText = "[AI is processing transcript...]";
+
     private static readonly TimeSpan ShellTypeTargetWait = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan ShellTypePollInterval = TimeSpan.FromMilliseconds(100);
 
@@ -590,7 +601,7 @@ public sealed class DictationController : IAsyncDisposable
         }
 
         this.Committed?.Invoke(new DictationCommit(
-            s.Id, this.time.GetUtcNow().UtcDateTime, label, status, "Command", null, null, error, duration, EnterSent: false));
+            s.Id, this.time.GetUtcNow().UtcDateTime, label, status, "Command Prompt", "Command Prompt", "Command Prompt", error, duration, EnterSent: false));
         return status == DictationDeliveryStatus.CommandExecuted && command.CompletionBehavior == VoiceShellCommandCompletionBehavior.Continue;
     }
 

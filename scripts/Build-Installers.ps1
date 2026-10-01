@@ -94,8 +94,28 @@ $script:AppPayloadFiles = @(
     "e_sqlite3.dll"
 )
 
+# Files that depend on the target: Whisper.net (managed library and its whisper.cpp native, published under runtimes\<rid>) on both,
+# and on arm64 the Qualcomm QNN natives (copied over the output at publish, replacing the ONNX Runtime that sherpa-onnx brought) and the
+# Microsoft.ML.OnnxRuntime managed assembly the QNN code calls.
+function Get-RidPayloadFiles {
+    param([string] $Rid)
+
+    $files = @("Whisper.net.dll", "runtimes\$Rid\whisper.dll")
+    if ($Rid -eq "win-arm64") {
+        $files += @(
+            "Microsoft.ML.OnnxRuntime.dll",
+            "onnxruntime_providers_qnn.dll",
+            "onnxruntime_providers_shared.dll",
+            "QnnHtp.dll",
+            "QnnSystem.dll"
+        )
+    }
+
+    return $files
+}
+
 function Test-SelfContainedPublishOutput {
-    param([string] $PublishDir)
+    param([string] $PublishDir, [string] $Rid)
 
     $requiredFiles = @(
         "PrimeDictate.exe",
@@ -105,7 +125,7 @@ function Test-SelfContainedPublishOutput {
         "hostpolicy.dll",
         "coreclr.dll",
         "System.Private.CoreLib.dll"
-    ) + $script:AppPayloadFiles
+    ) + $script:AppPayloadFiles + (Get-RidPayloadFiles -Rid $Rid)
 
     foreach ($file in $requiredFiles) {
         $path = Join-Path $PublishDir $file
@@ -122,7 +142,7 @@ function Test-SelfContainedPublishOutput {
 }
 
 function Test-MsiContainsSelfContainedRuntime {
-    param([string] $MsiPath)
+    param([string] $MsiPath, [string] $Rid)
 
     $requiredFiles = @(
         "hostfxr.dll",
@@ -131,7 +151,7 @@ function Test-MsiContainsSelfContainedRuntime {
         "System.Private.CoreLib.dll",
         "PrimeDictate.exe",
         "PrimeDictate.dll"
-    ) + $script:AppPayloadFiles
+    ) + $script:AppPayloadFiles + ((Get-RidPayloadFiles -Rid $Rid) | ForEach-Object { Split-Path -Leaf $_ })
 
     $installer =New-Object -ComObject WindowsInstaller.Installer
     $database = $null
@@ -209,7 +229,7 @@ foreach ($rid in $requestedRids) {
         throw "Publish output missing PrimeDictate.exe at $publishDir. Run without -SkipPublish."
     }
 
-    Test-SelfContainedPublishOutput -PublishDir $publishDir
+    Test-SelfContainedPublishOutput -PublishDir $publishDir -Rid $rid
     $publishDirFull = (Resolve-Path $publishDir).Path
 
     Write-Host "Building online MSI for $rid..."
@@ -229,7 +249,7 @@ foreach ($rid in $requestedRids) {
         throw "Expected built MSI not found: $builtOnlineMsi"
     }
 
-    Test-MsiContainsSelfContainedRuntime -MsiPath $builtOnlineMsi
+    Test-MsiContainsSelfContainedRuntime -MsiPath $builtOnlineMsi -Rid $rid
     Copy-Item -Force $builtOnlineMsi $publishedOnlineMsi
 }
 

@@ -1,3 +1,4 @@
+using PrimeDictate.Core.Dictation;
 using PrimeDictate.Core.Settings;
 using PrimeDictate.Core.Storage;
 
@@ -19,7 +20,7 @@ public sealed class TranscriptionPrefsService
         var legacy = Path.Combine(paths.Root, "meeting-live-text.txt");
         try
         {
-            var load = this.store.Load(() => new TranscriptionPreferences { LiveTextMode = ReadLegacyLiveText(legacy) });
+            var load = this.store.Load(() => TranscriptionPreferencesSeed.From(ReadDictationModelId(paths), ReadLegacyLiveText(legacy)));
             this.Current = load.Preferences;
             this.readOnly = load.IsReadOnly;
             this.Warning = load.Warning;
@@ -62,6 +63,19 @@ public sealed class TranscriptionPrefsService
         }
 
         this.Changed?.Invoke(origin);
+    }
+
+    /// <summary>The model dictation uses (the WPF app's choice on a first start after the update), so transcription starts on it.</summary>
+    private static string? ReadDictationModelId(AppDataPaths paths)
+    {
+        try
+        {
+            return PrimeDictate.Platforms.Speech.SpeechModelLocator.WantedModelId(new DictationSettingsStore(paths).Load().Settings);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        {
+            return null;
+        }
     }
 
     /// <summary>Earlier builds kept only the live-text choice, in <c>meeting-live-text.txt</c>; carry it over once.</summary>

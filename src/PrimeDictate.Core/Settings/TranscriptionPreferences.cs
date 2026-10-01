@@ -10,6 +10,12 @@ namespace PrimeDictate.Core.Settings;
 /// Transcription-mode defaults. Stored apart from dictation's <c>settings.json</c>, which is
 /// never rewritten by transcription mode.
 /// </summary>
+/// <remarks>
+/// Earlier files also had <c>RequestedBackend</c>, <c>SpeakerDetection</c>, <c>DiarizerModelId</c>, <c>InputDeviceId</c> and <c>CopyImportedMedia</c>.
+/// Nothing read them (the run records what it actually used, speaker labels are <see cref="SpeakerLabelsAfterStop"/>, imports always
+/// keep their media in the session folder, and recording uses the system default microphone), so they were removed; an old file that
+/// still has them loads fine.
+/// </remarks>
 public sealed record TranscriptionPreferences
 {
     public const int CurrentSchemaVersion = 1;
@@ -18,21 +24,10 @@ public sealed record TranscriptionPreferences
 
     public string? AsrModelId { get; init; }
 
-    public string RequestedBackend { get; init; } = "cpu";
-
     public string? Language { get; init; }
-
-    public bool SpeakerDetection { get; init; }
-
-    public string? DiarizerModelId { get; init; }
 
     [JsonConverter(typeof(JsonStringEnumConverter<AudioRetention>))]
     public AudioRetention AudioRetention { get; init; } = AudioRetention.KeepAudio;
-
-    public string? InputDeviceId { get; init; }
-
-    /// <summary>Copy imported files into app storage instead of referencing them in place.</summary>
-    public bool CopyImportedMedia { get; init; }
 
     /// <summary>Meetings: <c>off</c> records only and transcribes after Stop; <c>draft</c> shows a fast model's text while people talk.</summary>
     public string LiveTextMode { get; init; } = LiveTextModes.Off;
@@ -45,6 +40,19 @@ public sealed record TranscriptionPreferences
 
     /// <summary>The recording source last used: <c>microphone</c>, <c>system</c> or <c>meeting</c> (both). Null until one was used.</summary>
     public string? LastSource { get; init; }
+}
+
+/// <summary>
+/// First-run transcription defaults taken from the dictation settings (the WPF <c>TranscriptionPreferencesSeed</c>): the speech model
+/// dictation uses, when there is one, so transcription starts on the model the user already picked.
+/// </summary>
+public static class TranscriptionPreferencesSeed
+{
+    public static TranscriptionPreferences From(string? dictationModelId, string liveTextMode) => new()
+    {
+        AsrModelId = string.IsNullOrWhiteSpace(dictationModelId) ? null : dictationModelId,
+        LiveTextMode = liveTextMode
+    };
 }
 
 public static class LiveTextModes

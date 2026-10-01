@@ -403,6 +403,7 @@ public sealed class VoiceShellCommand
 
     public string Phrase { get; set; } = "";
 
+    [System.Text.Json.Serialization.JsonConverter(typeof(VoiceShellCompletionConverter))]
     public VoiceShellCommandCompletionBehavior CompletionBehavior { get; set; } = VoiceShellCommandCompletionBehavior.Stop;
 
     public string Command { get; set; } = "";

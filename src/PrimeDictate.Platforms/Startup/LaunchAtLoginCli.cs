@@ -60,14 +60,11 @@ public static class LaunchAtLoginCli
             wanted = LoginScope.Off;
         }
 
-        string? problem;
-        if (request.Disable && request.Scope == LoginScope.CurrentUser)
+        // Disabling all users first removes the machine entry and the MSI's all-users shortcut (elevating when needed); if that fails nothing else changes.
+        var problem = request.Disable && request.Scope == LoginScope.AllUsers ? login.DisableAllUsers() : null;
+        if (problem is null)
         {
-            problem = login.Apply(false);
-        }
-        else
-        {
-            problem = login.Apply(wanted);
+            problem = request.Disable && request.Scope == LoginScope.CurrentUser ? login.Apply(false) : login.Apply(wanted);
         }
 
         exitCode = problem is null ? 0 : 1;

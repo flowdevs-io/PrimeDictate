@@ -13,9 +13,9 @@
     <iconUrl>https://raw.githubusercontent.com/flowdevs-io/PrimeDictate/main/installer/wix/assets/PrimeDictate-chocolatey-icon.png</iconUrl>
     <licenseUrl>https://github.com/flowdevs-io/PrimeDictate?tab=readme-ov-file#license</licenseUrl>
     <releaseNotes>https://github.com/flowdevs-io/PrimeDictate/releases</releaseNotes>
-    <tags>dictation speech-to-text whisper local-ai wpf windows</tags>
+    <tags>dictation speech-to-text whisper local-ai windows</tags>
     <summary>PrimeDictate is a fast, local speech-to-text application for Windows.</summary>
-    <description>PrimeDictate is a Windows tray dictation app built with .NET and WPF. It uses local Whisper transcription for privacy-first speech-to-text, global hotkey capture, live overlay preview, and final-only text injection into the active app.</description>
+    <description>PrimeDictate is a Windows tray dictation app built with .NET. It uses local Whisper transcription for privacy-first speech-to-text, global hotkey capture, live overlay preview, and final-only text injection into the active app.</description>
   </metadata>
   <files>
     <file src="tools\**" target="tools" />

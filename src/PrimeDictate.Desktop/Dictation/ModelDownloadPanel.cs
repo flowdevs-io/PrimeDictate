@@ -6,7 +6,7 @@ using PrimeDictate.Platforms.Speech;
 
 namespace PrimeDictate.Desktop.Dictation;
 
-/// <summary>Pick a catalog model, download it with progress, cancel it. Calls <paramref name="installed"/> once a model is ready.</summary>
+/// <summary>Pick a catalog model, download it with progress, cancel it. Calls <paramref name="installed"/> with the model's id once a model is ready.</summary>
 public sealed class ModelDownloadPanel : StackPanel
 {
     private readonly DictationHost host;
@@ -25,7 +25,7 @@ public sealed class ModelDownloadPanel : StackPanel
         _ => backend.ToString()
     };
 
-    public ModelDownloadPanel(DictationHost host, Action installed)
+    public ModelDownloadPanel(DictationHost host, Action<string> installed)
     {
         this.host = host;
         this.Spacing = 6;
@@ -34,7 +34,7 @@ public sealed class ModelDownloadPanel : StackPanel
         this.choice.ItemsSource = this.options
             .Select(o => $"{FamilyName(o.Backend)}: {o.DisplayName} ({SpeechModelCatalog.FormatSize(o.ApproximateBytes)}){(o.Recommended ? " - recommended" : string.Empty)}")
             .ToList();
-        this.choice.SelectedIndex = 0;
+        this.choice.SelectedIndex = PreselectedIndex(this.options, host.Settings);
         this.start.Click += async (_, _) => await this.RunAsync(installed);
         this.cancel.Click += (_, _) => this.running?.Cancel();
         // The list takes what is left of the row (the model names are long), so the buttons stay inside the window.
@@ -45,11 +45,27 @@ public sealed class ModelDownloadPanel : StackPanel
         this.Children.Add(this.text);
     }
 
+    /// <summary>
+    /// The model shown first, as the WPF Settings window chose it: the one the settings already name, else the recommended model of that
+    /// family (Whisper by default), else the first. For a new install that is Whisper Tiny English.
+    /// </summary>
+    internal static int PreselectedIndex(IReadOnlyList<ModelDownloadOption> options, PrimeDictate.Core.Dictation.DictationSettings settings)
+    {
+        var wanted = settings.ResolveModelId();
+        var index = wanted is null ? -1 : options.ToList().FindIndex(o => o.ModelId == wanted);
+        if (index < 0)
+        {
+            index = options.ToList().FindIndex(o => o.Backend == settings.TranscriptionBackend && o.Recommended);
+        }
+
+        return Math.Max(0, index);
+    }
+
     /// <summary>True while a download is running.</summary>
     public bool IsBusy => this.running is not null;
 
     /// <summary>Starts downloading the model currently shown in the list (first-run setup does this when no model is installed, as the WPF wizard did).</summary>
-    public void StartDownload(Action installed)
+    public void StartDownload(Action<string> installed)
     {
         if (!this.IsBusy)
         {
@@ -57,7 +73,7 @@ public sealed class ModelDownloadPanel : StackPanel
         }
     }
 
-    private async Task RunAsync(Action installed)
+    private async Task RunAsync(Action<string> installed)
     {
         var option = this.options[Math.Max(0, this.choice.SelectedIndex)];
         this.running = new CancellationTokenSource();
@@ -79,7 +95,7 @@ public sealed class ModelDownloadPanel : StackPanel
         {
             await this.host.DownloadModelAsync(option, progress, this.running.Token);
             this.text.Text = $"{option.DisplayName} is installed.";
-            installed();
+            installed(option.ModelId);
         }
         catch (OperationCanceledException)
         {
