@@ -62,7 +62,6 @@ Final-only typing, no clipboard, no live retyping into the target, Enter only af
 
 - Installers ship this app from 6.1.0 (see `installer/README.md`); Qualcomm QNN/AI Hub models stay WPF-only.
 - Wake word uses a Tiny/Base Whisper model when installed, else the dictation model (as WPF does). Moonshine/Whisper.net wake models are not ported.
-- The WPF app's focused-edit-control insertion (`WindowsFocusedTextControl`) and direct injection into the original target.
 - Compact-mode ripple animation and the copy/pin buttons of the WPF overlay, macOS `NSPanel`, Linux X11 hints.
 - First-run onboarding is built but not looked at.
 
@@ -75,3 +74,14 @@ Final-only typing, no clipboard, no live retyping into the target, Enter only af
 | Main window header: dictation state, model, hotkey, buttons for history, stats, settings | `MainWindow.axaml` | Started on Windows and looked at |
 | Transcription model defaults to the transcription pick, else the dictation model, else large-v3-turbo | `MainWindow.axaml.cs` | Not exercised |
 | One Settings window with a "Transcription & meetings" section (source, live text, speaker labels, boost), kept in sync with the main window; stored in `transcription-settings.json`, the old `meeting-live-text.txt` is carried over once | `TranscriptionPrefsService.cs`, `TranscriptionPreferences.cs` | Defaults and load: unit tests. Sync not exercised by hand |
+
+## Windows text delivery parity (6.1.0 work)
+
+| Piece | Where | Verified |
+|---|---|---|
+| Focused-control insertion first, SendInput second (same order as WPF `WindowsUnicodeInput.SendText`): `EM_REPLACESEL` into the focused control when its class name contains "Edit", else virtual-key and unicode `SendInput`. No clipboard. The route taken is logged, never the text | `Platforms/Input/WindowsFocusedTextControl.cs`, `WindowsTextEntry.cs`, `WindowsSendInput.cs`, `SharpHookTextInjector.cs` | Ran: decision unit tests with fakes. Real run on Windows 11: own Notepad, both routes read back with `WM_GETTEXT` (see below) |
+| Direct injection into the original target without reactivating it (`IForegroundTarget.TryInjectDirectly`): when focus moved and "return to the starting window" is on and coding-mode Enter is off, insert into the original window's focused edit control; else restore the window and type; Enter only after a successful injection | `Core/Dictation/Delivery.cs`, `WindowsForegroundGuard.cs` | Ran: unit tests for every branch with fakes. The real run checks the target's direct injection while Notepad is in front, not with another window in front (that would mean using someone else's window) |
+| Mouse Sonar pulse (Ctrl tap 150 ms after recording or processing starts, only when the Windows "show pointer location" setting is on, no setting of ours) | `Platforms/Input/WindowsMousePointerIndicator.cs`, `DictationShell.OnState` | Compiled and started; the pulse itself was not looked at |
+| Exclusive microphone access while dictating (WPF `ExclusiveMicAccessWhileDictating`, imported by name; checkbox in Settings on Windows; miniaudio WASAPI exclusive share mode on a concrete endpoint; falls back to shared and logs; the wake word and meetings always open shared; tray tooltip shows "[Exclusive]" or "[Shared]" while listening) | `IAudioSource.OpenAsync(.., MicAccessMode, ..)`, `MiniAudioCaptureSource.cs`, `DictationController.ActiveMicAccess`, `DictationSettingsWindow.cs` | Ran: unit tests (request only when set, granted mode reported, fallback passes it through, WPF setting imports). Real run on this PC: exclusive was refused by the Arctis endpoint (`ShareModeNotSupported`), the NAudio exclusive path the WPF app uses also fails on both microphones here (`Unsupported Wave Format`), and capture fell back to shared with frames flowing. A real exclusive grant was not seen on any device |
+
+Env-gated real runs (skipped by default): `PRIMEDICTATE_REAL_INPUT=1` (`WindowsTextDeliveryRealRunTests`, starts and closes its own Notepad, takes focus for a few seconds) and `PRIMEDICTATE_REAL_MIC=1` (`ExclusiveMicRealRunTests`). Keyboard route note: a sentence with shifted punctuation (a colon) came out as `;` in about half the runs while another app was running its own input hooks, so the test sentence uses letters, digits and an accented letter only; the SendInput code is the WPF code unchanged.

@@ -99,6 +99,9 @@ public sealed class DictationController : IAsyncDisposable
 
     public bool IsRecording => Volatile.Read(ref this.session) is not null;
 
+    /// <summary>How the microphone is open right now (Exclusive or Shared), or null when dictation is not recording.</summary>
+    public MicAccessMode? ActiveMicAccess => Volatile.Read(ref this.session)?.Capture.AccessMode;
+
     public DictationOptions Options
     {
         get => this.options;
@@ -182,7 +185,11 @@ public sealed class DictationController : IAsyncDisposable
                 micLease = await this.microphone.AcquireAsync(MicrophoneOwner, CancellationToken.None).ConfigureAwait(false);
             }
 
-            capture = await this.audioSource.OpenAsync(opts.InputDeviceId, CancellationToken.None).ConfigureAwait(false);
+            capture = await this.audioSource.OpenAsync(
+                opts.InputDeviceId,
+                opts.ExclusiveMicAccess ? MicAccessMode.Exclusive : MicAccessMode.Shared,
+                CancellationToken.None).ConfigureAwait(false);
+            Diagnostics.AppLog.Event("dictation", $"Microphone opened ({capture.AccessMode.ToString().ToLowerInvariant()} access{(opts.ExclusiveMicAccess && capture.AccessMode == MicAccessMode.Shared ? ", exclusive was requested" : string.Empty)}).");
         }
         catch (Exception ex) when (ex is MicrophoneBusyException or AudioSourceException)
         {

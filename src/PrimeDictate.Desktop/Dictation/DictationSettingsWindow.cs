@@ -32,7 +32,8 @@ public sealed class DictationSettingsWindow : Window
     private readonly CheckBox launchAtLogin = Check("Start PrimeDictate when I sign in (tray only)");
     private readonly CheckBox sendEnter = Check("Coding mode: press Enter after typing");
     private readonly CheckBox returnToStart = Check("If focus moved, return to the window I started in");
-    private readonly CheckBox typeWithoutGuard = Check("Type even when the app cannot check which window is in front");
+    private readonly CheckBox exclusiveMic = Check("Request exclusive microphone access while dictating (Windows; shared if the device refuses)");
+    private readonly CheckBox typeWithoutGuard =Check("Type even when the app cannot check which window is in front");
     private readonly CheckBox wakeEnabled = Check("Wake word: start dictation when I say the phrase (listens on the idle microphone, audio stays in memory)");
     private readonly TextBox wakePhrase = new() { Width = 260 };
     private readonly CheckBox voiceCommands = Check("Voice commands while dictating");
@@ -94,6 +95,7 @@ public sealed class DictationSettingsWindow : Window
         if (OperatingSystem.IsWindows())
         {
             panel.Children.Add(this.returnToStart);
+            panel.Children.Add(this.exclusiveMic);
         }
 
         if (!host.FocusGuardAvailable)
@@ -395,6 +397,7 @@ public sealed class DictationSettingsWindow : Window
         this.launchAtLogin.IsChecked = this.launch.IsEnabled;
         this.sendEnter.IsChecked = this.working.SendEnterAfterCommit;
         this.returnToStart.IsChecked = this.working.ReturnToStartTargetOnCommit;
+        this.exclusiveMic.IsChecked = this.working.ExclusiveMicAccessWhileDictating;
         this.typeWithoutGuard.IsChecked = this.working.TypeWithoutFocusGuard;
         this.wakeEnabled.IsChecked = this.working.EnableWakeWord;
         this.wakePhrase.Text = this.working.WakeWordPhrase;
@@ -471,6 +474,7 @@ public sealed class DictationSettingsWindow : Window
         this.ApplyLaunchAtLogin();
         s.SendEnterAfterCommit = this.sendEnter.IsChecked == true;
         s.ReturnToStartTargetOnCommit = this.returnToStart.IsChecked == true;
+        s.ExclusiveMicAccessWhileDictating = this.exclusiveMic.IsChecked == true;
         s.TypeWithoutFocusGuard = this.typeWithoutGuard.IsChecked == true;
         s.EnableWakeWord = this.wakeEnabled.IsChecked == true;
         s.WakeWordPhrase = WakePhrase.Normalize(this.wakePhrase.Text);

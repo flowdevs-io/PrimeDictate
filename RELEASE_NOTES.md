@@ -8,6 +8,7 @@
 - Record a meeting from the tray. "Record meeting" starts a microphone and system-audio recording in the workspace; the same item stops it. The main window shows dictation status and opens history, stats and Settings, and there is one Settings window for dictation and for transcription and meetings.
 - Same models everywhere. Dictation and transcription pick from the same installed models, including Whisper.net (ggml) models on the GPU (CUDA or Vulkan); one loaded copy of a model is shared by both.
 - Voice shell commands run again in dictation (never in transcription). Commands from 6.0.0 keep their on/off state; new ones start off.
+- Text delivery as in 6.0.0 on Windows: the final text goes straight into the focused edit control when there is one (keystrokes otherwise, never the clipboard), "return to the starting window" inserts into that window without bringing it forward unless coding-mode Enter is on, the Windows Mouse Sonar pulse marks start and stop, and "Request exclusive microphone access while dictating" is back (shared if the microphone refuses).
 - Updates: "Check for updates..." in the tray menu, plus an automatic check at most once a day. Nothing installs without your OK, the MSI is verified against its published SHA-256 first, and PrimeDictate closes the normal way (an active meeting recording is saved) before Windows Installer starts.
 
 ## Not in 6.1.0 yet
@@ -15,7 +16,6 @@
 The old app is not packaged any more, so these are gone until they are ported:
 
 - Qualcomm QNN and AI Hub NPU models on ARM64 (Whisper, Moonshine and the QNN runtime). The ARM64 installer runs the CPU models natively.
-- Inserting text straight into the focused edit control. Dictation types the final text with simulated keystrokes, as before, and still never pastes through the clipboard.
 - The overlay's copy and pin buttons and the compact-mode ripple.
 - There is no setting to turn off the automatic update check yet.
 

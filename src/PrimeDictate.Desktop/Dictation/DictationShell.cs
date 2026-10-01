@@ -7,6 +7,7 @@ using Avalonia.Platform;
 using Avalonia.Threading;
 using PrimeDictate.Core.Diagnostics;
 using PrimeDictate.Core.Dictation;
+using PrimeDictate.Core.Providers;
 using PrimeDictate.Platforms;
 using PrimeDictate.Platforms.Dictation;
 using PrimeDictate.Platforms.Speech;
@@ -218,7 +219,12 @@ public sealed class DictationShell : IAsyncDisposable
     private void RefreshTooltip() =>
         this.tray.ToolTipText = this.lastState switch
         {
-            DictationState.Listening => "PrimeDictate: listening",
+            DictationState.Listening => this.host.Controller?.ActiveMicAccess switch
+            {
+                MicAccessMode.Exclusive => "PrimeDictate: listening [Exclusive]",
+                MicAccessMode.Shared when OperatingSystem.IsWindows() => "PrimeDictate: listening [Shared]",
+                _ => "PrimeDictate: listening"
+            },
             DictationState.Processing => "PrimeDictate: transcribing",
             _ when this.window.IsRecording => $"PrimeDictate: recording meeting ({this.window.RecordingSourceLabel})",
             _ => "PrimeDictate: ready"

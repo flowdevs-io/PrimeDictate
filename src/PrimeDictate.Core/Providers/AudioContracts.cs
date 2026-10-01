@@ -33,6 +33,9 @@ public interface IAudioCaptureLease : IAsyncDisposable
 
     string DeviceName { get; }
 
+    /// <summary>The access the device was actually opened with (an exclusive request can fall back to shared).</summary>
+    MicAccessMode AccessMode => MicAccessMode.Shared;
+
     IAsyncEnumerable<AudioFrame> ReadFramesAsync(CancellationToken cancellationToken);
 
     /// <summary>Stops delivery without releasing the device. Frames after resume continue the sequence.</summary>
@@ -64,6 +67,20 @@ public interface IAudioSource
 
     /// <summary>Opens a device. Null selects the system default.</summary>
     ValueTask<IAudioCaptureLease> OpenAsync(string? deviceId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Opens a device asking for <paramref name="access"/>. Exclusive is a request: a source that cannot honour it
+    /// (not WASAPI, or the device refuses) opens shared, and the lease's <see cref="IAudioCaptureLease.AccessMode"/> says which.
+    /// </summary>
+    ValueTask<IAudioCaptureLease> OpenAsync(string? deviceId, MicAccessMode access, CancellationToken cancellationToken) =>
+        this.OpenAsync(deviceId, cancellationToken);
+}
+
+/// <summary>How a capture device is opened. Exclusive keeps other apps off the microphone while it is open (WASAPI).</summary>
+public enum MicAccessMode
+{
+    Shared = 0,
+    Exclusive = 1
 }
 
 public sealed record MediaStreamInfo(int Index, string Codec, int SampleRate, int Channels, string? Language, string? Title);

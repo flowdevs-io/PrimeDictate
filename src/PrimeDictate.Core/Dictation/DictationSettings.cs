@@ -38,6 +38,9 @@ public sealed class DictationSettings
 
     public bool ReturnToStartTargetOnCommit { get; set; }
 
+    /// <summary>The WPF "Request exclusive mic access while dictating" setting (same name, so it imports as is). Windows only.</summary>
+    public bool ExclusiveMicAccessWhileDictating { get; set; }
+
     public bool PlayAudioCues { get; set; } = true;
 
     /// <summary>Where the ONNX speech models run: <c>auto</c>, <c>cpu</c> or <c>cuda</c>. Applies at the next start; PRIMEDICTATE_ONNX_DEVICE overrides it.</summary>
@@ -133,6 +136,7 @@ public sealed class DictationSettings
         AutoCommitSilence = TimeSpan.FromSeconds(this.AutoCommitSilenceSeconds),
         SendEnterAfterCommit = this.SendEnterAfterCommit,
         ReturnToStartTarget = this.ReturnToStartTargetOnCommit,
+        ExclusiveMicAccess = this.ExclusiveMicAccessWhileDictating,
         TypeWithoutFocusGuard = this.TypeWithoutFocusGuard,
         Replacements = this.TranscriptReplacements
             .Where(r => !string.IsNullOrWhiteSpace(r.Find))
