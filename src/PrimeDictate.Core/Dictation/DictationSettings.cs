@@ -28,6 +28,18 @@ public sealed class DictationSettings
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public LegacyBackend TranscriptionBackend { get; set; } = LegacyBackend.Whisper;
 
+    /// <summary>
+    /// A model placed outside the managed folder: a model folder, or for Whisper.net the ggml file. Same name as the WPF setting, so
+    /// the one the WPF app saved is carried over. When it validates for <see cref="TranscriptionBackend"/> it is the model used.
+    /// </summary>
+    public string? ModelPath { get; set; }
+
+    /// <summary>
+    /// Whether first-run setup was finished. The WPF app's flag, honoured on import. Null in a file that predates the flag, which
+    /// counts as finished (the file only exists because setup or a save happened).
+    /// </summary>
+    public bool? FirstRunCompleted { get; set; }
+
     public string? SelectedInputDeviceId { get; set; }
 
     public double InputGainMultiplier { get; set; } = 1.0;
@@ -271,16 +283,18 @@ public sealed class DictationSettingsStore(AppDataPaths paths)
                 var settings = JsonSerializer.Deserialize<DictationSettings>(File.ReadAllText(file), JsonOptions);
                 if (settings is not null)
                 {
+                    settings.FirstRunCompleted ??= true;
+                    DictationSettingsValidator.Normalize(settings);
                     return new DictationSettingsLoad(settings, imported, null);
                 }
             }
             catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
             {
-                return new DictationSettingsLoad(new DictationSettings(), false, $"Could not read {file}: {ex.Message}. Using defaults; the file was left untouched.");
+                return new DictationSettingsLoad(new DictationSettings { FirstRunCompleted = true }, false, $"Could not read {file}: {ex.Message}. Using defaults; the file was left untouched.");
             }
         }
 
-        return new DictationSettingsLoad(new DictationSettings(), false, null);
+        return new DictationSettingsLoad(new DictationSettings { FirstRunCompleted = false }, false, null);
     }
 
     public void Save(DictationSettings settings)

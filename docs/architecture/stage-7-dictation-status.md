@@ -62,7 +62,7 @@ Final-only typing, no clipboard, no live retyping into the target, Enter only af
 
 - Installers ship this app from 6.1.0 (see `installer/README.md`); Qualcomm QNN/AI Hub models stay WPF-only.
 - macOS `NSPanel` and Linux X11 hints for the overlay.
-- First-run onboarding is built but not looked at.
+- First-run onboarding (now the three-step wizard, see the parity table below) has been started on Windows with a fresh data folder but not clicked through.
 
 ## One app: tray, window and settings (6.1.0 work)
 
@@ -104,3 +104,16 @@ Checked against the WPF code first. "Ran" = unit tests (`tests/PrimeDictate.Core
 | Theme | `Themes/DarkTheme.xaml`, always dark, no setting | New `Theme` setting (system, light, dark) applied through `RequestedThemeVariant`; default follows the system, so a WPF user who liked the dark look picks Dark. Avalonia's own theme, not a port of the WPF palette |
 
 Run with `PRIMEDICTATE_DATA_DIR` set, the app no longer touches the real startup entries or the update record (it skips `StartUpdates`).
+
+## WPF parity: settings and first run (6.1.0 work)
+
+| Piece | Where | Verified |
+|---|---|---|
+| Ollama block in Settings: enable, endpoint, model, the seven WPF modes, and a checkbox for `OllamaAllowRemoteEndpoint` (off: loopback only; a note appears when the endpoint is remote and not allowed). With rewriting on, the endpoint must be http(s) and a model must be named | `Desktop/Dictation/OllamaPanel.cs`, `DictationSettingsValidator.ValidateOllama` | Validation: unit tests. Panel not clicked |
+| Custom model path (`ModelPath`, same JSON name as WPF so it is imported): a path box under the model list with Browse folder and Browse file (Whisper.net `.bin`). The family is detected with the same file rules as an installed model (`SpeechModelLocator.TryResolveCustom`, wording of the WPF messages); a path that is a catalog install keeps its catalog id. A valid path is the model dictation uses (`SpeechModelLocator.WantedModelId`), listed first as "Custom: ..." in Settings, first run and the transcription workspace (`DiscoverFor`); an invalid one blocks Save with the reason. Qualcomm QNN paths are not resolved here | `CustomModelPanel.cs`, `Platforms/Speech/SpeechModels.cs`, `DictationHost.InstalledModels` | Locator, import and fallback: unit tests. Browse dialogs not clicked |
+| Repo-local and app-folder discovery: `models` next to the app and in the working directory and its parents (8 levels), as `WhisperModelCatalog` did, for every family (`SpeechModelLocator.Discover(root, extraRoots)`, `DevelopmentRoots`). The managed folder wins; used by the host, Settings and the workspace | `SpeechModels.cs`, `TranscriptionWorkspaceService.cs` | Unit tests (all four families, managed wins, roots list) |
+| Validation, blocking Save with red messages next to the field: invalid or duplicate shortcuts; voice commands need at least one phrase; blank phrases default; duplicate phrases (compared as words, so "Thank you!" equals "thank you"); computer-command phrases against the three phrases, each other and, with the wake word on, the wake phrase; wake phrase against the three phrases; incomplete command rows; Ollama; custom model. Nothing is applied until all of it passes. The WPF startup repair (`NormalizeShortcutSettings`) runs on every load | `Core/Dictation/DictationSettingsValidator.cs`, `CommandsPanel.cs`, `DictationSettingsWindow.cs`, `DictationSettingsStore.Load` | Unit tests for every rule and the repair. Window not clicked |
+| `FirstRunCompleted`: WPF's flag is honoured on import (false shows setup); the new app saves its own; a `dictation-settings.json` from before the flag counts as finished. `DictationHost.IsFirstRun` reads it | `DictationSettings.FirstRunCompleted`, `DictationHost` | Unit tests (WPF false/true, old new-app file, round trip) |
+| First-run wizard in three steps like WPF: Welcome (what works here, checklist, commit delay, coding-mode Enter, tones), Model (installed list, download, custom path; moving on from Welcome starts the first download when nothing is installed, as WPF did), Commands (shortcuts and voice phrases, "More settings..."). Back, Next, Finish; Finish applies the Settings validation; closing early asks "Finish setup later?" and setup shows again next start (an app shutdown is not blocked) | `DictationOnboardingWindow.cs`, `CommandsPanel.cs`, `CustomModelPanel.cs`, `ConfirmDialog.cs` | Started on Windows with a fresh `PRIMEDICTATE_DATA_DIR`: no errors, `--quit` exited cleanly. Not clicked through |
+| Replacements as a grid: Find, Replace with, Remove per row, Add rule (blank Find rows dropped on Save). Replaces the `a => b` text box; the stored list is unchanged | `ReplacementsEditor.cs` | Not clicked |
+| Settings window: Save and Cancel (Cancel and the close button discard edits; nothing is written until Save passes validation) and a History button in the footer | `DictationSettingsWindow.cs`, `DictationHost.RequestHistory` | Not clicked |

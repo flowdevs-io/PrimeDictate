@@ -42,15 +42,17 @@ public sealed class DictationSettingsWindow : Window
     private readonly CheckBox typeWithoutGuard =Check("Type even when the app cannot check which window is in front");
     private readonly CheckBox wakeEnabled = Check("Wake word: start dictation when I say the phrase (listens on the idle microphone, audio stays in memory)");
     private readonly TextBox wakePhrase = new() { Width = 260 };
-    private readonly CheckBox voiceCommands = Check("Voice commands while dictating");
-    private readonly TextBox commitPhrase = new() { Width = 260 };
-    private readonly TextBox stopPhrase = new() { Width = 260 };
-    private readonly TextBox historyPhrase = new() { Width = 260 };
     private readonly ComboBox overlayBox = new() { ItemsSource = new[] { "Compact microphone", "Full panel" } };
     private readonly CheckBox sticky = Check("Keep the overlay on screen when not dictating");
     private bool resetOverlayPosition;
-    private readonly TextBox replacements = new() { AcceptsReturn = true, MinHeight = 90, MaxHeight = 220, PlaceholderText = "spoken phrase => replacement (one per line)" };
-    private readonly Dictionary<HotkeyAction, (TextBlock Label, HotkeyGesture Gesture)> hotkeys = [];
+    // Parity block (WPF features): shortcuts and phrases, Ollama, replacements grid, custom model path, inline errors.
+    private readonly CommandsPanel commands;
+    private readonly OllamaPanel ollama;
+    private readonly ReplacementsEditor replacements;
+    private readonly CustomModelPanel customModel;
+    private readonly TextBlock modelError = FormParts.ErrorLine();
+    private readonly TextBlock wakeError = FormParts.ErrorLine();
+    private readonly TextBlock shellError = FormParts.ErrorLine();
     private readonly TextBlock status = new() { TextWrapping = Avalonia.Media.TextWrapping.Wrap, Opacity = 0.75, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
     private readonly ComboBox liveTextBox = new()
     {
@@ -76,6 +78,11 @@ public sealed class DictationSettingsWindow : Window
         this.audio = audio;
         this.prefs = prefs;
         this.working = host.Settings;
+        this.commands = new CommandsPanel(host, this.working, message => this.status.Text = message);
+        this.ollama = new OllamaPanel(this.working);
+        this.replacements = new ReplacementsEditor(this.working.TranscriptReplacements);
+        this.customModel = new CustomModelPanel(host.ModelsFolder);
+        this.modelBox.SelectionChanged += (_, _) => this.ShowSelectedModelPath();
         this.Title = "PrimeDictate: Settings";
         this.Width = 560;
         this.SizeToContent = SizeToContent.Height;
@@ -87,16 +94,16 @@ public sealed class DictationSettingsWindow : Window
         panel.Children.Add(Row("Model", this.modelBox));
         panel.Children.Add(new TextBlock { Text = "Download another model", FontWeight = Avalonia.Media.FontWeight.SemiBold });
         panel.Children.Add(new ModelDownloadPanel(host, this.RefreshModels));
+        panel.Children.Add(this.customModel);
+        panel.Children.Add(this.modelError);
         panel.Children.Add(Row("Speech model device (applies after restart)", this.deviceBox));
         panel.Children.Add(new TextBlock { Text = OnnxRuntimeDevice.Summary, Opacity = 0.7, TextWrapping = Avalonia.Media.TextWrapping.Wrap });
         panel.Children.Add(Row("Whisper.net (GGML) model device (applies after restart)", this.whisperNetDeviceBox));
         panel.Children.Add(Row("Microphone", this.micBox));
         panel.Children.Add(Row("Input gain", this.gain));
         panel.Children.Add(Row("Auto-commit after silence (seconds, 0 = hotkey only)", this.silence));
-        foreach (var (action, name) in new[] { (HotkeyAction.ToggleDictation, "Start / stop dictation"), (HotkeyAction.EmergencyStop, "Emergency stop (discard)"), (HotkeyAction.ShowHistory, "Show history") })
-        {
-            panel.Children.Add(this.HotkeyRow(action, name));
-        }
+        panel.Children.Add(Heading("Keyboard and voice commands"));
+        panel.Children.Add(this.commands);
 
         panel.Children.Add(this.audioCues);
         panel.Children.Add(this.launchAtLogin);
@@ -123,10 +130,7 @@ public sealed class DictationSettingsWindow : Window
 
         panel.Children.Add(this.wakeEnabled);
         panel.Children.Add(Row("Wake phrase", this.wakePhrase));
-        panel.Children.Add(this.voiceCommands);
-        panel.Children.Add(Row("Commit phrase (types what you said, then stops)", this.commitPhrase));
-        panel.Children.Add(Row("Discard phrase (stops without typing)", this.stopPhrase));
-        panel.Children.Add(Row("History phrase", this.historyPhrase));
+        panel.Children.Add(this.wakeError);
         panel.Children.Add(Row("Overlay", this.overlayBox));
         panel.Children.Add(new TextBlock
         {
@@ -143,8 +147,10 @@ public sealed class DictationSettingsWindow : Window
             this.status.Text = "The overlay goes back to the bottom of the screen when you save.";
         };
         panel.Children.Add(resetOverlay);
-        panel.Children.Add(new TextBlock { Text = "Replacements" });
+        panel.Children.Add(Heading("Replacements"));
         panel.Children.Add(this.replacements);
+        panel.Children.Add(Heading("Ollama post-processing"));
+        panel.Children.Add(this.ollama);
 
         panel.Children.Add(Heading("Transcription & meetings"));
         panel.Children.Add(new TextBlock
@@ -178,13 +184,22 @@ public sealed class DictationSettingsWindow : Window
         var addShell = new Button { Content = "Add command", HorizontalAlignment = HorizontalAlignment.Left };
         addShell.Click += (_, _) => this.AddShellRow(new VoiceShellCommand { Enabled = false });
         panel.Children.Add(addShell);
+        panel.Children.Add(this.shellError);
 
         // Save and the status line stay in view under the form, which scrolls when it is taller than the screen.
-        var save = new Button { Content = "Save", VerticalAlignment = VerticalAlignment.Center };
+        var save = new Button { Content = "Save", VerticalAlignment = VerticalAlignment.Center, IsDefault = true };
         save.Click += (_, _) => this.Save();
+        var cancel = new Button { Content = "Cancel", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+        cancel.Click += (_, _) => this.Close();
+        var historyButton = new Button { Content = "History", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
+        historyButton.Click += (_, _) => this.host.RequestHistory();
         var footer = new DockPanel { Margin = new Thickness(20, 10, 20, 16) };
         DockPanel.SetDock(save, Dock.Right);
+        DockPanel.SetDock(cancel, Dock.Right);
+        DockPanel.SetDock(historyButton, Dock.Left);
         footer.Children.Add(save);
+        footer.Children.Add(cancel);
+        footer.Children.Add(historyButton);
         footer.Children.Add(this.status);
         var root = new DockPanel();
         DockPanel.SetDock(footer, Dock.Bottom);
@@ -271,6 +286,7 @@ public sealed class DictationSettingsWindow : Window
     private bool TryBuildShellCommands(out List<VoiceShellCommand> commands)
     {
         commands = [];
+        FormParts.Show(this.shellError, null);
         foreach (var row in this.shellEditors)
         {
             var phrase = row.Phrase.Text?.Trim() ?? string.Empty;
@@ -282,7 +298,7 @@ public sealed class DictationSettingsWindow : Window
 
             if (phrase.Length == 0 || command.Length == 0)
             {
-                this.status.Text = "Each voice command needs both a phrase to say and a command to run.";
+                FormParts.Show(this.shellError, "Each voice command needs both a phrase to say and a command to run.");
                 return false;
             }
 
@@ -346,47 +362,21 @@ public sealed class DictationSettingsWindow : Window
             DispatcherPriority.Background);
     }
 
-    private Control HotkeyRow(HotkeyAction action, string name)
-    {
-        var label = new TextBlock { VerticalAlignment = VerticalAlignment.Center, MinWidth = 140 };
-        this.hotkeys[action] = (label, this.working.ToBindings()[action]);
-        label.Text = this.hotkeys[action].Gesture.ToString();
-        var change = new Button { Content = "Change" };
-        change.Click += async (_, _) =>
-        {
-            if (this.host.HotkeyUnavailableReason is { } reason)
-            {
-                this.status.Text = reason;
-                return;
-            }
-
-            label.Text = "Press the new shortcut (Esc cancels)...";
-            var gesture = await HotkeyCapture.CaptureAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
-            if (gesture is not null)
-            {
-                this.hotkeys[action] = (label, gesture);
-            }
-
-            label.Text = this.hotkeys[action].Gesture.ToString();
-        };
-        // Columns, not a horizontal stack, so "Press the new shortcut..." wraps inside the window instead of running past it.
-        var title = new TextBlock { Text = name, TextWrapping = Avalonia.Media.TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Center };
-        label.TextWrapping = Avalonia.Media.TextWrapping.Wrap;
-        label.MinWidth = 0;
-        label.Margin = new Thickness(10, 0);
-        Grid.SetColumn(label, 1);
-        Grid.SetColumn(change, 2);
-        return new Grid { ColumnDefinitions = new ColumnDefinitions("190,*,Auto"), Children = { title, label, change } };
-    }
-
     private void RefreshModels()
     {
         var models = this.host.InstalledModels();
-        var current = this.modelBox.SelectedIndex is >= 0 and var ci && ci < this.shownModels.Count ? this.shownModels[ci] : this.working.ResolveModelId();
+        var current = this.modelBox.SelectedIndex is >= 0 and var ci && ci < this.shownModels.Count ? this.shownModels[ci] : this.host.WantedModelId();
         this.shownModels = models.Select(m => m.ModelId).ToList();
         this.modelBox.ItemsSource = models.Select(m => m.DisplayName).ToList();
         this.modelBox.SelectedIndex = Math.Max(0, this.shownModels.IndexOf(current ?? string.Empty));
         this.status.Text = models.Count == 0 ? "No speech model is installed. Download one below." : string.Empty;
+        this.ShowSelectedModelPath();
+    }
+
+    private void ShowSelectedModelPath()
+    {
+        var models = this.host.InstalledModels();
+        this.customModel.ShowSelected(this.modelBox.SelectedIndex is >= 0 and var i && i < models.Count ? models[i] : null);
     }
 
     private async Task LoadAsync()
@@ -427,13 +417,8 @@ public sealed class DictationSettingsWindow : Window
         this.typeWithoutGuard.IsChecked = this.working.TypeWithoutFocusGuard;
         this.wakeEnabled.IsChecked = this.working.EnableWakeWord;
         this.wakePhrase.Text = this.working.WakeWordPhrase;
-        this.voiceCommands.IsChecked = this.working.EnableVoiceCommands;
-        this.commitPhrase.Text = this.working.VoiceDictationPhrase;
-        this.stopPhrase.Text = this.working.VoiceStopPhrase;
-        this.historyPhrase.Text = this.working.VoiceHistoryPhrase;
         this.overlayBox.SelectedIndex = (int)this.working.OverlayMode;
         this.sticky.IsChecked = this.working.IsOverlaySticky;
-        this.replacements.Text = string.Join('\n', this.working.TranscriptReplacements.Select(r => $"{r.Find} => {r.Replace}"));
         this.LoadTranscriptionFields();
         this.shellRows.Children.Clear();
         this.shellEditors.Clear();
@@ -475,19 +460,52 @@ public sealed class DictationSettingsWindow : Window
 
     private void Save()
     {
-        if (!this.TryBuildShellCommands(out var shellCommands))
+        // Validate everything first and show each problem next to its field; nothing is applied until all of it is valid.
+        FormParts.Show(this.wakeError, null);
+        var ok = this.TryBuildShellCommands(out var shellCommands);
+        ok &= this.commands.TryValidate(out var phrases);
+        var wakeProblem = DictationSettingsValidator.ValidateWakePhrase(this.wakeEnabled.IsChecked == true, this.wakePhrase.Text, phrases);
+        FormParts.Show(this.wakeError, wakeProblem);
+        ok &= wakeProblem is null;
+        if (ok)
         {
+            var shellProblem = DictationSettingsValidator.ValidateShellCommands(phrases, shellCommands, this.wakeEnabled.IsChecked == true, this.wakePhrase.Text);
+            FormParts.Show(this.shellError, shellProblem);
+            ok &= shellProblem is null;
+        }
+
+        ok &= this.ollama.TryValidate();
+        var models = this.host.InstalledModels();
+        var selected = this.modelBox.SelectedIndex is >= 0 and var mi && mi < models.Count ? models[mi] : null;
+        var modelOk = this.customModel.TryResolve(selected, selected?.Backend ?? this.working.TranscriptionBackend, out var modelPath, out var customModel);
+        ok &= modelOk;
+        if (!ok)
+        {
+            this.status.Text = "Not saved: fix the red messages above.";
             return;
         }
 
-        var models = this.host.InstalledModels();
         var s = this.working;
-        if (this.modelBox.SelectedIndex is >= 0 and var mi && mi < models.Count)
+        if (customModel is not null)
         {
-            s.SelectedModelId = models[mi].Id;
-            s.TranscriptionBackend = models[mi].Backend;
+            s.ModelPath = modelPath;
+            s.SelectedModelId = customModel.Id;
+            s.TranscriptionBackend = customModel.Backend;
+        }
+        else
+        {
+            s.ModelPath = null;
+            if (selected is { IsCustom: false })
+            {
+                s.SelectedModelId = selected.Id;
+                s.TranscriptionBackend = selected.Backend;
+            }
         }
 
+        s.FirstRunCompleted = true;
+        this.commands.Apply(s, phrases);
+        this.ollama.Apply(s);
+        s.TranscriptReplacements = this.replacements.Build();
         s.SelectedInputDeviceId = this.micBox.SelectedIndex is > 0 and var di && di - 1 < this.devices.Count ? this.devices[di - 1].Id : null;
         s.InputGainMultiplier = this.gain.Value;
         s.AutoCommitSilenceSeconds = (int)(this.silence.Value ?? 3);
@@ -508,10 +526,6 @@ public sealed class DictationSettingsWindow : Window
         s.TypeWithoutFocusGuard = this.typeWithoutGuard.IsChecked == true;
         s.EnableWakeWord = this.wakeEnabled.IsChecked == true;
         s.WakeWordPhrase = WakePhrase.Normalize(this.wakePhrase.Text);
-        s.EnableVoiceCommands = this.voiceCommands.IsChecked == true;
-        s.VoiceDictationPhrase = this.commitPhrase.Text?.Trim() ?? string.Empty;
-        s.VoiceStopPhrase = this.stopPhrase.Text?.Trim() ?? string.Empty;
-        s.VoiceHistoryPhrase = this.historyPhrase.Text?.Trim() ?? string.Empty;
         s.OverlayMode = (OverlayStyle)Math.Max(0, this.overlayBox.SelectedIndex);
         s.IsOverlaySticky = this.sticky.IsChecked == true;
         s.HideOverlayWhenIdle = this.hideOverlayIdle.IsChecked == true;
@@ -524,15 +538,6 @@ public sealed class DictationSettingsWindow : Window
             s.OverlayAnchorX = null;
             s.OverlayAnchorY = null;
         }
-        s.DictationHotkey = HotkeyDto.From(this.hotkeys[HotkeyAction.ToggleDictation].Gesture);
-        s.StopHotkey = HotkeyDto.From(this.hotkeys[HotkeyAction.EmergencyStop].Gesture);
-        s.HistoryHotkey = HotkeyDto.From(this.hotkeys[HotkeyAction.ShowHistory].Gesture);
-        s.TranscriptReplacements = (this.replacements.Text ?? string.Empty)
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .Select(line => line.Split("=>", 2))
-            .Where(parts => parts.Length == 2 && !string.IsNullOrWhiteSpace(parts[0]))
-            .Select(parts => new ReplacementDto { Find = parts[0].Trim(), Replace = parts[1].Trim() })
-            .ToList();
         s.VoiceShellCommands = shellCommands;
         this.host.ApplySettings(s);
         var source = this.sourceBox.SelectedIndex switch { 1 => RecordingSources.System, 2 => RecordingSources.Meeting, _ => RecordingSources.Microphone };

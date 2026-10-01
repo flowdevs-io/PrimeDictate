@@ -380,7 +380,7 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            return new DictationSettingsStore(this.workspace.Paths).Load().Settings.ResolveModelId();
+            return PrimeDictate.Platforms.Speech.SpeechModelLocator.WantedModelId(new DictationSettingsStore(this.workspace.Paths).Load().Settings);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

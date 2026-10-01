@@ -66,7 +66,7 @@ public sealed class TrayClickBehaviorConverter() : LenientEnumConverter<TrayClic
     };
 }
 
-public sealed class AppThemeConverter() : LenientEnumConverter<AppTheme>(AppTheme.System);
+public sealed class AppThemeConverter() : LenientEnumConverter<AppTheme>(AppTheme.Dark);
 
 /// <summary>
 /// Decides whether a tray click opens the workspace. The tray only reports clicks, so a double click is two clicks close together.
