@@ -33,15 +33,28 @@ public sealed class WhisperNetModel : IDisposable
     internal static WhisperNetModel Load(string modelPath)
     {
         var preference = WhisperNetRuntime.Preference;
-        var openVino = preference is WhisperNetDevicePreference.Auto or WhisperNetDevicePreference.Npu
-            ? SpeechModelLocator.WhisperNetOpenVinoEncoder(modelPath)
-            : null;
-        WhisperNetRuntime.ApplyOnce(openVino is not null);
+        var sidecar = SpeechModelLocator.WhisperNetOpenVinoEncoder(modelPath);
+        // The OpenVINO encoder is used only when the NPU is what runs, as in the WPF app (it never ran OpenVINO on the CPU or GPU).
+        var effective = WhisperNetRuntime.Resolve(preference, MachineSupport.Current, sidecar is not null);
+        var openVino = effective == WhisperNetDevicePreference.Npu ? sidecar : null;
+        if (effective == WhisperNetDevicePreference.Npu && sidecar is null)
+        {
+            AppLog.Event("whisper.net", $"OpenVINO encoder files were not found next to {Path.GetFileName(modelPath)}. Using the CPU runtime.");
+        }
+
+        WhisperNetRuntime.ApplyOnce(effective, openVino is not null);
         var clock = Stopwatch.StartNew();
         var factory = WhisperFactory.FromPath(modelPath);
         clock.Stop();
         var loaded = RuntimeOptions.LoadedLibrary;
-        AppLog.Event("whisper.net", $"Loaded {Path.GetFileName(modelPath)} in {clock.ElapsedMilliseconds} ms; requested {preference}, native runtime {loaded?.ToString() ?? "unknown"}.");
+        AppLog.Event("whisper.net", $"Loaded {Path.GetFileName(modelPath)} in {clock.ElapsedMilliseconds} ms; requested {preference}, running {effective}, native runtime {loaded?.ToString() ?? "unknown"}.");
+        if (openVino is not null && loaded != RuntimeLibrary.OpenVino)
+        {
+            var message = $"The NPU (OpenVINO) was requested for Whisper.net, but it loaded {loaded?.ToString() ?? "no OpenVINO runtime"} instead, so transcription runs without the NPU.";
+            AppLog.Event("whisper.net", message);
+            WhisperNetRuntime.Notice?.Invoke(message);
+        }
+
         if (WhisperNetRuntime.GpuWantedButNotLoaded(preference, loaded))
         {
             var message = $"GPU was requested for Whisper.net, but it loaded {loaded?.ToString() ?? "no GPU runtime"} instead. Check the NVIDIA driver (CUDA) or Vulkan support if GPU speed is expected.";
@@ -49,7 +62,7 @@ public sealed class WhisperNetModel : IDisposable
             WhisperNetRuntime.Notice?.Invoke(message);
         }
 
-        return new WhisperNetModel(factory, openVino, WhisperNetRuntime.OpenVinoDevice(preference));
+        return new WhisperNetModel(factory, openVino, WhisperNetRuntime.OpenVinoDevice);
     }
 
     public WhisperProcessor CreateProcessor(string? language)

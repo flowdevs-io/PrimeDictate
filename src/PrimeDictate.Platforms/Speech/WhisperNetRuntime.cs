@@ -6,8 +6,8 @@ namespace PrimeDictate.Platforms.Speech;
 /// <summary>
 /// Chooses the native whisper.cpp build Whisper.net loads. <see cref="RuntimeOptions"/> is process-global and the native library cannot be
 /// swapped once loaded, so the order is applied once, just before the first model is created; a changed setting applies at the next start.
-/// Same orders as the WPF app: CPU -> Cpu, CpuNoAvx; GPU -> Cuda, Vulkan, Cpu, CpuNoAvx; Auto and NPU use OpenVINO first only when the
-/// model has its OpenVINO encoder files, else the CPU.
+/// Same orders as the WPF app: CPU -> Cpu, CpuNoAvx; GPU -> Cuda, Vulkan, Cpu, CpuNoAvx; NPU -> OpenVINO first (on the NPU) only when the
+/// model has its OpenVINO encoder files, else the CPU. Auto picks among those by what the machine supports (see <see cref="Resolve"/>).
 /// </summary>
 public static class WhisperNetRuntime
 {
@@ -42,17 +42,47 @@ public static class WhisperNetRuntime
         }
     }
 
+    /// <summary>
+    /// The library order for an <em>effective</em> choice (see <see cref="Resolve"/>), exactly as the WPF app set it: CPU, GPU, or the NPU
+    /// (OpenVINO first only when the model has its encoder files; the CPU after it either way).
+    /// </summary>
     public static IReadOnlyList<RuntimeLibrary> LibraryOrder(WhisperNetDevicePreference preference, bool hasOpenVinoEncoder) => preference switch
     {
         WhisperNetDevicePreference.Cpu => [RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx],
         WhisperNetDevicePreference.Gpu => [RuntimeLibrary.Cuda, RuntimeLibrary.Vulkan, RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx],
-        _ when hasOpenVinoEncoder => [RuntimeLibrary.OpenVino, RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx],
+        WhisperNetDevicePreference.Npu when hasOpenVinoEncoder => [RuntimeLibrary.OpenVino, RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx],
         _ => [RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx]
     };
 
-    /// <summary>The OpenVINO device name for the encoder: the NPU when asked for, else the CPU.</summary>
-    public static string OpenVinoDevice(WhisperNetDevicePreference preference) =>
-        preference == WhisperNetDevicePreference.Npu ? "NPU" : "CPU";
+    /// <summary>The OpenVINO device the encoder runs on. The WPF app used OpenVINO only for its NPU choice, so it is always the NPU.</summary>
+    public const string OpenVinoDevice = "NPU";
+
+    /// <summary>
+    /// Turns the saved choice into the one that runs on this machine. Explicit choices are kept (CPU, GPU, NPU). Auto is the WPF app's "best
+    /// available": the GPU when CUDA or Vulkan can run, else the NPU when OpenVINO can run and this model has its OpenVINO files, else the CPU.
+    /// </summary>
+    public static WhisperNetDevicePreference Resolve(WhisperNetDevicePreference preference, MachineSupport support, bool modelHasOpenVinoEncoder)
+    {
+        if (preference != WhisperNetDevicePreference.Auto)
+        {
+            return preference;
+        }
+
+        if (support.WhisperNetGpu)
+        {
+            return WhisperNetDevicePreference.Gpu;
+        }
+
+        return support.WhisperNetOpenVino && modelHasOpenVinoEncoder ? WhisperNetDevicePreference.Npu : WhisperNetDevicePreference.Cpu;
+    }
+
+    /// <summary>One sentence for Settings on what "Auto" does on this machine.</summary>
+    public static string AutoLabel(MachineSupport support) =>
+        support.WhisperNetGpu
+            ? $"Auto ({support.WhisperNetGpuLabel}, CPU if it fails)"
+            : support.WhisperNetOpenVino
+                ? "Auto (the NPU when the model has its OpenVINO files, else the CPU)"
+                : "Auto (the CPU; no GPU or NPU runtime was found)";
 
     /// <summary>The library Whisper.net actually loaded, or null before the first model.</summary>
     public static string? LoadedLibraryName => RuntimeOptions.LoadedLibrary?.ToString();
@@ -62,7 +92,7 @@ public static class WhisperNetRuntime
         preference == WhisperNetDevicePreference.Gpu && loaded is not (RuntimeLibrary.Cuda or RuntimeLibrary.Vulkan);
 
     /// <summary>Sets the library order the first time a model is created. Later calls keep the first order (the native library is already loaded).</summary>
-    internal static void ApplyOnce(bool hasOpenVinoEncoder)
+    internal static void ApplyOnce(WhisperNetDevicePreference effective, bool hasOpenVinoEncoder)
     {
         lock (Gate)
         {
@@ -73,7 +103,7 @@ public static class WhisperNetRuntime
 
             applied = true;
             RuntimeOptions.LoadedLibrary = null;
-            RuntimeOptions.RuntimeLibraryOrder = [.. LibraryOrder(Preference, hasOpenVinoEncoder)];
+            RuntimeOptions.RuntimeLibraryOrder = [.. LibraryOrder(effective, hasOpenVinoEncoder)];
         }
     }
 }

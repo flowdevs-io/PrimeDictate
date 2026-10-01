@@ -53,6 +53,20 @@ try {
         throw "dotnet publish failed with exit code $LASTEXITCODE"
     }
 
+    # Qualcomm NPU (QNN) on ARM64: the app project copies the ONNX Runtime QNN natives over sherpa-onnx's onnxruntime.dll after publish
+    # (one process can load only one onnxruntime.dll). If that step silently stopped working, the ARM64 installer would ship without the
+    # NPU and nobody would notice until a Snapdragon PC ran it, so fail the publish instead. x64 must not carry them.
+    $qnnFiles = @("QnnHtp.dll", "QnnSystem.dll", "onnxruntime_providers_qnn.dll")
+    if ($RuntimeIdentifier -eq "win-arm64") {
+        $missingQnn = $qnnFiles | Where-Object { -not (Test-Path (Join-Path $publishDir $_)) }
+        if ($missingQnn) {
+            throw "The win-arm64 publish is missing the Qualcomm QNN natives: $($missingQnn -join ', ')."
+        }
+    }
+    elseif (Test-Path (Join-Path $publishDir "QnnHtp.dll")) {
+        throw "The $RuntimeIdentifier publish contains Qualcomm QNN natives, which belong only in win-arm64."
+    }
+
     # Whisper.net ships its natives as content under runtimes\<rid> and runtimes\<variant>\<rid> for every OS, and
     # publish copies all of them. Keep only the folders for this runtime.
     $runtimesDir = Join-Path $publishDir "runtimes"

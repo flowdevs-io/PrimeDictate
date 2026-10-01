@@ -232,8 +232,10 @@ public sealed class WhisperNetTests : IDisposable
         Assert.Equal(
             [RuntimeLibrary.Cuda, RuntimeLibrary.Vulkan, RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx],
             WhisperNetRuntime.LibraryOrder(WhisperNetDevicePreference.Gpu, false));
-        Assert.Equal([RuntimeLibrary.OpenVino, RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx], WhisperNetRuntime.LibraryOrder(WhisperNetDevicePreference.Auto, true));
+        // OpenVINO runs only for the NPU choice, as in the WPF app (it never ran OpenVINO for any other choice).
         Assert.Equal([RuntimeLibrary.OpenVino, RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx], WhisperNetRuntime.LibraryOrder(WhisperNetDevicePreference.Npu, true));
+        Assert.Equal([RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx], WhisperNetRuntime.LibraryOrder(WhisperNetDevicePreference.Npu, false));
+        Assert.Equal([RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx], WhisperNetRuntime.LibraryOrder(WhisperNetDevicePreference.Auto, true));
         Assert.Equal([RuntimeLibrary.Cpu, RuntimeLibrary.CpuNoAvx], WhisperNetRuntime.LibraryOrder(WhisperNetDevicePreference.Auto, false));
     }
 

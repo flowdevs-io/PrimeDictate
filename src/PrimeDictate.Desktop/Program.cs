@@ -12,6 +12,13 @@ internal static class Program
         AppDomain.CurrentDomain.UnhandledException += (_, e) => LogCrash("unhandled", e.ExceptionObject as Exception);
         TaskScheduler.UnobservedTaskException += (_, e) => LogCrash("unobserved task", e.Exception);
 
+        // The --qnn-* developer commands (carried over from the 6.0.0 app) prove a Qualcomm NPU run and exit; they never start the app.
+        var validationExit = PrimeDictate.Platforms.Speech.Qualcomm.QnnValidation.Run(args, Console.Out, Console.Error);
+        if (validationExit >= 0)
+        {
+            return validationExit;
+        }
+
         // --quit asks the running instance to shut down (stopping recordings and workers) and waits for it; it never starts the app.
         // A second normal launch brings the running instance forward instead of starting a second copy (two copies would both
         // register the global hotkey). The screenshot and icon-rendering runs are one-shot tools and skip this.

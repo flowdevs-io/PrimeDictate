@@ -43,8 +43,10 @@ public sealed class DictationHost : IAsyncDisposable
         this.hotkeys = hotkeys;
         this.guard = guard ?? PlatformInput.CreateForegroundGuard();
         var load = this.store.Load();
+        // A setup carried over from another PC (a Snapdragon laptop's Qualcomm model, a GPU choice here without a GPU) is made to fit this one, in memory only.
+        var fitted = HardwareNormalization.Normalize(load.Settings, MachineSupport.Current, paths.ModelsDirectory);
         this.Settings = load.Settings;
-        this.StartupNotice = load.Warning;
+        this.StartupNotice = load.Warning is null ? fitted : fitted is null ? load.Warning : $"{load.Warning} {fitted}";
         if (audio is null)
         {
             this.UnavailableReason = "No microphone capture is available on this system.";
@@ -267,7 +269,7 @@ public sealed class DictationHost : IAsyncDisposable
     {
         var installed = this.InstalledModels();
         var wanted = this.Settings.ResolveModelId();
-        var model = installed.FirstOrDefault(m => m.ModelId == wanted);
+        var model = SpeechModelLocator.Resolve(installed, this.Settings);
         if (model is null)
         {
             var missing = $"The selected {this.Settings.TranscriptionBackend} model ({this.Settings.SelectedModelId}) is not installed";
@@ -343,15 +345,7 @@ public sealed class DictationHost : IAsyncDisposable
         }
     }
 
-    private static ITranscriptionProvider CreateProvider(InstalledSpeechModel model) => model.Backend switch
-    {
-        LegacyBackend.WhisperNet => new WhisperNetProvider(model),
-        LegacyBackend.Parakeet => new SherpaParakeetProvider(model),
-        LegacyBackend.Moonshine => new SherpaMoonshineProvider(model),
-        _ => new SherpaWhisperProvider(WhisperOnnxModelLocator.TryResolve(model.Directory, out var whisper)
-            ? whisper
-            : throw new FileNotFoundException($"The Whisper model folder is incomplete: {model.Directory}"))
-    };
+    private static ITranscriptionProvider CreateProvider(InstalledSpeechModel model) => SpeechProviders.Create(model);
 
     private void ConfigureWake() =>
         this.Wake?.Configure(this.Settings.EnableWakeWord, this.Settings.WakeWordPhrase, this.Settings.SelectedInputDeviceId, this.Settings.InputGainMultiplier);

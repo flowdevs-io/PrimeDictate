@@ -40,6 +40,8 @@ public sealed class App : Application
             if (!IsSmokeRun(desktop.Args))
             {
                 var savedSettings = new DictationSettingsStore(AppDataPaths.Default).Load().Settings;
+                // A GPU or NPU choice copied from another PC is judged against this one before the runtime is picked (in memory only).
+                HardwareNormalization.Normalize(savedSettings, MachineSupport.Current, AppDataPaths.Default.ModelsDirectory);
                 OnnxRuntimeDevice.Configure(OnnxRuntimeDevice.Effective(savedSettings.OnnxDevice));
                 // Whisper.net picks its native build once too, before the first model loads.
                 WhisperNetRuntime.Configure(WhisperNetRuntime.Effective(savedSettings));

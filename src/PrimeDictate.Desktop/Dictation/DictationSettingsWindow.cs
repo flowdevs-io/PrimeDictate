@@ -27,7 +27,8 @@ public sealed class DictationSettingsWindow : Window
     private readonly NumericUpDown silence = new() { Minimum = 0, Maximum = 30, Increment = 1, FormatString = "0", Width = 120 };
     private readonly CheckBox audioCues = Check("Play start and stop sounds");
     private readonly LaunchAtLogin launch = new();
-    private readonly ComboBox whisperNetDeviceBox = new() { ItemsSource = new[] { "Auto (CPU, or the NPU when its files are installed)", "CPU", "GPU (CUDA or Vulkan, CPU if it fails)" }, MinWidth = 260 };
+    private readonly IReadOnlyList<WhisperNetDeviceChoices.Choice> whisperNetChoices = WhisperNetDeviceChoices.For(MachineSupport.Current);
+    private readonly ComboBox whisperNetDeviceBox = new() { MinWidth = 260 };
     private readonly ComboBox deviceBox = new() { ItemsSource = new[] { "Auto (CUDA if ready, else CPU)", "CPU", "CUDA" }, MinWidth = 260 };
     private readonly CheckBox launchAtLogin = Check("Start PrimeDictate when I sign in (tray only)");
     private readonly CheckBox sendEnter = Check("Coding mode: press Enter after typing");
@@ -80,6 +81,7 @@ public sealed class DictationSettingsWindow : Window
         panel.Children.Add(Row("Speech model device (applies after restart)", this.deviceBox));
         panel.Children.Add(new TextBlock { Text = OnnxRuntimeDevice.Summary, Opacity = 0.7, TextWrapping = Avalonia.Media.TextWrapping.Wrap });
         panel.Children.Add(Row("Whisper.net (GGML) model device (applies after restart)", this.whisperNetDeviceBox));
+        panel.Children.Add(new TextBlock { Text = AcceleratorSummary(), Opacity = 0.7, TextWrapping = Avalonia.Media.TextWrapping.Wrap });
         panel.Children.Add(Row("Microphone", this.micBox));
         panel.Children.Add(Row("Input gain", this.gain));
         panel.Children.Add(Row("Auto-commit after silence (seconds, 0 = hotkey only)", this.silence));
@@ -358,6 +360,16 @@ public sealed class DictationSettingsWindow : Window
         return new Grid { ColumnDefinitions = new ColumnDefinitions("190,*,Auto"), Children = { title, label, change } };
     }
 
+    /// <summary>What GPU and NPU runtimes this PC has (the WPF app's runtime summaries). The Qualcomm sentence is shown on Windows ARM64 only, where those models are offered.</summary>
+    private static string AcceleratorSummary()
+    {
+        var support = MachineSupport.Current;
+        var summary = support.WhisperNetRuntimeSummary(System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture, OperatingSystem.IsWindows());
+        return OperatingSystem.IsWindows() && System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture == System.Runtime.InteropServices.Architecture.Arm64
+            ? $"{summary} {PrimeDictate.Platforms.Speech.Qualcomm.QnnRuntimeSupport.RuntimeSummary(support.Qnn)}"
+            : summary;
+    }
+
     private void RefreshModels()
     {
         var models = this.host.InstalledModels();
@@ -385,13 +397,9 @@ public sealed class DictationSettingsWindow : Window
         this.silence.Value = this.working.AutoCommitSilenceSeconds;
         this.audioCues.IsChecked = this.working.PlayAudioCues;
         this.deviceBox.SelectedIndex = (int)OnnxRuntimeDevice.ParsePreference(this.working.OnnxDevice);
-        // Npu (a WPF-only value) is shown as Auto, which still uses the NPU when the model has its OpenVINO files.
-        this.whisperNetDeviceBox.SelectedIndex = this.working.ResolveWhisperNetDevice() switch
-        {
-            WhisperNetDevicePreference.Cpu => 1,
-            WhisperNetDevicePreference.Gpu => 2,
-            _ => 0
-        };
+        // Only the devices this PC can run are listed; a saved choice it cannot run (copied from another PC) shows as Auto.
+        this.whisperNetDeviceBox.ItemsSource = this.whisperNetChoices.Select(c => c.Label).ToList();
+        this.whisperNetDeviceBox.SelectedIndex = WhisperNetDeviceChoices.IndexOf(this.whisperNetChoices, this.working.ResolveWhisperNetDevice());
         this.launchAtLogin.IsChecked = this.launch.IsEnabled;
         this.sendEnter.IsChecked = this.working.SendEnterAfterCommit;
         this.returnToStart.IsChecked = this.working.ReturnToStartTargetOnCommit;
@@ -460,12 +468,10 @@ public sealed class DictationSettingsWindow : Window
         s.AutoCommitSilenceSeconds = (int)(this.silence.Value ?? 3);
         s.PlayAudioCues = this.audioCues.IsChecked == true;
         s.OnnxDevice = ((OnnxDevicePreference)Math.Max(0, this.deviceBox.SelectedIndex)).ToString().ToLowerInvariant();
-        // Only write a choice when the user made one, so an untouched WPF "Npu" is not silently turned into Auto.
-        var shownDevice = this.whisperNetDeviceBox.SelectedIndex switch { 1 => "cpu", 2 => "gpu", _ => "auto" };
-        var keepsNpu = s.WhisperNetDevice is null && s.ResolveWhisperNetDevice() == WhisperNetDevicePreference.Npu && shownDevice == "auto";
-        if (!keepsNpu)
+        // Only write a choice when the user made one, so an untouched WPF value this PC does not offer is not silently turned into Auto.
+        if (WhisperNetDeviceChoices.ValueToSave(this.whisperNetChoices, this.whisperNetDeviceBox.SelectedIndex, s) is { } device)
         {
-            s.WhisperNetDevice = shownDevice;
+            s.WhisperNetDevice = device;
         }
 
         this.ApplyLaunchAtLogin();

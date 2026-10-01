@@ -181,7 +181,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
             choices.Add(new SpeechModelChoice(model.ModelId, model.DisplayName, model.IsEnglishOnly ? "en" : null, false, null));
         }
 
-        foreach (var model in SpeechModelLocator.Discover(this.paths.ModelsDirectory).Where(m => m.Backend is LegacyBackend.Parakeet or LegacyBackend.Moonshine or LegacyBackend.WhisperNet))
+        foreach (var model in SpeechModelLocator.Discover(this.paths.ModelsDirectory).Where(m => m.Backend is LegacyBackend.Parakeet or LegacyBackend.Moonshine or LegacyBackend.WhisperNet or LegacyBackend.QualcommQnn))
         {
             this.onnxModels[model.ModelId] = model;
             choices.Add(new SpeechModelChoice(model.ModelId, model.DisplayName, model.IsEnglishOnly ? "en" : null, false, null));
@@ -350,12 +350,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
             }
             else if (this.onnxModels.TryGetValue(model.ModelId, out var onnx))
             {
-                provider = onnx.Backend switch
-                {
-                    LegacyBackend.WhisperNet => new WhisperNetProvider(onnx),
-                    LegacyBackend.Parakeet => new SherpaParakeetProvider(onnx),
-                    _ => new SherpaMoonshineProvider(onnx)
-                };
+                provider = SpeechProviders.Create(onnx);
             }
             else if (this.nemotron.FirstOrDefault(n => $"nemotron:{n.Asr.Id}" == model.ModelId) is { } setup)
             {

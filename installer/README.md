@@ -9,7 +9,7 @@ The **online** MSI installs the PrimeDictate app payload only. Model acquisition
 | MSI | Contents |
 |-----|----------|
 | **Online x64** (`PrimeDictate-*-Windows-x64-Online.msi`) | x64 app under `Program Files\PrimeDictate`, **Start Menu** shortcut, all-users launch-at-login Startup shortcut by default, and **Add/Remove Programs** icon. The x64 MSI is blocked on ARM64 Windows so ARM64 PCs use the native ARM64 build. |
-| **Online ARM64** (`PrimeDictate-*-Windows-arm64-Online.msi`) | Native ARM64 app under `Program Files\PrimeDictate` with the same installer behavior. The Qualcomm QNN/AI Hub NPU models of the legacy WPF app are not in this payload. |
+| **Online ARM64** (`PrimeDictate-*-Windows-arm64-Online.msi`) | Native ARM64 app under `Program Files\PrimeDictate` with the same installer behavior. It also carries the ONNX Runtime QNN natives (`QnnHtp.dll`, `onnxruntime_providers_qnn.dll` and friends), so Snapdragon PCs can run the Qualcomm AI Hub Whisper and Moonshine NPU models. |
 
 After install, users open PrimeDictate and choose a model in first-run setup or Settings. The app can download supported models itself or browse to an existing local model folder.
 

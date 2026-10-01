@@ -228,9 +228,8 @@ public sealed class DictationShell : IAsyncDisposable
 
         if (refreshModel)
         {
-            var wanted = this.host.Settings.ResolveModelId();
             var installed = this.host.InstalledModels();
-            this.modelName = installed.FirstOrDefault(m => m.ModelId == wanted)?.DisplayName
+            this.modelName = SpeechModelLocator.Resolve(installed, this.host.Settings)?.DisplayName
                 ?? (installed.Count > 0 ? installed[0].DisplayName : "no model installed");
         }
 

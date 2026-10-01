@@ -1,4 +1,5 @@
 using PrimeDictate.Core.Dictation;
+using PrimeDictate.Platforms.Speech.Qualcomm;
 
 namespace PrimeDictate.Platforms.Speech;
 
@@ -21,18 +22,28 @@ public sealed record ModelDownloadOption(
     long ApproximateBytes,
     string InstallDirectoryName,
     bool Recommended = false,
-    string? FileName = null)
+    string? FileName = null,
+    Uri? Source = null,
+    string? OpenVinoBundleFileName = null)
 {
     /// <summary>True for a model that is one file (Whisper.net ggml <c>.bin</c>) rather than an archive that unpacks to a folder.</summary>
     public bool IsSingleFile => this.FileName is not null;
 
     public string SubFolder => SpeechModelLocator.SubFolder(this.Backend);
 
-    public string ArchiveFileName => $"{this.InstallDirectoryName}.tar.bz2";
+    /// <summary>The archive's file name: <c>.tar.bz2</c> for the sherpa-onnx releases, or the name in <see cref="Source"/> (the Qualcomm AI Hub zip).</summary>
+    public string ArchiveFileName => this.Source is { } source ? Path.GetFileName(source.AbsolutePath) : $"{this.InstallDirectoryName}.tar.bz2";
 
-    public Uri DownloadUri => this.FileName is { } file
+    public Uri DownloadUri => this.Source ?? (this.FileName is { } file
         ? new($"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{file}")
-        : new($"https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/{this.ArchiveFileName}");
+        : new($"https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/{this.ArchiveFileName}"));
+
+    /// <summary>Intel's zip with the ggml model and its OpenVINO encoder files (the NPU sidecars). Only some models have one.</summary>
+    public bool SupportsOpenVinoBundle => !string.IsNullOrWhiteSpace(this.OpenVinoBundleFileName);
+
+    public Uri? OpenVinoBundleUri => this.OpenVinoBundleFileName is { Length: > 0 } bundle
+        ? new($"https://huggingface.co/Intel/whisper.cpp-openvino-models/resolve/main/{bundle}")
+        : null;
 
     public string ModelId => $"{SpeechModelLocator.Prefix(this.Backend)}:{this.Id}";
 }
@@ -54,19 +65,36 @@ public static class SpeechModelCatalog
         new(LegacyBackend.Moonshine, "moonshine-tiny-v2-en", "Moonshine Tiny v2 (English)", "Very small and fast English model.", 83_886_080, "sherpa-onnx-moonshine-tiny-en-quantized-2026-02-27", true),
         new(LegacyBackend.Moonshine, "moonshine-base-en", "Moonshine Base (English) v1", "The original Moonshine model.", 250_807_309, "sherpa-onnx-moonshine-base-en-int8"),
         GgmlWhisper("large-v3-turbo", "Large V3 Turbo (GGML, Whisper.net)", "The fastest Whisper V3 option. Runs on the GPU (CUDA or Vulkan) when available.", 1_618_426_976),
-        GgmlWhisper("large-v3", "Large V3 (GGML, Whisper.net)", "The highest-accuracy Whisper V3 model. Runs on the GPU when available.", 4_277_163_902, recommended: true),
+        GgmlWhisper("large-v3", "Large V3 (GGML, Whisper.net)", "The highest-accuracy Whisper V3 model. Runs on the GPU when available; Intel publishes a matching OpenVINO bundle for the NPU.", 4_277_163_902, recommended: true, openVinoBundle: "ggml-large-v3-models.zip"),
         GgmlWhisper("base.en", "Base English (GGML, Whisper.net)", "Standard English GGML model.", 147_964_352),
-        GgmlWhisper("tiny.en", "Tiny English (GGML, Whisper.net)", "Very small English GGML model.", 77_720_256)
+        GgmlWhisper("tiny.en", "Tiny English (GGML, Whisper.net)", "Very small English GGML model.", 77_720_256),
+        QualcommAihub()
     ];
 
+    /// <summary>
+    /// What the machine can run: the whole catalog, minus the Qualcomm NPU models unless this is a native Windows ARM64 process with the QNN
+    /// natives. This is the list Settings and first run offer for download.
+    /// </summary>
+    public static IReadOnlyList<ModelDownloadOption> AvailableOptions(MachineSupport support) =>
+        [.. Options.Where(o => o.Backend != LegacyBackend.QualcommQnn || support.QualcommQnn)];
+
     public static string FormatSize(long bytes) => bytes >= 1024L * 1024 * 1024 ? $"{bytes / (1024d * 1024d * 1024d):N1} GB" : $"{bytes / (1024d * 1024d):N0} MB";
+
+    /// <summary>The Qualcomm AI Hub Whisper package, described by <see cref="QualcommAihubWhisperCatalog"/>, as a downloadable option. Same id, folder and URL as the WPF catalog.</summary>
+    private static ModelDownloadOption QualcommAihub()
+    {
+        var option = QualcommAihubWhisperCatalog.Options[0];
+        return new ModelDownloadOption(
+            LegacyBackend.QualcommQnn, option.Id, option.DisplayName, option.Description, option.ApproximateBytes, option.InstallDirectoryName, option.Recommended,
+            Source: option.DownloadUri);
+    }
 
     /// <summary>
     /// A Whisper.net ggml model: one <c>ggml-{id}.bin</c> under <c>models/whisper.net/</c>, downloaded from the whisper.cpp repository on Hugging Face.
     /// Same ids, file names and sizes as the WPF catalog, so both apps share the installed file.
     /// </summary>
-    private static ModelDownloadOption GgmlWhisper(string id, string name, string description, long bytes, bool recommended = false) =>
-        new(LegacyBackend.WhisperNet, id, name, description, bytes, $"ggml-{id}.bin", recommended, FileName: $"ggml-{id}.bin");
+    private static ModelDownloadOption GgmlWhisper(string id, string name, string description, long bytes, bool recommended = false, string? openVinoBundle = null) =>
+        new(LegacyBackend.WhisperNet, id, name, description, bytes, $"ggml-{id}.bin", recommended, FileName: $"ggml-{id}.bin", OpenVinoBundleFileName: openVinoBundle);
 
     private static ModelDownloadOption Whisper(string id, string name, string description, long bytes, bool recommended = false) =>
         new(LegacyBackend.Whisper, id, name, description, bytes, $"sherpa-onnx-whisper-{id}", recommended);
@@ -82,6 +110,7 @@ public static class SpeechModelLocator
         LegacyBackend.Parakeet => "parakeet",
         LegacyBackend.Moonshine => "moonshine",
         LegacyBackend.WhisperNet => "whisper.net",
+        LegacyBackend.QualcommQnn => QualcommAihubWhisperCatalog.SubFolder,
         _ => "whisper"
     };
 
@@ -101,6 +130,7 @@ public static class SpeechModelLocator
         LegacyBackend.WhisperNet => IsValidGgml(option, directory),
         LegacyBackend.Parakeet => IsParakeet(directory),
         LegacyBackend.Moonshine => ResolveMoonshine(directory) is not null,
+        LegacyBackend.QualcommQnn => QualcommAihubWhisperCatalog.IsValidModelDirectory(directory),
         _ => WhisperOnnxModelLocator.TryResolve(directory, out _)
     };
 
@@ -143,9 +173,14 @@ public static class SpeechModelLocator
             : null;
     }
 
-    /// <summary>Every installed model of every family that is in the download catalog, plus any Whisper folder that validates.</summary>
-    public static IReadOnlyList<InstalledSpeechModel> Discover(string modelsRoot)
+    /// <summary>
+    /// Every installed model of every family that is in the download catalog, plus any Whisper folder that validates. The Qualcomm NPU
+    /// models are listed only where <paramref name="support"/> (this machine, when null) can run them: the AI Hub Whisper package, and each
+    /// installed Moonshine model that has prepared QNN files (listed again as a Qualcomm NPU model, with the same id).
+    /// </summary>
+    public static IReadOnlyList<InstalledSpeechModel> Discover(string modelsRoot, MachineSupport? support = null)
     {
+        var qnn = (support ?? MachineSupport.Current).QualcommQnn;
         var found = new List<InstalledSpeechModel>();
         foreach (var w in WhisperOnnxModelLocator.Discover(modelsRoot))
         {
@@ -154,17 +189,53 @@ public static class SpeechModelLocator
 
         foreach (var option in SpeechModelCatalog.Options.Where(o => o.Backend != LegacyBackend.Whisper))
         {
+            if (option.Backend == LegacyBackend.QualcommQnn && !qnn)
+            {
+                continue;
+            }
+
             var dir = InstallPath(modelsRoot, option);
             if (IsValid(option, dir))
             {
-                var english = option.Backend == LegacyBackend.WhisperNet
-                    ? option.Id.EndsWith(".en", StringComparison.Ordinal)
-                    : option.Id is "parakeet-tdt-0.6b-v2" or "parakeet-tdt-0.6b-v2-fp16" || option.Id.EndsWith("-en", StringComparison.Ordinal);
+                var english = option.Backend is LegacyBackend.QualcommQnn
+                    || (option.Backend == LegacyBackend.WhisperNet
+                        ? option.Id.EndsWith(".en", StringComparison.Ordinal)
+                        : option.Id is "parakeet-tdt-0.6b-v2" or "parakeet-tdt-0.6b-v2-fp16" || option.Id.EndsWith("-en", StringComparison.Ordinal));
                 found.Add(new InstalledSpeechModel(option.Backend, option.Id, option.DisplayName, Path.GetFullPath(dir), english));
+                if (qnn && option.Backend == LegacyBackend.Moonshine && MoonshineQnnArtifacts.IsPrepared(dir))
+                {
+                    found.Add(new InstalledSpeechModel(LegacyBackend.QualcommQnn, option.Id, $"{option.DisplayName} (Qualcomm NPU)", Path.GetFullPath(dir), english));
+                }
             }
         }
 
         return found;
+    }
+
+    /// <summary>True for a Qualcomm NPU entry that runs the AI Hub Whisper package (as the WPF engine chose: by catalog id), false for Moonshine on the NPU.</summary>
+    public static bool IsQualcommAihubWhisper(InstalledSpeechModel model) =>
+        model.Backend == LegacyBackend.QualcommQnn && QualcommAihubWhisperCatalog.TryGetById(model.Id, out _);
+
+    /// <summary>
+    /// Finds the installed model a settings file selects. An exact id match wins. A Qualcomm selection that cannot be met (a PC without the
+    /// NPU, or a Moonshine model without prepared QNN files) uses the same Moonshine model on the CPU, as the WPF app did.
+    /// </summary>
+    public static InstalledSpeechModel? Resolve(IReadOnlyList<InstalledSpeechModel> installed, DictationSettings settings)
+    {
+        var wanted = settings.ResolveModelId();
+        if (wanted is null)
+        {
+            return null;
+        }
+
+        var exact = installed.FirstOrDefault(m => m.ModelId == wanted);
+        if (exact is not null || settings.TranscriptionBackend != LegacyBackend.QualcommQnn || QualcommAihubWhisperCatalog.TryGetById(settings.SelectedModelId, out _))
+        {
+            return exact;
+        }
+
+        var moonshineId = $"{LegacyBackend.Moonshine.ModelIdPrefix()}:{settings.SelectedModelId!.Trim()}";
+        return installed.FirstOrDefault(m => m.ModelId == moonshineId);
     }
 
     /// <summary>Where the model lives: its folder, or for a Whisper.net model the <c>.bin</c> file itself.</summary>

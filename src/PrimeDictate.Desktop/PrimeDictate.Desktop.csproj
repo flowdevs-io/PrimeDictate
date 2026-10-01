@@ -29,4 +29,38 @@
     <ProjectReference Include="..\PrimeDictate.Platforms\PrimeDictate.Platforms.csproj" />
   </ItemGroup>
 
+  <!--
+    Qualcomm QNN (NPU) on Windows ARM64, same arrangement as the WPF app. sherpa-onnx and Microsoft.ML.OnnxRuntime.QNN each carry an
+    onnxruntime.dll for win-arm64 (both 1.24.4). A process can load only one, so the QNN package's copy (with onnxruntime_providers_qnn.dll,
+    QnnHtp.dll, QnnSystem.dll and the HTP stubs/skels) is copied over the output after build and publish; sherpa-onnx then runs on the same
+    library. Only for win-arm64: on every other RID the QNN package adds nothing and sherpa-onnx keeps its own onnxruntime.
+  -->
+  <ItemGroup Condition="Exists('$(NuGetPackageRoot)microsoft.ml.onnxruntime.qnn\$(OnnxRuntimeVersion)\runtimes\win-arm64\native')">
+    <QnnArm64NativeFiles Include="$(NuGetPackageRoot)microsoft.ml.onnxruntime.qnn\$(OnnxRuntimeVersion)\runtimes\win-arm64\native\*.*" />
+  </ItemGroup>
+
+  <Target Name="PreferQnnOnnxRuntimeForArm64BuildOutput"
+          AfterTargets="Build"
+          Condition="'@(QnnArm64NativeFiles)' != '' and ('$(RuntimeIdentifier)' == 'win-arm64' or Exists('$(TargetDir)runtimes\win-arm64\native'))">
+    <Copy SourceFiles="@(QnnArm64NativeFiles)"
+          DestinationFolder="$(TargetDir)runtimes\win-arm64\native"
+          Condition="Exists('$(TargetDir)runtimes\win-arm64\native')"
+          SkipUnchangedFiles="false"
+          OverwriteReadOnlyFiles="true" />
+    <Copy SourceFiles="@(QnnArm64NativeFiles)"
+          DestinationFolder="$(TargetDir)"
+          Condition="'$(RuntimeIdentifier)' == 'win-arm64'"
+          SkipUnchangedFiles="false"
+          OverwriteReadOnlyFiles="true" />
+  </Target>
+
+  <Target Name="PreferQnnOnnxRuntimeForArm64PublishOutput"
+          AfterTargets="Publish"
+          Condition="'@(QnnArm64NativeFiles)' != '' and '$(RuntimeIdentifier)' == 'win-arm64' and Exists('$(PublishDir)')">
+    <Copy SourceFiles="@(QnnArm64NativeFiles)"
+          DestinationFolder="$(PublishDir)"
+          SkipUnchangedFiles="false"
+          OverwriteReadOnlyFiles="true" />
+  </Target>
+
 </Project>

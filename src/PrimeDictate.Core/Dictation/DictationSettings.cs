@@ -22,7 +22,7 @@ public sealed class DictationSettings
 
     public HotkeyDto HistoryHotkey { get; set; } = HotkeyDto.From(HotkeyGesture.DefaultHistory);
 
-    /// <summary>Model id from the WPF catalog (for example "base.en"). Whisper ONNX only for now.</summary>
+    /// <summary>Model id from the WPF catalog (for example "base.en"); read together with <see cref="TranscriptionBackend"/>.</summary>
     public string? SelectedModelId { get; set; }
 
     [JsonConverter(typeof(JsonStringEnumConverter))]
@@ -278,6 +278,7 @@ public static class LegacyBackendExtensions
         LegacyBackend.Parakeet => "parakeet-onnx",
         LegacyBackend.Moonshine => "moonshine-onnx",
         LegacyBackend.WhisperNet => "whisper-net",
+        LegacyBackend.QualcommQnn => "qualcomm-qnn",
         _ => "whisper-onnx"
     };
 }

@@ -15,14 +15,24 @@ public sealed class ModelDownloadPanel : StackPanel
     private readonly Button cancel = new() { Content = "Cancel", IsVisible = false, Margin = new Avalonia.Thickness(8, 0, 0, 0) };
     private readonly ProgressBar bar = new() { Minimum = 0, Maximum = 1, IsVisible = false };
     private readonly TextBlock text = new() { TextWrapping = Avalonia.Media.TextWrapping.Wrap, Opacity = 0.8 };
+    private readonly IReadOnlyList<ModelDownloadOption> options;
     private CancellationTokenSource? running;
+
+    private static string FamilyName(PrimeDictate.Core.Dictation.LegacyBackend backend) => backend switch
+    {
+        PrimeDictate.Core.Dictation.LegacyBackend.WhisperNet => "Whisper.net",
+        PrimeDictate.Core.Dictation.LegacyBackend.QualcommQnn => "Qualcomm NPU",
+        _ => backend.ToString()
+    };
 
     public ModelDownloadPanel(DictationHost host, Action installed)
     {
         this.host = host;
         this.Spacing = 6;
-        this.choice.ItemsSource = SpeechModelCatalog.Options
-            .Select(o => $"{(o.Backend == PrimeDictate.Core.Dictation.LegacyBackend.WhisperNet ? "Whisper.net" : o.Backend.ToString())}: {o.DisplayName} ({SpeechModelCatalog.FormatSize(o.ApproximateBytes)}){(o.Recommended ? " - recommended" : string.Empty)}")
+        // Qualcomm NPU models are offered only on a Windows ARM64 build that has the QNN runtime, as in the WPF app.
+        this.options = SpeechModelCatalog.AvailableOptions(MachineSupport.Current);
+        this.choice.ItemsSource = this.options
+            .Select(o => $"{FamilyName(o.Backend)}: {o.DisplayName} ({SpeechModelCatalog.FormatSize(o.ApproximateBytes)}){(o.Recommended ? " - recommended" : string.Empty)}")
             .ToList();
         this.choice.SelectedIndex = 0;
         this.start.Click += async (_, _) => await this.RunAsync(installed);
@@ -37,7 +47,7 @@ public sealed class ModelDownloadPanel : StackPanel
 
     private async Task RunAsync(Action installed)
     {
-        var option = SpeechModelCatalog.Options[Math.Max(0, this.choice.SelectedIndex)];
+        var option = this.options[Math.Max(0, this.choice.SelectedIndex)];
         this.running = new CancellationTokenSource();
         this.SetBusy(true);
         this.text.Text = $"Downloading {option.DisplayName}...";
@@ -49,6 +59,7 @@ public sealed class ModelDownloadPanel : StackPanel
             {
                 "download" => $"Downloading {option.DisplayName}: {p.BytesDownloaded / (1024 * 1024):N0} MB{(p.TotalBytes is { } t ? $" of {t / (1024 * 1024):N0} MB" : string.Empty)}",
                 "extract" => "Unpacking...",
+                "tokenizer" => "Adding the Whisper tokenizer...",
                 _ => "Ready."
             };
         }));
