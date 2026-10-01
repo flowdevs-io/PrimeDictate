@@ -4,7 +4,7 @@ This file orients coding agents and future maintainers. It is not an end-user ma
 
 ## Purpose
 
-**PrimeDictate** is one .NET 10 app for hotkey dictation and for transcription and meetings. From 6.1.0 the installers ship the Avalonia app in `src/PrimeDictate.Desktop` as `PrimeDictate.exe`. The WPF app at the repository root (what 6.0.0 shipped) is legacy: it still builds, it is not packaged, and Qualcomm QNN/AI Hub models exist only there. The dictation behavior below is shared by both; the WPF file names in the Layout table are the legacy implementation. The behavior:
+**PrimeDictate** is one .NET 10 app for hotkey dictation and for transcription and meetings. From 6.1.0 the installers ship the Avalonia app in `src/PrimeDictate.Desktop` as `PrimeDictate.exe`. The WPF app at the repository root (what 6.0.0 shipped) is legacy: it still builds, and it is not packaged. The Qualcomm QNN/AI Hub models are in both apps (the new app's code is under `src/PrimeDictate.Platforms/Speech/Qualcomm`; see `docs/architecture/qualcomm-npu.md`). The dictation behavior below is shared by both; the WPF file names in the Layout table are the legacy implementation. The behavior:
 
 1. Listens for a **global** hotkey (`Ctrl+Shift+Space` / SharpHook) to start and stop capture.
 2. Records from the **default** Windows input device using **WASAPI** (NAudio `WasapiCapture`), normalizing to **16 kHz, 16-bit, mono** PCM.
