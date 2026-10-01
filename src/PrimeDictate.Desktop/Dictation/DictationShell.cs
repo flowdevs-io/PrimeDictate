@@ -5,6 +5,7 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
+using PrimeDictate.Core.Diagnostics;
 using PrimeDictate.Core.Dictation;
 using PrimeDictate.Platforms;
 using PrimeDictate.Platforms.Dictation;
@@ -190,6 +191,12 @@ public sealed class DictationShell : IAsyncDisposable
             {
                 this.cues.Play(DictationAudioCue.Stop);
             }
+        }
+
+        // As in WPF: Windows Mouse Sonar pulse when recording starts and when processing starts.
+        if (state != this.lastState && state is DictationState.Listening or DictationState.Processing)
+        {
+            WindowsMousePointerIndicator.PulseSoon(message => AppLog.Event("dictation", message));
         }
 
         this.lastState = state;

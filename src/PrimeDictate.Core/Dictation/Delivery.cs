@@ -14,6 +14,12 @@ public interface IForegroundTarget
 
     /// <summary>Best-effort return to this window so a late final can still land there.</summary>
     bool TryRestore() => false;
+
+    /// <summary>
+    /// Best-effort insertion straight into the control that had focus, without bringing the window forward
+    /// (Windows edit controls). False means the caller should restore the window and type instead.
+    /// </summary>
+    bool TryInjectDirectly(string text) => false;
 }
 
 /// <summary>
@@ -59,6 +65,7 @@ public sealed record DeliveryResult(DictationDeliveryStatus Status, bool EnterSe
 /// </summary>
 public static class TranscriptDelivery
 {
+
     public static DeliveryResult Deliver(
         string text,
         IForegroundTarget? target,
@@ -79,6 +86,13 @@ public static class TranscriptDelivery
             if (!options.ReturnToStartTarget)
             {
                 return new DeliveryResult(DictationDeliveryStatus.SkippedFocusChanged, false, "Focused window changed before transcript typing.");
+            }
+
+            // WPF order: without coding-mode Enter, put the text into the original target's focused edit control
+            // without reactivating it; otherwise (or if that is not possible) restore the window and type.
+            if (!options.SendEnterAfterCommit && target.TryInjectDirectly(text))
+            {
+                return new DeliveryResult(DictationDeliveryStatus.Injected, false, null);
             }
 
             if (!target.TryRestore())

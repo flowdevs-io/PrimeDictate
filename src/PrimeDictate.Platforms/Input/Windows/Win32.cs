@@ -34,6 +34,23 @@ internal static class Win32
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     internal static extern int GetWindowTextLength(IntPtr hWnd);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern int GetClassName(IntPtr hWnd, StringBuilder className, int maxCount);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    internal static extern IntPtr SendMessageTimeout(
+        IntPtr hWnd,
+        int msg,
+        IntPtr wParam,
+        string lParam,
+        uint flags,
+        uint timeout,
+        out IntPtr result);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool SystemParametersInfo(uint uiAction, uint uiParam, ref bool pvParam, uint fWinIni);
+
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool GetGUIThreadInfo(uint threadId, ref GuiThreadInfo info);
