@@ -4,7 +4,7 @@ namespace PrimeDictate.Platforms.Speech;
 
 /// <summary>An installed speech model of any family, as dictation sees it.</summary>
 /// <remarks><see cref="Directory"/> is the model folder, except for Whisper.net where it is the path of the ggml <c>.bin</c> file.</remarks>
-public sealed record InstalledSpeechModel(LegacyBackend Backend, string Id, string DisplayName, string Directory, bool IsEnglishOnly)
+public sealed record InstalledSpeechModel(LegacyBackend Backend, string Id, string DisplayName, string Directory, bool IsEnglishOnly, bool IsCustom = false)
 {
     /// <summary>Stable id such as <c>whisper-onnx:base.en</c> or <c>parakeet-onnx:parakeet-tdt-0.6b-v3</c>.</summary>
     public string ModelId => $"{SpeechModelLocator.Prefix(this.Backend)}:{this.Id}";
@@ -143,29 +143,205 @@ public static class SpeechModelLocator
             : null;
     }
 
-    /// <summary>Every installed model of every family that is in the download catalog, plus any Whisper folder that validates.</summary>
-    public static IReadOnlyList<InstalledSpeechModel> Discover(string modelsRoot)
+    /// <summary>
+    /// Every installed model of every family that is in the download catalog, plus any Whisper folder that validates.
+    /// <paramref name="extraRoots"/> are further models roots (each holding <c>whisper</c>, <c>parakeet</c>, <c>moonshine</c> and
+    /// <c>whisper.net</c> folders), searched after the managed one; the first valid install of a model wins. See <see cref="DevelopmentRoots"/>.
+    /// </summary>
+    public static IReadOnlyList<InstalledSpeechModel> Discover(string modelsRoot, IEnumerable<string>? extraRoots = null)
     {
+        var roots = new List<string> { modelsRoot };
+        if (extraRoots is not null)
+        {
+            roots.AddRange(extraRoots);
+        }
+
         var found = new List<InstalledSpeechModel>();
-        foreach (var w in WhisperOnnxModelLocator.Discover(modelsRoot))
+        var whisperFolders = roots.Skip(1).Select(r => Path.Combine(r, SubFolder(LegacyBackend.Whisper)));
+        foreach (var w in WhisperOnnxModelLocator.Discover(modelsRoot, whisperFolders))
         {
             found.Add(new InstalledSpeechModel(LegacyBackend.Whisper, w.Id, w.DisplayName, w.Directory, w.IsEnglishOnly));
         }
 
         foreach (var option in SpeechModelCatalog.Options.Where(o => o.Backend != LegacyBackend.Whisper))
         {
-            var dir = InstallPath(modelsRoot, option);
-            if (IsValid(option, dir))
+            foreach (var root in roots)
             {
-                var english = option.Backend == LegacyBackend.WhisperNet
-                    ? option.Id.EndsWith(".en", StringComparison.Ordinal)
-                    : option.Id is "parakeet-tdt-0.6b-v2" or "parakeet-tdt-0.6b-v2-fp16" || option.Id.EndsWith("-en", StringComparison.Ordinal);
-                found.Add(new InstalledSpeechModel(option.Backend, option.Id, option.DisplayName, Path.GetFullPath(dir), english));
+                var dir = InstallPath(root, option);
+                if (!IsValid(option, dir))
+                {
+                    continue;
+                }
+
+                found.Add(new InstalledSpeechModel(option.Backend, option.Id, option.DisplayName, Path.GetFullPath(dir), IsEnglishOnly(option)));
+                break;
             }
         }
 
         return found;
     }
+
+    /// <summary>
+    /// Places the WPF app also looked in besides the managed folder, as models roots: <c>models</c> next to the app, and <c>models</c> in the
+    /// working directory and each of its parents (so a model staged in a repository checkout is found when running from it).
+    /// </summary>
+    public static IReadOnlyList<string> DevelopmentRoots(string? baseDirectory = null, string? workingDirectory = null)
+    {
+        var roots = new List<string> { Path.Combine(baseDirectory ?? AppContext.BaseDirectory, "models") };
+        var dir = new DirectoryInfo(workingDirectory ?? Directory.GetCurrentDirectory());
+        for (var depth = 0; depth < 8 && dir is not null; depth++)
+        {
+            roots.Add(Path.Combine(dir.FullName, "models"));
+            dir = dir.Parent;
+        }
+
+        return roots.Select(Path.GetFullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    /// <summary>
+    /// What dictation can use: the managed folder, the development roots, and the model the settings point at with <c>ModelPath</c>
+    /// when it validates (it replaces an installed model with the same id, and comes first). One place, so Settings, the host and the
+    /// transcription workspace all see the same list.
+    /// </summary>
+    public static IReadOnlyList<InstalledSpeechModel> DiscoverFor(string modelsRoot, DictationSettings settings, IEnumerable<string>? extraRoots = null)
+    {
+        var found = Discover(modelsRoot, extraRoots ?? DevelopmentRoots().Where(r => !SamePath(r, modelsRoot))).ToList();
+        if (CustomModel(settings) is { } custom)
+        {
+            found.RemoveAll(m => m.ModelId == custom.ModelId);
+            found.Insert(0, custom);
+        }
+
+        return found;
+    }
+
+    /// <summary>The model <c>ModelPath</c> names, when it is set and valid for the configured backend. Null otherwise (the managed list applies).</summary>
+    public static InstalledSpeechModel? CustomModel(DictationSettings settings) =>
+        !string.IsNullOrWhiteSpace(settings.ModelPath) && TryResolveCustom(settings.TranscriptionBackend, settings.ModelPath, out var model, out _) ? model : null;
+
+    /// <summary>The model id dictation wants: the custom path's model when there is one, else the selected catalog model.</summary>
+    public static string? WantedModelId(DictationSettings settings) => CustomModel(settings)?.ModelId ?? settings.ResolveModelId();
+
+    private static bool SamePath(string a, string b) =>
+        string.Equals(Path.GetFullPath(a).TrimEnd(Path.DirectorySeparatorChar), Path.GetFullPath(b).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsEnglishOnly(ModelDownloadOption option) => option.Backend == LegacyBackend.WhisperNet
+        ? option.Id.EndsWith(".en", StringComparison.Ordinal)
+        : option.Id is "parakeet-tdt-0.6b-v2" or "parakeet-tdt-0.6b-v2-fp16" || option.Id.EndsWith("-en", StringComparison.Ordinal);
+
+    /// <summary>
+    /// A model the user pointed at (a folder, or for Whisper.net a ggml file) rather than one in a models root. The path is validated
+    /// with the same file rules as an installed model. <paramref name="preferred"/> breaks a tie when more than one family fits.
+    /// A path that is a catalog install keeps its catalog id, so it is the same model the downloader would have put there.
+    /// </summary>
+    public static bool TryResolveCustom(string? path, LegacyBackend? preferred, out InstalledSpeechModel model, out string problem)
+    {
+        model = null!;
+        problem = string.Empty;
+        var trimmed = path?.Trim().Trim('"');
+        if (string.IsNullOrEmpty(trimmed))
+        {
+            problem = "No model path was given.";
+            return false;
+        }
+
+        var full = Path.GetFullPath(trimmed);
+        var order = new[] { LegacyBackend.Whisper, LegacyBackend.Parakeet, LegacyBackend.Moonshine, LegacyBackend.WhisperNet };
+        if (preferred is { } first && order.Contains(first))
+        {
+            order = [first, .. order.Where(b => b != first)];
+        }
+
+        foreach (var backend in order)
+        {
+            if (TryResolveCustom(backend, full, out model, out _))
+            {
+                return true;
+            }
+        }
+
+        problem = File.Exists(full) || Directory.Exists(full)
+            ? "That is not a model PrimeDictate can use. " + RequiredFiles(preferred ?? LegacyBackend.Whisper)
+            : "That path does not exist.";
+        return false;
+    }
+
+    /// <summary>The same for one family. On failure <paramref name="problem"/> says what that family needs.</summary>
+    public static bool TryResolveCustom(LegacyBackend backend, string? path, out InstalledSpeechModel model, out string problem)
+    {
+        model = null!;
+        problem = string.Empty;
+        var trimmed = path?.Trim().Trim('"');
+        if (string.IsNullOrEmpty(trimmed))
+        {
+            problem = "No model path was given.";
+            return false;
+        }
+
+        var full = Path.GetFullPath(trimmed);
+        var name = Path.GetFileName(full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        switch (backend)
+        {
+            case LegacyBackend.Whisper:
+                if (WhisperOnnxModelLocator.TryResolve(full, out var whisper))
+                {
+                    model = new InstalledSpeechModel(LegacyBackend.Whisper, whisper.Id, $"Custom: {whisper.DisplayName}", whisper.Directory, whisper.IsEnglishOnly, IsCustom: true);
+                    return true;
+                }
+
+                break;
+            case LegacyBackend.Parakeet when Directory.Exists(full) && IsParakeet(full):
+                var parakeet = SpeechModelCatalog.Options.FirstOrDefault(o => o.Backend == backend && string.Equals(o.InstallDirectoryName, name, StringComparison.OrdinalIgnoreCase));
+                model = parakeet is null
+                    ? new InstalledSpeechModel(backend, name, $"Custom: Parakeet {name}", full, false, IsCustom: true)
+                    : new InstalledSpeechModel(backend, parakeet.Id, $"Custom: {parakeet.DisplayName}", full, IsEnglishOnly(parakeet), IsCustom: true);
+                return true;
+            case LegacyBackend.Moonshine when ResolveMoonshine(full) is not null:
+                var moonshine = SpeechModelCatalog.Options.FirstOrDefault(o => o.Backend == backend && string.Equals(o.InstallDirectoryName, name, StringComparison.OrdinalIgnoreCase));
+                model = moonshine is null
+                    ? new InstalledSpeechModel(backend, name, $"Custom: Moonshine {name}", full, name.Contains("-en", StringComparison.OrdinalIgnoreCase), IsCustom: true)
+                    : new InstalledSpeechModel(backend, moonshine.Id, $"Custom: {moonshine.DisplayName}", full, IsEnglishOnly(moonshine), IsCustom: true);
+                return true;
+            case LegacyBackend.WhisperNet when File.Exists(full):
+                var ggml = SpeechModelCatalog.Options.FirstOrDefault(o => o.Backend == backend && string.Equals(o.FileName, name, StringComparison.OrdinalIgnoreCase));
+                if (ggml is not null)
+                {
+                    if (!IsValidGgml(ggml, full))
+                    {
+                        problem = "That ggml file is smaller than the published model, so it looks incomplete.";
+                        return false;
+                    }
+
+                    model = new InstalledSpeechModel(backend, ggml.Id, $"Custom: {ggml.DisplayName}", full, IsEnglishOnly(ggml), IsCustom: true);
+                    return true;
+                }
+
+                var stem = Path.GetFileNameWithoutExtension(name);
+                var id = stem.StartsWith("ggml-", StringComparison.OrdinalIgnoreCase) ? stem[5..] : stem;
+                if (new FileInfo(full).Length > 0 && name.EndsWith(".bin", StringComparison.OrdinalIgnoreCase))
+                {
+                    model = new InstalledSpeechModel(backend, id, $"Custom: Whisper.net {id}", full, id.EndsWith(".en", StringComparison.OrdinalIgnoreCase), IsCustom: true);
+                    return true;
+                }
+
+                break;
+            case LegacyBackend.QualcommQnn:
+                problem = "Qualcomm QNN models are not supported in this app yet.";
+                return false;
+        }
+
+        problem = RequiredFiles(backend);
+        return false;
+    }
+
+    /// <summary>What a model of this family needs, in the wording of the WPF Settings window.</summary>
+    public static string RequiredFiles(LegacyBackend backend) => backend switch
+    {
+        LegacyBackend.Parakeet => "The model folder is incomplete. PrimeDictate needs encoder.int8.onnx, decoder.int8.onnx, joiner.int8.onnx, and tokens.txt (or the fp16 set).",
+        LegacyBackend.Moonshine => "The model folder is incomplete. PrimeDictate needs preprocess.onnx, encode.int8.onnx, uncached_decode.int8.onnx, cached_decode.int8.onnx, and tokens.txt (or the v2 encoder, merged decoder and tokens).",
+        LegacyBackend.WhisperNet => "The model file was not found. PrimeDictate needs a Whisper GGML .bin file.",
+        _ => "The model folder is incomplete. PrimeDictate needs a Whisper ONNX encoder, decoder, and tokens file."
+    };
 
     /// <summary>Where the model lives: its folder, or for a Whisper.net model the <c>.bin</c> file itself.</summary>
     public static string InstallPath(string modelsRoot, ModelDownloadOption option) =>

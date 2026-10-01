@@ -89,8 +89,8 @@ public sealed class DictationHost : IAsyncDisposable
 
     public string? StartupNotice { get; }
 
-    /// <summary>True until either app has saved settings, so a WPF user upgrading is not shown setup again.</summary>
-    public bool IsFirstRun => !File.Exists(this.store.Path) && !File.Exists(this.store.WpfSettingsPath);
+    /// <summary>True until setup was finished here or in the WPF app (its <c>FirstRunCompleted</c> is honoured), so a WPF user upgrading is not shown setup again.</summary>
+    public bool IsFirstRun => this.Settings.FirstRunCompleted != true;
 
     public string ModelsFolder => System.IO.Path.Combine(this.paths.ModelsDirectory, "whisper");
 
@@ -109,7 +109,13 @@ public sealed class DictationHost : IAsyncDisposable
 
     public event Action? HistoryRequested;
 
-    public IReadOnlyList<InstalledSpeechModel> InstalledModels() => SpeechModelLocator.Discover(this.paths.ModelsDirectory);
+    public IReadOnlyList<InstalledSpeechModel> InstalledModels() => SpeechModelLocator.DiscoverFor(this.paths.ModelsDirectory, this.Settings);
+
+    /// <summary>The model id dictation wants (the custom <c>ModelPath</c> model when it is valid, else the selected one).</summary>
+    public string? WantedModelId() => SpeechModelLocator.WantedModelId(this.Settings);
+
+    /// <summary>Raises <see cref="HistoryRequested"/> as the history hotkey and voice command do (the Settings window button).</summary>
+    public void RequestHistory() => this.HistoryRequested?.Invoke();
 
     /// <summary>Downloads a catalog model into the shared managed folder (the same one the WPF app uses).</summary>
     public Task<string> DownloadModelAsync(ModelDownloadOption option, IProgress<ModelDownloadProgress>? progress, CancellationToken cancellationToken) =>
@@ -266,7 +272,7 @@ public sealed class DictationHost : IAsyncDisposable
     private ITranscriptionProvider? GetProvider()
     {
         var installed = this.InstalledModels();
-        var wanted = this.Settings.ResolveModelId();
+        var wanted = this.WantedModelId();
         var model = installed.FirstOrDefault(m => m.ModelId == wanted);
         if (model is null)
         {
