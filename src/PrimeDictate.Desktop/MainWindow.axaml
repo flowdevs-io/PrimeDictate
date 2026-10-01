@@ -10,6 +10,8 @@
           <Button x:Name="HistoryButton" Content="Dictation history" IsEnabled="False"
                   ToolTip.Tip="What you dictated, with search." />
           <Button x:Name="StatsButton" Content="Stats" IsEnabled="False" />
+          <Button x:Name="ActivityButton" Content="Activity" IsEnabled="False"
+                  ToolTip.Tip="Dictation sessions and the app's activity log, for troubleshooting. Never shows what you said." />
           <Button x:Name="SettingsButton" Content="Settings" IsEnabled="False"
                   ToolTip.Tip="Dictation, transcription and meeting settings, voice commands." />
         </StackPanel>

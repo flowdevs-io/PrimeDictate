@@ -246,7 +246,7 @@ public sealed class WakeWordListener : IMicrophoneConsumer, IAsyncDisposable
             {
                 if (attempt >= OpenRetryDelays.Length)
                 {
-                    Diagnostics.AppLog.Event("wake-word", $"Stopped listening: the microphone did not open after {attempt + 1} tries: {ex.Message}");
+                    Diagnostics.AppLog.Event("wake-word", $"Stopped listening: the microphone did not open after {attempt + 1} tries: {ex.Message}", Diagnostics.ActivityLevel.Error);
                     this.Notice?.Invoke($"Wake word listening could not open the microphone: {ex.Message}");
                     return;
                 }

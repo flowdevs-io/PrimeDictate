@@ -57,7 +57,7 @@ public sealed class TranscriptionPrefsService
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                Core.Diagnostics.AppLog.Event("settings", $"Transcription settings were not saved: {ex.Message}");
+                Core.Diagnostics.AppLog.Event("settings", $"Transcription settings were not saved: {ex.Message}", Core.Diagnostics.ActivityLevel.Warning);
             }
         }
 

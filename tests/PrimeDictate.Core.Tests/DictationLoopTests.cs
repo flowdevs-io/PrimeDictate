@@ -157,6 +157,28 @@ public sealed class DictationLoopTests
     }
 
     [Fact]
+    public async Task Activity_feed_records_the_session_status_and_app_but_never_the_text()
+    {
+        var source = new FakeSource();
+        var commits = new List<DictationCommit>();
+        await using var controller = new DictationController(source, () => new FakeProvider("zebra crossing secret"), new FakeGuard(), new FakeInjector());
+        controller.Committed += commits.Add;
+        controller.Options = new DictationOptions { AutoCommitSilence = TimeSpan.Zero };
+
+        await controller.ToggleAsync();
+        source.Lease!.Push(Tone(1.0));
+        await controller.ToggleAsync();
+
+        var id = Assert.Single(commits).SessionId;
+        var session = Assert.Single(Diagnostics.AppLog.Feed.Sessions(), s => s.Id == id);
+        Assert.Equal(Diagnostics.DictationSessionStatus.Typed, session.Status);
+        var log = Diagnostics.AppLog.Feed.SessionEntries(id);
+        Assert.NotEmpty(log);
+        Assert.DoesNotContain(log, e => e.Message.Contains("zebra", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain("zebra", Diagnostics.ActivityText.Join(Diagnostics.AppLog.Feed.Entries()), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Silence_commits_on_its_own_after_speech()
     {
         var source = new FakeSource();

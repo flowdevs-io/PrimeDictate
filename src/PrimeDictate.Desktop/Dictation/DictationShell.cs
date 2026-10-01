@@ -55,6 +55,7 @@ public sealed class DictationShell : IAsyncDisposable
         this.window.DictationHistoryRequested += this.ShowHistory;
         this.window.DictationStatsRequested += this.ShowStats;
         this.window.SettingsRequested += this.ShowSettings;
+        this.window.DictationActivityRequested += this.ShowActivity;
         this.window.RecordingChanged += this.OnMeetingRecordingChanged;
         this.RefreshHeader(refreshModel: true);
         this.host.Notice += message => Dispatcher.UIThread.Post(() => this.OnNotice(message));
@@ -144,11 +145,13 @@ public sealed class DictationShell : IAsyncDisposable
         historyItem.Click += (_, _) => this.ShowHistory();
         var statsItem = new NativeMenuItem("Stats…");
         statsItem.Click += (_, _) => this.ShowStats();
+        var activityItem = new NativeMenuItem("Dictation activity…");
+        activityItem.Click += (_, _) => this.ShowActivity();
         var settingsItem = new NativeMenuItem("Settings…");
         settingsItem.Click += (_, _) => this.ShowSettings();
         var quitItem = new NativeMenuItem("Exit PrimeDictate");
         quitItem.Click += (_, _) => this.ExitRequested?.Invoke();
-        this.tray.Menu = [this.toggleItem, this.recordItem, workspaceItem, historyItem, statsItem, settingsItem];
+        this.tray.Menu = [this.toggleItem, this.recordItem, workspaceItem, historyItem, statsItem, activityItem, settingsItem];
         if (this.UpdateMenu is { } updates)
         {
             var updateItem = new NativeMenuItem(updates.MenuText);
@@ -271,6 +274,20 @@ public sealed class DictationShell : IAsyncDisposable
 
         this.historyWindow = new DictationHistoryWindow(this.host);
         this.historyWindow.Show();
+    }
+
+    private DictationActivityWindow? activityWindow;
+
+    private void ShowActivity()
+    {
+        if (this.activityWindow is { IsVisible: true })
+        {
+            this.activityWindow.Activate();
+            return;
+        }
+
+        this.activityWindow = new DictationActivityWindow();
+        this.activityWindow.Show();
     }
 
     private void ShowStats()

@@ -34,7 +34,7 @@ public sealed class DefaultMicrophoneFallback(IAudioSource inner, Action<string>
             var lease = await inner.OpenAsync(null, cancellationToken).ConfigureAwait(false);
             if (Interlocked.Exchange(ref this.reported, 1) == 0)
             {
-                AppLog.Event("microphone", "The microphone chosen in Settings is not connected; dictation uses the default microphone.");
+                AppLog.Event("microphone", "The microphone chosen in Settings is not connected; dictation uses the default microphone.", ActivityLevel.Warning);
                 notice("The microphone chosen in Settings is not connected, so the default microphone is used. Pick one in Settings to change that.");
             }
 

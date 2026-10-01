@@ -67,6 +67,8 @@ public sealed partial class MainWindow : Window
 
     public event Action? DictationStatsRequested;
 
+    public event Action? DictationActivityRequested;
+
     public event Action? SettingsRequested;
 
     /// <summary>True while a live recording (microphone, system audio or both) is running or paused.</summary>
@@ -98,6 +100,7 @@ public sealed partial class MainWindow : Window
         this.prefs = new TranscriptionPrefsService(this.workspace.Paths);
         this.HistoryButton.Click += (_, _) => this.DictationHistoryRequested?.Invoke();
         this.StatsButton.Click += (_, _) => this.DictationStatsRequested?.Invoke();
+        this.ActivityButton.Click += (_, _) => this.DictationActivityRequested?.Invoke();
         this.SettingsButton.Click += (_, _) => this.SettingsRequested?.Invoke();
         this.TranscriptList.ItemsSource = this.rows;
         this.workspace.Notice += this.Say;
@@ -204,6 +207,7 @@ public sealed partial class MainWindow : Window
         this.DictationStatusText.Text = text;
         this.HistoryButton.IsEnabled = true;
         this.StatsButton.IsEnabled = true;
+        this.ActivityButton.IsEnabled = true;
         this.SettingsButton.IsEnabled = true;
     }
 
