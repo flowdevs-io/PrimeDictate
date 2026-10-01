@@ -166,14 +166,16 @@ public sealed class ShellParityTests : IDisposable
     [Fact]
     public void Tray_tooltips_carry_the_backend_and_fit_the_windows_limit()
     {
-        Assert.Equal("PrimeDictate: ready [Whisper ONNX]", OverlayRules.TrayTooltip(OverlayPhase.Ready, "Whisper ONNX", false, false, null, "okay computer"));
-        Assert.Equal("PrimeDictate: listening [Parakeet ONNX]", OverlayRules.TrayTooltip(OverlayPhase.Listening, "Parakeet ONNX", true, false, "Microphone", "x"));
-        Assert.Equal("PrimeDictate: recording meeting (Microphone)", OverlayRules.TrayTooltip(OverlayPhase.Ready, "x", false, false, "Microphone", "x"));
-        Assert.Equal("PrimeDictate: needs attention", OverlayRules.TrayTooltip(OverlayPhase.Ready, "x", true, false, null, "x"));
-        Assert.Equal("PrimeDictate: wake listening failed", OverlayRules.TrayTooltip(OverlayPhase.WakeListening, "x", false, true, null, "x"));
-        Assert.Equal("PrimeDictate: wake listening (okay computer)", OverlayRules.TrayTooltip(OverlayPhase.WakeListening, "x", false, false, null, "okay computer"));
+        Assert.Equal("PrimeDictate - Ready [Whisper ONNX]", OverlayRules.TrayTooltip(OverlayPhase.Ready, "Whisper ONNX", false, false, null, "okay computer"));
+        Assert.Equal("PrimeDictate - Listening [Parakeet ONNX]", OverlayRules.TrayTooltip(OverlayPhase.Listening, "Parakeet ONNX", true, false, "Microphone", "x"));
+        Assert.Equal("PrimeDictate - Recording meeting (Microphone)", OverlayRules.TrayTooltip(OverlayPhase.Ready, "x", false, false, "Microphone", "x"));
+        Assert.Equal("PrimeDictate - Needs attention", OverlayRules.TrayTooltip(OverlayPhase.Ready, "x", true, false, null, "x"));
+        Assert.Equal("PrimeDictate - Wake listening failed", OverlayRules.TrayTooltip(OverlayPhase.WakeListening, "x", false, true, null, "x"));
+        Assert.Equal("PrimeDictate - Wake listening (okay computer)", OverlayRules.TrayTooltip(OverlayPhase.WakeListening, "x", false, false, null, "okay computer"));
+        Assert.Equal("PrimeDictate - Processing [Moonshine ONNX]", OverlayRules.TrayTooltip(OverlayPhase.Processing, "Moonshine ONNX", false, false, null, "x"));
+        Assert.Equal("PrimeDictate - Listening [Whisper ONNX, Exclusive]", OverlayRules.TrayTooltip(OverlayPhase.Listening, "Whisper ONNX", false, false, null, "x", "Exclusive"));
         var longPhrase = OverlayRules.TrayTooltip(OverlayPhase.WakeListening, "x", false, false, null, new string('a', 80));
-        Assert.Equal("PrimeDictate: wake listening", longPhrase);
+        Assert.Equal("PrimeDictate - Wake listening", longPhrase);
         Assert.True(longPhrase.Length <= 63);
     }
 

@@ -23,6 +23,8 @@ public sealed class DictationOverlayWindow : Window
 {
     private const double CompactWidth = 350;
     private const double FullWidth = 460;
+    private const double MinFullWidth = 360;
+    private const double TextHeight = 80;
     private const int MaxShownCharacters = 900;
     private static readonly TimeSpan NoticeTime = TimeSpan.FromSeconds(6);
     private static readonly TimeSpan FinalTextTime = TimeSpan.FromSeconds(1.5);
@@ -69,6 +71,13 @@ public sealed class DictationOverlayWindow : Window
     private DictationState state;
     private DateTime hideAtUtc = DateTime.MinValue;
     private PixelPoint? anchor;
+    private double? userWidth;
+    private double? userTextHeight;
+    private bool gripDragging;
+    private Point gripStart;
+    private double gripStartWidth;
+    private double gripStartHeight;
+    private readonly Border grip;
 
     public DictationOverlayWindow()
     {
@@ -89,7 +98,7 @@ public sealed class DictationOverlayWindow : Window
         this.textView = new ScrollViewer
         {
             Content = this.text,
-            Height = 80, // four whole lines, so none is cut in half
+            Height = TextHeight, // four whole lines, so none is cut in half
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             VerticalScrollBarVisibility = ScrollBarVisibility.Hidden
         };
@@ -99,7 +108,8 @@ public sealed class DictationOverlayWindow : Window
         this.pinCompact = PinButton();
         this.copyFull = CopyButton();
         this.copyCompact = CopyButton("📋");
-        this.collapse = IconButton("—", "Back to the compact microphone");
+        this.collapse = IconButton("⤡", "Back to the compact microphone");
+        var minimize = IconButton("—", "Minimize");
         var expand = IconButton("⤢", "Show the full panel");
         var settings = IconButton("⚙", "Settings");
         var settingsCompact = IconButton("⚙", "Settings");
@@ -116,6 +126,7 @@ public sealed class DictationOverlayWindow : Window
         }
 
         this.collapse.Click += (_, _) => this.Collapse();
+        minimize.Click += (_, _) => this.MinimizeClicked();
         expand.Click += (_, _) => this.Expand();
         settings.Click += (_, _) => this.SettingsRequested?.Invoke();
         settingsCompact.Click += (_, _) => this.SettingsRequested?.Invoke();
@@ -131,7 +142,7 @@ public sealed class DictationOverlayWindow : Window
         this.mic.Margin = new Thickness(0, 0, 10, 0);
         DockPanel.SetDock(this.mic, Dock.Left);
 
-        var fullButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0, Children = { this.pinFull, settings, this.collapse, close } };
+        var fullButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0, Children = { this.pinFull, settings, this.collapse, minimize, close } };
         this.fullHeader = new DockPanel { LastChildFill = true };
         DockPanel.SetDock(fullButtons, Dock.Right);
         ((Panel)this.fullHeader).Children.Add(fullButtons);
@@ -157,6 +168,22 @@ public sealed class DictationOverlayWindow : Window
         footerGrid.Children.Add(this.copyFull);
         this.footer = footerGrid;
 
+        this.grip = new Border
+        {
+            Width = 16,
+            Height = 16,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Background = Brushes.Transparent,
+            Cursor = new Cursor(StandardCursorType.BottomRightCorner),
+            Margin = new Thickness(0, -10, 0, -8),
+            Child = new TextBlock { Text = "◢", FontSize = 11, Foreground = Brushes.White, Opacity = 0.5, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Bottom }
+        };
+        ToolTip.SetTip(this.grip, "Drag to resize");
+        this.grip.PointerPressed += this.OnGripPressed;
+        this.grip.PointerMoved += this.OnGripMoved;
+        this.grip.PointerReleased += this.OnGripReleased;
+        this.grip.PointerCaptureLost += (_, _) => this.EndGripDrag();
+
         this.panel = new Border
         {
             Background = new SolidColorBrush(Color.FromArgb(0xE6, 0x0D, 0x11, 0x17)),
@@ -165,7 +192,7 @@ public sealed class DictationOverlayWindow : Window
             CornerRadius = new CornerRadius(14),
             Padding = new Thickness(14, 10, 8, 12),
             Cursor = new Cursor(StandardCursorType.SizeAll),
-            Child = new StackPanel { Spacing = 8, Children = { this.compactHeader, this.fullHeader, this.visualizer, this.stateRow, this.textView, this.footer } }
+            Child = new StackPanel { Spacing = 8, Children = { this.compactHeader, this.fullHeader, this.visualizer, this.stateRow, this.textView, this.footer, this.grip } }
         };
         this.Content = this.panel;
 
@@ -271,6 +298,7 @@ public sealed class DictationOverlayWindow : Window
     {
         this.style = style;
         this.expandedOverride = null;
+        this.ResetUserSize();
         this.hideCompactWhenIdle = hideCompactWhenIdle;
         this.SetPinned(sticky, raise: false);
         this.anchor = anchorX is { } x && anchorY is { } y ? new PixelPoint(x, y) : null;
@@ -301,6 +329,7 @@ public sealed class DictationOverlayWindow : Window
         this.state = state;
         if (state == DictationState.Listening)
         {
+            this.RestoreIfMinimized();
             this.dismissed = false;
             this.showingNotice = false;
             this.notice = string.Empty;
@@ -359,6 +388,7 @@ public sealed class DictationOverlayWindow : Window
     public void SetNotice(string message)
     {
         // A notice is worth seeing even after the overlay was closed (for example why nothing was typed).
+        this.RestoreIfMinimized();
         this.dismissed = false;
         this.showingNotice = true;
         this.notice = message;
@@ -437,8 +467,96 @@ public sealed class DictationOverlayWindow : Window
 
     private void Collapse()
     {
+        this.ResetUserSize();
         this.expandedOverride = false;
         this.Refresh();
+    }
+
+    /// <summary>
+    /// The WPF overlay's Minimize: a panel opened from the compact microphone goes back to it, otherwise the window is minimized. A minimized
+    /// overlay comes back with the next dictation or notice.
+    /// </summary>
+    private void MinimizeClicked()
+    {
+        if (this.expandedOverride == true && this.style == OverlayStyle.CompactMicrophone && !this.sticky)
+        {
+            this.Collapse();
+            return;
+        }
+
+        this.WindowState = WindowState.Minimized;
+    }
+
+    private void RestoreIfMinimized()
+    {
+        if (this.WindowState == WindowState.Minimized)
+        {
+            this.WindowState = WindowState.Normal;
+        }
+    }
+
+    private void ResetUserSize()
+    {
+        this.userWidth = null;
+        this.userTextHeight = null;
+    }
+
+    /// <summary>The resize grip drags in screen coordinates, so the overlay (which sizes itself to its content) never has to take focus or switch to a native resize.</summary>
+    private void OnGripPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(this.grip).Properties.IsLeftButtonPressed)
+        {
+            return;
+        }
+
+        e.Pointer.Capture(this.grip);
+        this.gripDragging = true;
+        this.dragging = true; // keeps the bottom-center anchor from repositioning the window while it grows
+        this.gripStart = this.ScreenPoint(e);
+        this.gripStartWidth = this.panel.Bounds.Width;
+        this.gripStartHeight = this.textView.Bounds.Height;
+        e.Handled = true;
+    }
+
+    private void OnGripMoved(object? sender, PointerEventArgs e)
+    {
+        if (!this.gripDragging)
+        {
+            return;
+        }
+
+        var now = this.ScreenPoint(e);
+        this.userWidth = Math.Max(MinFullWidth, this.gripStartWidth + (now.X - this.gripStart.X));
+        this.userTextHeight = Math.Max(TextHeight, this.gripStartHeight + (now.Y - this.gripStart.Y));
+        this.Refresh();
+        e.Handled = true;
+    }
+
+    private void OnGripReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        e.Pointer.Capture(null);
+        this.EndGripDrag();
+        e.Handled = true;
+    }
+
+    private void EndGripDrag()
+    {
+        if (!this.gripDragging)
+        {
+            return;
+        }
+
+        this.gripDragging = false;
+        this.dragging = false;
+        // The new size grew from the top-left corner; the spot it now occupies is the one to grow from next time (not saved: the size itself is not remembered, as in WPF).
+        this.anchor = this.CurrentAnchor();
+    }
+
+    private Point ScreenPoint(PointerEventArgs e)
+    {
+        var p = this.PointToScreen(e.GetPosition(this));
+        var scale = this.DesktopScaling;
+        return new Point(p.X / scale, p.Y / scale);
     }
 
     /// <summary>A click (not a drag) on the compact microphone opens the full panel, as in the WPF overlay.</summary>
@@ -526,7 +644,9 @@ public sealed class DictationOverlayWindow : Window
             ToolTip.SetTip(copy, copyable ? "Copy the last transcript" : "Nothing to copy yet: wait for a transcript");
         }
 
-        this.panel.Width = full ? FullWidth : CompactWidth;
+        this.panel.Width = full ? this.userWidth ?? FullWidth : CompactWidth;
+        this.textView.Height = full ? this.userTextHeight ?? TextHeight : TextHeight;
+        this.grip.IsVisible = full;
         this.panel.CornerRadius = new CornerRadius(full ? 12 : 30);
         this.fullHeader.IsVisible = full;
         this.compactHeader.IsVisible = !full;

@@ -23,6 +23,7 @@ public sealed class DictationHost : IAsyncDisposable
     private ITranscriptionProvider? provider;
     private ITranscriptionProvider? wakeProvider;
     private string? wakeProviderId;
+    private string? wakeKey;
     private string? providerId;
     private string? lastModelNotice;
     private bool disposed;
@@ -49,7 +50,9 @@ public sealed class DictationHost : IAsyncDisposable
         this.StartupNotice = load.Warning is null ? fitted : fitted is null ? load.Warning : $"{load.Warning} {fitted}";
         if (audio is null)
         {
+            // As in the WPF app, hotkeys are bound without a microphone: the history hotkey still works and the dictation hotkey says why it cannot.
             this.UnavailableReason = "No microphone capture is available on this system.";
+            this.BindHotkeys();
             return;
         }
 
@@ -71,7 +74,13 @@ public sealed class DictationHost : IAsyncDisposable
         microphone.Register(this.Wake);
         this.Wake.Notice += message => this.Notice?.Invoke(message);
         this.Wake.WakeDetected += () => _ = Task.Run(this.StartFromWakeAsync);
+        this.wakeKey = WakeKey(this.Settings);
         this.ConfigureWake();
+        this.BindHotkeys();
+    }
+
+    private void BindHotkeys()
+    {
         if (this.hotkeys is not null)
         {
             this.hotkeys.SetBindings(this.Settings.ToBindings());
@@ -165,16 +174,52 @@ public sealed class DictationHost : IAsyncDisposable
             this.Controller.Options = settings.ToOptions();
         }
 
-        this.ConfigureWake();
         if (this.Wake is not null)
         {
-            _ = settings.EnableWakeWord && this.Controller?.IsRecording != true ? this.Wake.EnsureRunningAsync() : this.Wake.StopAsync();
+            // As the WPF app does on save: stop, reconfigure, then start again, so a new microphone (or a different wake model) takes effect now.
+            _ = this.ReconfigureWakeAsync();
         }
 
         this.hotkeys?.SetBindings(settings.ToBindings());
         if (persist)
         {
             this.store.Save(settings);
+        }
+    }
+
+    /// <summary>
+    /// What the wake listener was opened with: microphone, wake model and gain-independent model choice. The Settings window edits the live
+    /// settings object in place, so the previous values are remembered as this key rather than compared against a copy.
+    /// </summary>
+    public static string WakeKey(DictationSettings settings) =>
+        $"{(string.IsNullOrWhiteSpace(settings.SelectedInputDeviceId) ? string.Empty : settings.SelectedInputDeviceId)}|{settings.TranscriptionBackend}|{settings.ResolveModelId()}|{settings.ModelPath}";
+
+    private async Task ReconfigureWakeAsync()
+    {
+        var wake = this.Wake;
+        if (wake is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var key = WakeKey(this.Settings);
+            var restart = Interlocked.Exchange(ref this.wakeKey, key) != key;
+            if (restart || !this.Settings.EnableWakeWord || this.Controller?.IsRecording == true)
+            {
+                await wake.StopAsync().ConfigureAwait(false);
+            }
+
+            this.ConfigureWake();
+            if (this.Settings.EnableWakeWord && this.Controller?.IsRecording != true)
+            {
+                await wake.EnsureRunningAsync().ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            Core.Diagnostics.AppLog.Fault("wake-word", ex);
         }
     }
 
@@ -248,10 +293,6 @@ public sealed class DictationHost : IAsyncDisposable
     private void OnHotkey(HotkeyAction action)
     {
         var controller = this.Controller;
-        if (controller is null)
-        {
-            return;
-        }
 
         // Runs on the hook thread: offload everything.
         _ = Task.Run(async () =>
@@ -261,10 +302,20 @@ public sealed class DictationHost : IAsyncDisposable
                 switch (action)
                 {
                     case HotkeyAction.ToggleDictation:
+                        if (controller is null)
+                        {
+                            this.Notice?.Invoke(this.UnavailableReason ?? "Dictation is unavailable.");
+                            break;
+                        }
+
                         await controller.ToggleAsync().ConfigureAwait(false);
                         break;
                     case HotkeyAction.EmergencyStop:
-                        await controller.DiscardAsync().ConfigureAwait(false);
+                        if (controller is not null)
+                        {
+                            await controller.DiscardAsync().ConfigureAwait(false);
+                        }
+
                         break;
                     case HotkeyAction.ShowHistory:
                         this.HistoryRequested?.Invoke();
@@ -304,11 +355,12 @@ public sealed class DictationHost : IAsyncDisposable
 
         lock (this.providerSync)
         {
-            if (this.provider is null || this.providerId != model.ModelId)
+            // Keyed on id and folder: a custom ModelPath can point at another folder of the same model id.
+            if (this.provider is null || this.providerId != model.ProviderKey)
             {
                 _ = this.provider?.DisposeAsync();
                 this.provider = CreateProvider(model);
-                this.providerId = model.ModelId;
+                this.providerId = model.ProviderKey;
             }
 
             return this.provider;
@@ -360,8 +412,21 @@ public sealed class DictationHost : IAsyncDisposable
 
     private static ITranscriptionProvider CreateProvider(InstalledSpeechModel model) => SpeechProviders.Create(model);
 
-    private void ConfigureWake() =>
-        this.Wake?.Configure(this.Settings.EnableWakeWord, this.Settings.WakeWordPhrase, this.Settings.SelectedInputDeviceId, this.Settings.InputGainMultiplier);
+    private void ConfigureWake()
+    {
+        if (this.Wake is not { } wake)
+        {
+            return;
+        }
+
+        var settings = this.Settings;
+        wake.Configure(settings.EnableWakeWord, settings.WakeWordPhrase, settings.SelectedInputDeviceId, settings.InputGainMultiplier);
+        if (settings.EnableWakeWord && this.ResolveWakeModel() is null)
+        {
+            // Checked once here, as the WPF app did, instead of failing on every stretch of speech: no model means no listening and one notice.
+            wake.Disable("Wake word listening needs a speech model. Download one in Settings.");
+        }
+    }
 
     private async Task StartFromWakeAsync()
     {
@@ -400,27 +465,31 @@ public sealed class DictationHost : IAsyncDisposable
     }
 
     /// <summary>
-    /// Prefers a small model of the dictation model's family for idle listening (<see cref="WakeModelChooser"/>, as the WPF app does)
-    /// and falls back to the dictation model.
+    /// The model wake listening uses: a small one of the dictation model's family when installed (<see cref="WakeModelChooser"/>, as the WPF app does),
+    /// else the dictation model, else null when nothing is installed.
     /// </summary>
-    private ITranscriptionProvider? GetWakeProvider()
+    private InstalledSpeechModel? ResolveWakeModel()
     {
         var installed = this.InstalledModels();
-        var wanted = this.Settings.ResolveModelId();
-        var dictation = installed.FirstOrDefault(m => m.ModelId == wanted) ?? installed.FirstOrDefault();
-        var small = dictation is null ? null : WakeModelChooser.ChooseSmall(installed, dictation.Backend);
-        if (small is null)
+        var dictation = SpeechModelLocator.Resolve(installed, this.Settings) ?? installed.FirstOrDefault();
+        return (dictation is null ? null : WakeModelChooser.ChooseSmall(installed, dictation.Backend)) ?? dictation;
+    }
+
+    private ITranscriptionProvider? GetWakeProvider()
+    {
+        var model = this.ResolveWakeModel();
+        if (model is null)
         {
-            return this.GetProvider();
+            return null;
         }
 
         lock (this.providerSync)
         {
-            if (this.wakeProvider is null || this.wakeProviderId != small.ModelId)
+            if (this.wakeProvider is null || this.wakeProviderId != model.ProviderKey)
             {
                 _ = this.wakeProvider?.DisposeAsync();
-                this.wakeProvider = CreateProvider(small);
-                this.wakeProviderId = small.ModelId;
+                this.wakeProvider = CreateProvider(model);
+                this.wakeProviderId = model.ProviderKey;
             }
 
             return this.wakeProvider;

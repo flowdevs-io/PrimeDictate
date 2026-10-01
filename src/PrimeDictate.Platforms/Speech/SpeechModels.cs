@@ -9,6 +9,9 @@ public sealed record InstalledSpeechModel(LegacyBackend Backend, string Id, stri
 {
     /// <summary>Stable id such as <c>whisper-onnx:base.en</c> or <c>parakeet-onnx:parakeet-tdt-0.6b-v3</c>.</summary>
     public string ModelId => $"{SpeechModelLocator.Prefix(this.Backend)}:{this.Id}";
+
+    /// <summary>Id plus folder: what decides whether a loaded recognizer is still the right one (a custom model path can reuse an id).</summary>
+    public string ProviderKey => $"{this.ModelId}|{this.Directory}";
 }
 
 public sealed record MoonshineFiles(string Tokens, string Encoder, string? MergedDecoder, string? Preprocessor, string? UncachedDecoder, string? CachedDecoder);

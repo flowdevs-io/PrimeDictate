@@ -136,8 +136,22 @@ public sealed class WakeWordListener : IMicrophoneConsumer, IAsyncDisposable
 
     public event Action<string>? Notice;
 
-    /// <summary>True after the listener gave up (the microphone would not open) until it next starts listening. The tray shows it as "Wake listening failed".</summary>
-    public bool HasFailed { get; private set; }
+    /// <summary>Raised whenever <see cref="HasFailed"/> changes, so the tray can follow it.</summary>
+    public event Action? FailedChanged;
+
+    /// <summary>True after the listener gave up (the microphone would not open, no model) until it next starts listening or is disabled. The tray shows it as "Wake listening failed".</summary>
+    public bool HasFailed => Volatile.Read(ref this.failed) != 0;
+
+    private int failed;
+    private int transcribeFailureReported;
+
+    private void SetFailed(bool value)
+    {
+        if (Interlocked.Exchange(ref this.failed, value ? 1 : 0) != (value ? 1 : 0))
+        {
+            this.FailedChanged?.Invoke();
+        }
+    }
 
     public void Configure(bool enabled, string? wakePhrase, string? inputDeviceId, double inputGain)
     {
@@ -148,6 +162,26 @@ public sealed class WakeWordListener : IMicrophoneConsumer, IAsyncDisposable
             this.deviceId = string.IsNullOrWhiteSpace(inputDeviceId) ? null : inputDeviceId;
             this.gain = DictationOptions.NormalizeGain(inputGain);
         }
+
+        if (!enabled)
+        {
+            // Turned off: nothing is failing any more.
+            this.SetFailed(false);
+        }
+
+        Volatile.Write(ref this.transcribeFailureReported, 0);
+    }
+
+    /// <summary>The listener cannot work (for example no speech model): stops it from running, marks it failed and says why once.</summary>
+    public void Disable(string reason)
+    {
+        lock (this.sync)
+        {
+            this.enabled = false;
+        }
+
+        this.SetFailed(true);
+        this.Notice?.Invoke(reason);
     }
 
     /// <summary>Starts listening when enabled and not suspended. Safe to call repeatedly.</summary>
@@ -250,7 +284,7 @@ public sealed class WakeWordListener : IMicrophoneConsumer, IAsyncDisposable
                 if (attempt >= OpenRetryDelays.Length)
                 {
                     Diagnostics.AppLog.Error("wake-word", $"Stopped listening: the microphone did not open after {attempt + 1} tries: {ex.Message}");
-                    this.HasFailed = true;
+                    this.SetFailed(true);
                     this.Notice?.Invoke($"Wake word listening could not open the microphone: {ex.Message}");
                     return;
                 }
@@ -260,7 +294,7 @@ public sealed class WakeWordListener : IMicrophoneConsumer, IAsyncDisposable
             }
         }
 
-        this.HasFailed = false;
+        this.SetFailed(false);
         var run = new Running(lease);
         run.Loop = Task.Run(() => this.ListenAsync(run));
         lock (this.sync)
@@ -369,9 +403,16 @@ public sealed class WakeWordListener : IMicrophoneConsumer, IAsyncDisposable
                 }
                 catch (Exception ex)
                 {
-                    this.Notice?.Invoke($"Wake word transcription failed: {ex.Message}");
+                    // Said once, not on every stretch of speech; reset by the next success or reconfiguration.
+                    if (Interlocked.Exchange(ref this.transcribeFailureReported, 1) == 0)
+                    {
+                        this.Notice?.Invoke($"Wake word transcription failed: {ex.Message}");
+                    }
+
                     continue;
                 }
+
+                Volatile.Write(ref this.transcribeFailureReported, 0);
 
                 string current;
                 lock (this.sync)

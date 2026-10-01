@@ -74,43 +74,50 @@ public static class OverlayRules
         return active || lingering || staysOnScreen;
     }
 
-    /// <summary>The icon's hover text. Windows shows at most 63 characters, so the wake phrase is dropped when it would not fit.</summary>
+    /// <summary>
+    /// The icon's hover text, worded exactly as the WPF tray ("PrimeDictate - Processing [..]", "PrimeDictate - Listening [.., Exclusive]").
+    /// Windows shows at most 63 characters, so the wake phrase is dropped when it would not fit. <paramref name="micAccess"/> is "Exclusive"
+    /// or "Shared" while dictating, else null.
+    /// </summary>
     public static string TrayTooltip(
         OverlayPhase phase,
         string backend,
         bool needsAttention,
         bool wakeFailed,
         string? meetingSource,
-        string wakePhrase)
+        string wakePhrase,
+        string? micAccess = null)
     {
         if (phase == OverlayPhase.Listening)
         {
-            return $"PrimeDictate: listening [{backend}]";
+            return micAccess is { Length: > 0 }
+                ? $"PrimeDictate - Listening [{backend}, {micAccess}]"
+                : $"PrimeDictate - Listening [{backend}]";
         }
 
         if (phase == OverlayPhase.Processing)
         {
-            return $"PrimeDictate: transcribing [{backend}]";
+            return $"PrimeDictate - Processing [{backend}]";
         }
 
         if (meetingSource is not null)
         {
-            return $"PrimeDictate: recording meeting ({meetingSource})";
+            return $"PrimeDictate - Recording meeting ({meetingSource})";
         }
 
         if (needsAttention || wakeFailed)
         {
-            return wakeFailed ? "PrimeDictate: wake listening failed" : "PrimeDictate: needs attention";
+            return wakeFailed ? "PrimeDictate - Wake listening failed" : "PrimeDictate - Needs attention";
         }
 
         if (phase == OverlayPhase.WakeListening)
         {
             var phrase = string.IsNullOrWhiteSpace(wakePhrase) ? WakePhrase.Default : wakePhrase.Trim();
-            var text = $"PrimeDictate: wake listening ({phrase})";
-            return text.Length <= 63 ? text : "PrimeDictate: wake listening";
+            var text = $"PrimeDictate - Wake listening ({phrase})";
+            return text.Length <= 63 ? text : "PrimeDictate - Wake listening";
         }
 
-        return $"PrimeDictate: ready [{backend}]";
+        return $"PrimeDictate - Ready [{backend}]";
     }
 }
 

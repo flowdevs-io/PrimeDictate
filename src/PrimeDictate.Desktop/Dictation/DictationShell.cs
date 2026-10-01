@@ -35,7 +35,6 @@ public sealed class DictationShell : IAsyncDisposable
     private readonly IAudioCuePlayer cues = new ProcessAudioCuePlayer();
     private DictationState lastState = DictationState.Idle;
     private DateTime errorUntilUtc;
-    private bool wakeFailed;
     private readonly TrayClickDecider clickDecider;
     private DictationSettingsWindow? settingsWindow;
     private DictationHistoryWindow? historyWindow;
@@ -64,8 +63,10 @@ public sealed class DictationShell : IAsyncDisposable
         AppLog.ErrorLogged += this.OnErrorLogged;
         if (this.host.Wake is { } wake)
         {
-            wake.Notice += _ => Dispatcher.UIThread.Post(this.OnWakeNotice);
+            // The failed flag is read live from the listener; this only refreshes the tray and overlay when it flips either way.
+            wake.FailedChanged += () => Dispatcher.UIThread.Post(this.RefreshStatusSurfaces);
         }
+
         this.BuildTray(app);
         this.window.DictationHistoryRequested += this.ShowHistory;
         this.window.DictationStatsRequested += this.ShowStats;
@@ -128,6 +129,8 @@ public sealed class DictationShell : IAsyncDisposable
     {
         AppLog.ErrorLogged -= this.OnErrorLogged;
         this.tray.IsVisible = false;
+        this.tray.Icon = null;
+        TrayIconRenderer.DisposeCached();
         this.overlay.Close();
         return this.host.DisposeAsync();
     }
@@ -191,7 +194,7 @@ public sealed class DictationShell : IAsyncDisposable
             }
         };
         this.tray.Icon = TrayIconRenderer.Create(this.CurrentTrayState());
-        this.tray.ToolTipText = "PrimeDictate: ready";
+        this.tray.ToolTipText = "PrimeDictate - Ready";
         TrayIcon.SetIcons(app, [this.tray]);
     }
 
@@ -199,12 +202,15 @@ public sealed class DictationShell : IAsyncDisposable
     private TrayVisualState CurrentTrayState() =>
         this.lastState == DictationState.Listening || this.window.IsRecording ? TrayVisualState.Recording
         : this.lastState == DictationState.Processing ? TrayVisualState.Processing
-        : TrayAttention.IsActive(this.errorUntilUtc, DateTime.UtcNow, this.wakeFailed) ? TrayVisualState.Error
+        : TrayAttention.IsActive(this.errorUntilUtc, DateTime.UtcNow, this.WakeFailed) ? TrayVisualState.Error
         : this.WakeListening ? TrayVisualState.AlwaysListening
         : TrayVisualState.Ready;
 
     /// <summary>Wake word on and nothing else going on, as in the WPF app (it shows even in the gap while the listener restarts).</summary>
-    private bool WakeListening => this.host.Settings.EnableWakeWord && this.lastState == DictationState.Idle && !this.wakeFailed;
+    private bool WakeListening => this.host.Settings.EnableWakeWord && this.lastState == DictationState.Idle && !this.WakeFailed;
+
+    /// <summary>Wake word on and the listener gave up. Derived live, so it clears when the listener recovers or the wake word is turned off.</summary>
+    private bool WakeFailed => this.host.Settings.EnableWakeWord && this.host.Wake?.HasFailed == true;
 
     private void OnErrorLogged() => Dispatcher.UIThread.Post(this.HoldAttention);
 
@@ -218,13 +224,6 @@ public sealed class DictationShell : IAsyncDisposable
             this.RefreshTrayIcon();
             this.RefreshTooltip();
         }, TrayAttention.Hold + TimeSpan.FromSeconds(0.5));
-    }
-
-    /// <summary>The wake listener said something; when it has given up (the microphone would not open) the tray says "Wake listening failed".</summary>
-    private void OnWakeNotice()
-    {
-        this.wakeFailed = this.host.Wake?.HasFailed == true;
-        this.RefreshStatusSurfaces();
     }
 
     private void RefreshStatusSurfaces()
@@ -257,8 +256,9 @@ public sealed class DictationShell : IAsyncDisposable
             {
                 this.cues.Play(DictationAudioCue.Start);
             }
-            else if (this.lastState == DictationState.Listening)
+            else if (state == DictationState.Processing && this.lastState == DictationState.Listening)
             {
+                // As in the WPF app the stop cue marks the start of processing; a discard, emergency stop or device error plays none.
                 this.cues.Play(DictationAudioCue.Stop);
             }
         }
@@ -270,11 +270,6 @@ public sealed class DictationShell : IAsyncDisposable
         }
 
         this.lastState = state;
-        if (state == DictationState.Idle && this.wakeFailed && this.host.Wake?.HasFailed != true)
-        {
-            this.wakeFailed = false;
-        }
-
         this.overlay.SetState(state);
         this.RefreshStatusSurfaces();
         this.toggleItem.Header = state == DictationState.Listening ? "Stop and type" : "Start dictation";
@@ -297,18 +292,19 @@ public sealed class DictationShell : IAsyncDisposable
                 _ => this.WakeListening ? OverlayPhase.WakeListening : OverlayPhase.Ready
             },
             this.BackendLabel,
-            TrayAttention.IsActive(this.errorUntilUtc, DateTime.UtcNow, this.wakeFailed),
-            this.wakeFailed,
+            TrayAttention.IsActive(this.errorUntilUtc, DateTime.UtcNow, this.WakeFailed),
+            this.WakeFailed,
             this.window.IsRecording ? this.window.RecordingSourceLabel : null,
-            this.host.Settings.WakeWordPhrase) + this.MicAccessSuffix;
+            this.host.Settings.WakeWordPhrase,
+            this.MicAccessLabel);
 
     /// <summary>While dictating on Windows, which microphone access was granted (as the WPF tooltip showed).</summary>
-    private string MicAccessSuffix => this.lastState != DictationState.Listening ? ""
+    private string? MicAccessLabel => this.lastState != DictationState.Listening ? null
         : this.host.Controller?.ActiveMicAccess switch
         {
-            MicAccessMode.Exclusive => " [Exclusive]",
-            MicAccessMode.Shared when OperatingSystem.IsWindows() => " [Shared]",
-            _ => ""
+            MicAccessMode.Exclusive => "Exclusive",
+            MicAccessMode.Shared when OperatingSystem.IsWindows() => "Shared",
+            _ => null
         };
 
     private string BackendLabel => OverlayRules.BackendLabel(this.host.Settings.TranscriptionBackend);

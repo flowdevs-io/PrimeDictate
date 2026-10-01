@@ -22,7 +22,31 @@ public static class TrayIconRenderer
 {
     private const int Size = 64;
 
-    public static WindowIcon Create(TrayVisualState state) => new(Render(state));
+    private static readonly Dictionary<TrayVisualState, (WindowIcon Icon, RenderTargetBitmap Bitmap)> Cache = [];
+
+    /// <summary>One icon per state, drawn the first time it is needed and reused after, as the WPF app keeps one icon per state. UI thread only.</summary>
+    public static WindowIcon Create(TrayVisualState state)
+    {
+        if (!Cache.TryGetValue(state, out var entry))
+        {
+            var bitmap = Render(state);
+            entry = (new WindowIcon(bitmap), bitmap);
+            Cache[state] = entry;
+        }
+
+        return entry.Icon;
+    }
+
+    /// <summary>Releases the cached icons when the tray goes away.</summary>
+    public static void DisposeCached()
+    {
+        foreach (var (_, bitmap) in Cache.Values)
+        {
+            bitmap.Dispose();
+        }
+
+        Cache.Clear();
+    }
 
     public static RenderTargetBitmap Render(TrayVisualState state)
     {
