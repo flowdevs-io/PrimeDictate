@@ -15,23 +15,26 @@ public sealed class DefaultMicrophoneFallback(IAudioSource inner, Action<string>
     public ValueTask<IReadOnlyList<AudioInputDevice>> ListDevicesAsync(CancellationToken cancellationToken) =>
         inner.ListDevicesAsync(cancellationToken);
 
-    public async ValueTask<IAudioCaptureLease> OpenAsync(string? deviceId, CancellationToken cancellationToken)
+    public ValueTask<IAudioCaptureLease> OpenAsync(string? deviceId, CancellationToken cancellationToken) =>
+        this.OpenAsync(deviceId, MicAccessMode.Shared, cancellationToken);
+
+    public async ValueTask<IAudioCaptureLease> OpenAsync(string? deviceId, MicAccessMode access, CancellationToken cancellationToken)
     {
         if (deviceId is null)
         {
-            return await inner.OpenAsync(null, cancellationToken).ConfigureAwait(false);
+            return await inner.OpenAsync(null, access, cancellationToken).ConfigureAwait(false);
         }
 
         try
         {
-            var lease = await inner.OpenAsync(deviceId, cancellationToken).ConfigureAwait(false);
+            var lease = await inner.OpenAsync(deviceId, access, cancellationToken).ConfigureAwait(false);
             // It is back, so losing it again is worth saying again.
             Volatile.Write(ref this.reported, 0);
             return lease;
         }
         catch (AudioSourceException ex) when (ex.Kind == AudioSourceErrorKind.DeviceRemoved)
         {
-            var lease = await inner.OpenAsync(null, cancellationToken).ConfigureAwait(false);
+            var lease = await inner.OpenAsync(null, access, cancellationToken).ConfigureAwait(false);
             if (Interlocked.Exchange(ref this.reported, 1) == 0)
             {
                 AppLog.Event("microphone", "The microphone chosen in Settings is not connected; dictation uses the default microphone.", ActivityLevel.Warning);

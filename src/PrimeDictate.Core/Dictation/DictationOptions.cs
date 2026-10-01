@@ -22,6 +22,12 @@ public sealed record DictationOptions
     /// </summary>
     public bool TypeWithoutFocusGuard { get; init; }
 
+    /// <summary>
+    /// Ask WASAPI for exclusive access to the microphone while dictating (WPF "Request exclusive mic access").
+    /// Falls back to shared when the device refuses. Windows only; ignored elsewhere.
+    /// </summary>
+    public bool ExclusiveMicAccess { get; init; }
+
     /// <summary>If focus moved, try to bring the window dictation started in back before typing.</summary>
     public bool ReturnToStartTarget { get; init; }
 

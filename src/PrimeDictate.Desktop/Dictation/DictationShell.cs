@@ -5,7 +5,9 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
+using PrimeDictate.Core.Diagnostics;
 using PrimeDictate.Core.Dictation;
+using PrimeDictate.Core.Providers;
 using PrimeDictate.Platforms;
 using PrimeDictate.Platforms.Dictation;
 using PrimeDictate.Platforms.Speech;
@@ -195,6 +197,12 @@ public sealed class DictationShell : IAsyncDisposable
             }
         }
 
+        // As in WPF: Windows Mouse Sonar pulse when recording starts and when processing starts.
+        if (state != this.lastState && state is DictationState.Listening or DictationState.Processing)
+        {
+            WindowsMousePointerIndicator.PulseSoon(message => AppLog.Event("dictation", message));
+        }
+
         this.lastState = state;
         this.overlay.SetState(state);
         this.RefreshTrayIcon();
@@ -214,7 +222,12 @@ public sealed class DictationShell : IAsyncDisposable
     private void RefreshTooltip() =>
         this.tray.ToolTipText = this.lastState switch
         {
-            DictationState.Listening => "PrimeDictate: listening",
+            DictationState.Listening => this.host.Controller?.ActiveMicAccess switch
+            {
+                MicAccessMode.Exclusive => "PrimeDictate: listening [Exclusive]",
+                MicAccessMode.Shared when OperatingSystem.IsWindows() => "PrimeDictate: listening [Shared]",
+                _ => "PrimeDictate: listening"
+            },
             DictationState.Processing => "PrimeDictate: transcribing",
             _ when this.window.IsRecording => $"PrimeDictate: recording meeting ({this.window.RecordingSourceLabel})",
             _ => "PrimeDictate: ready"
