@@ -2,6 +2,7 @@
 
 ## Highlights
 
+- Transcription and meetings are a **preview** in 6.1.0: they work, but have had far less real-world use than dictation. Dictation is the same daily-use feature set as 6.0.0.
 - One app. The installers now ship the new PrimeDictate that does both jobs in one process: hotkey dictation from the tray, and the transcription and meeting workspace (recordings, speaker timeline, sessions). It is still `PrimeDictate.exe`, so shortcuts, winget, Chocolatey and the updater keep working, and 6.1.0 upgrades 6.0.0 in place.
 - Your setup carries over. The new app reads the 6.0.0 settings and history once (it never rewrites them), keeps the same model folders under `%LocalAppData%\PrimeDictate\models`, and keeps the lifetime stats.
 - Launch at login is one thing again. The installer's Startup shortcut now starts PrimeDictate in the tray (`--background`), and the app's "Start PrimeDictate when I sign in" checkbox turns that same shortcut on or off for you without administrator rights. `LAUNCHATLOGIN=0` still leaves it out; the checkbox then uses a per-user startup entry instead. The 6.0.0 per-user startup entries are cleaned up on first start.
