@@ -413,6 +413,63 @@ public sealed class DictationLoopTests
     }
 
     [Fact]
+    public async Task Shell_command_with_continue_and_nothing_left_ends_silently_without_a_no_text_notice()
+    {
+        var saved = new VoiceShellCommand { Phrase = "open notes", Command = "notepad", CompletionBehavior = VoiceShellCommandCompletionBehavior.Continue };
+        var source = new FakeSource();
+        var notices = new List<string>();
+        var commits = new List<DictationCommit>();
+        var processor = new VoiceCommandProcessor(() => ShellOptionsBase with { ShellCommands = [saved] });
+        await using var controller = new DictationController(
+            source, () => new FakeProvider("open notes"), new FakeGuard(), new FakeInjector(), voiceCommands: processor, shellRunner: new FakeShellRunner());
+        controller.Options = new DictationOptions { AutoCommitSilence = TimeSpan.Zero };
+        controller.Notice += notices.Add;
+        controller.Committed += commits.Add;
+        await controller.ToggleAsync();
+        source.Lease!.Push(Tone(1.0));
+        await WaitFor(() => controller.IsRecording);
+        await controller.ToggleAsync();
+
+        Assert.DoesNotContain(notices, n => n.Contains("No text was recognized", StringComparison.Ordinal));
+        Assert.Equal(DictationDeliveryStatus.CommandExecuted, Assert.Single(commits).Status);
+        // The history target of a computer command is the WPF one.
+        Assert.Equal("Command Prompt", commits[0].TargetDisplayName);
+        Assert.Equal("Command Prompt", commits[0].TargetAppName);
+        Assert.Equal("Command Prompt", commits[0].TargetWindowTitle);
+    }
+
+    private sealed class StubRewriter(bool active) : ITranscriptRewriter
+    {
+        public bool IsActive => active;
+
+        public ValueTask<RewriteResult> RewriteAsync(string transcript, IForegroundTarget? target, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(new RewriteResult("polished", "prompt", true));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task The_overlay_shows_the_ai_status_before_a_rewrite_only_when_rewriting_is_on(bool active)
+    {
+        var source = new FakeSource();
+        var shown = new List<string>();
+        await using var controller = new DictationController(
+            source, () => new FakeProvider("hello there"), new FakeGuard(), new FakeInjector(), rewriter: new StubRewriter(active));
+        controller.Options = new DictationOptions { AutoCommitSilence = TimeSpan.Zero };
+        controller.PartialTranscript += (_, text) => shown.Add(text);
+        await controller.ToggleAsync();
+        source.Lease!.Push(Tone(1.0));
+        await WaitFor(() => controller.IsRecording);
+        await controller.ToggleAsync();
+
+        Assert.Equal(active, shown.Contains("[AI is processing transcript...]"));
+        if (active)
+        {
+            Assert.True(shown.IndexOf("[AI is processing transcript...]") < shown.IndexOf("polished"));
+        }
+    }
+
+    [Fact]
     public async Task Shell_command_with_continue_and_nothing_left_types_nothing()
     {
         var saved = new VoiceShellCommand { Phrase = "open notes", Command = "notepad", CompletionBehavior = VoiceShellCommandCompletionBehavior.Continue };

@@ -152,6 +152,20 @@ public sealed partial class LaunchAtLogin
         return this.Apply(LoginScopeDecision.UserMechanismWanted(scope));
     }
 
+    /// <summary>
+    /// The WPF <c>--disable-launch-at-login --scope=all-users</c>: removes the machine-wide Run value and the MSI's all-users Startup
+    /// shortcut (elevating when needed), even when only the shortcut is there. Returns null on success, else a sentence for the user.
+    /// </summary>
+    public string? DisableAllUsers()
+    {
+        if (this.SupportsAllUsers && (this.MachineRunPresent || this.InstallerShortcutPresent))
+        {
+            return this.ApplyMachine(MachineRunAction.Delete);
+        }
+
+        return null;
+    }
+
     private string? ApplyMachine(MachineRunAction action)
     {
         if (this.isAdministrator())
@@ -169,6 +183,8 @@ public sealed partial class LaunchAtLogin
             if (!on)
             {
                 this.machineRunKey!.Delete(WindowsValueName);
+                // The WPF app's all-users off also deleted the MSI's shortcut in the all-users Startup folder.
+                this.startupFolder?.DeleteInstallerShortcut();
                 return null;
             }
 

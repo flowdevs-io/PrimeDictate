@@ -132,6 +132,10 @@ jobs:
           -p:FileVersion=${{ steps.version.outputs.file_version }}
           -p:InformationalVersion=${{ steps.version.outputs.informational_version }}
 
+      - name: Test
+        if: github.event_name != 'workflow_dispatch' || !inputs.submit_winget_only
+        run: dotnet test tests/PrimeDictate.Core.Tests -c Release
+
       - name: Publish Windows payloads
         if: github.event_name != 'workflow_dispatch' || !inputs.submit_winget_only
         shell: pwsh

@@ -68,6 +68,55 @@ public sealed class TrayClickBehaviorConverter() : LenientEnumConverter<TrayClic
 
 public sealed class AppThemeConverter() : LenientEnumConverter<AppTheme>(AppTheme.Dark);
 
+/// <summary>The enums of a WPF <c>settings.json</c>: a value this version does not know falls back to the default instead of failing the whole import.</summary>
+public sealed class LegacyBackendConverter() : LenientEnumConverter<LegacyBackend>(LegacyBackend.Whisper);
+
+public sealed class OverlayStyleConverter() : LenientEnumConverter<OverlayStyle>(OverlayStyle.CompactMicrophone);
+
+/// <summary>An unknown completion behavior reads as Stop, the safe one (nothing more is typed).</summary>
+public sealed class VoiceShellCompletionConverter() : LenientEnumConverter<VoiceShellCommandCompletionBehavior>(VoiceShellCommandCompletionBehavior.Stop);
+
+public sealed class OllamaModeConverter() : LenientEnumConverter<OllamaMode>(OllamaMode.Default);
+
+/// <summary>The optional compute setting: an unknown or non-text value reads as "not set" (null), never as a wrong device.</summary>
+public sealed class LegacyComputeInterfaceConverter : JsonConverter<LegacyComputeInterface?>
+{
+    public override bool HandleNull => true;
+
+    public override LegacyComputeInterface? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.Null)
+        {
+            return null;
+        }
+
+        var text = reader.TokenType == JsonTokenType.String ? reader.GetString() : null;
+        if (reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out var number))
+        {
+            return Enum.IsDefined(typeof(LegacyComputeInterface), number) ? (LegacyComputeInterface)number : null;
+        }
+
+        if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)
+        {
+            reader.Skip();
+        }
+
+        return Enum.TryParse<LegacyComputeInterface>(text, ignoreCase: true, out var parsed) && Enum.IsDefined(parsed) ? parsed : null;
+    }
+
+    public override void Write(Utf8JsonWriter writer, LegacyComputeInterface? value, JsonSerializerOptions options)
+    {
+        if (value is { } v)
+        {
+            writer.WriteStringValue(v.ToString());
+        }
+        else
+        {
+            writer.WriteNullValue();
+        }
+    }
+}
+
 /// <summary>
 /// Decides whether a tray click opens the workspace. The tray only reports clicks, so a double click is two clicks close together.
 /// A double click is consumed (a third click starts over), so triple-clicking does not open twice.

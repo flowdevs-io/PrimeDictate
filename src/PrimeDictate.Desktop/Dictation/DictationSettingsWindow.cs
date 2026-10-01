@@ -7,6 +7,7 @@ using Avalonia.Threading;
 using PrimeDictate.Core.Dictation;
 using PrimeDictate.Core.Providers;
 using PrimeDictate.Core.Settings;
+using PrimeDictate.Platforms.Audio;
 using PrimeDictate.Platforms.Dictation;
 using PrimeDictate.Platforms.Speech;
 using PrimeDictate.Platforms.Startup;
@@ -67,6 +68,12 @@ public sealed class DictationSettingsWindow : Window
     private readonly List<ShellRow> shellEditors = [];
     private DictationSettings working;
     private IReadOnlyList<AudioInputDevice> devices = [];
+    // The saved microphone when it is not in the list right now (unplugged), kept so Save does not turn it into "System default".
+    private string? missingMicId;
+    // Fields that are also changed outside this window (the overlay's pin, the stats window's typing speed): Save writes them
+    // only when the user changed them here, so it never reverts a change made while the window was open.
+    private bool loadedSticky;
+    private int loadedBaseline;
 
     private static readonly string[] TrayClickNames = ["Double-click the tray icon opens PrimeDictate", "Single click opens PrimeDictate", "Clicking the icon does nothing (use its menu)"];
     private static readonly TrayClickBehavior[] TrayClickValues = [TrayClickBehavior.DoubleClickOpensWorkspace, TrayClickBehavior.SingleClickOpensWorkspace, TrayClickBehavior.ClickDoesNothing];
@@ -94,7 +101,7 @@ public sealed class DictationSettingsWindow : Window
         panel.Children.Add(Heading("Dictation"));
         panel.Children.Add(Row("Model", this.modelBox));
         panel.Children.Add(new TextBlock { Text = "Download another model", FontWeight = Avalonia.Media.FontWeight.SemiBold });
-        panel.Children.Add(new ModelDownloadPanel(host, this.RefreshModels));
+        panel.Children.Add(new ModelDownloadPanel(host, id => this.RefreshModels(id)));
         panel.Children.Add(this.customModel);
         panel.Children.Add(this.modelError);
         panel.Children.Add(Row("Speech model device (applies after restart)", this.deviceBox));
@@ -374,10 +381,11 @@ public sealed class DictationSettingsWindow : Window
             : summary;
     }
 
-    private void RefreshModels()
+    /// <summary>Lists the installed models. A model that was just downloaded (<paramref name="select"/>) becomes the selected one, as in the WPF Settings window.</summary>
+    private void RefreshModels(string? select = null)
     {
         var models = this.host.InstalledModels();
-        var current = this.modelBox.SelectedIndex is >= 0 and var ci && ci < this.shownModels.Count ? this.shownModels[ci] : this.host.WantedModelId();
+        var current = select ?? (this.modelBox.SelectedIndex is >= 0 and var ci && ci < this.shownModels.Count ? this.shownModels[ci] : this.host.WantedModelId());
         this.shownModels = models.Select(m => m.ModelId).ToList();
         this.modelBox.ItemsSource = models.Select(m => m.DisplayName).ToList();
         this.modelBox.SelectedIndex = Math.Max(0, this.shownModels.IndexOf(current ?? string.Empty));
@@ -400,7 +408,21 @@ public sealed class DictationSettingsWindow : Window
             var names = new List<string> { "System default" };
             names.AddRange(this.devices.Select(d => d.Name));
             this.micBox.ItemsSource = names;
-            var index = this.devices.ToList().FindIndex(d => d.Id == this.working.SelectedInputDeviceId);
+            // The WPF app saved a Windows endpoint id; the list is by device name, so look the id up first.
+            var saved = this.working.SelectedInputDeviceId;
+            var wanted = saved is not null && OperatingSystem.IsWindows() && WindowsAudioEndpoints.IsEndpointId(saved)
+                ? WindowsAudioEndpoints.FriendlyName(saved) ?? saved
+                : saved;
+            var index = this.devices.ToList().FindIndex(d => d.Id == wanted);
+            this.missingMicId = null;
+            if (index < 0 && saved is not null)
+            {
+                this.missingMicId = saved;
+                names.Add($"{wanted} (not connected)");
+                this.micBox.ItemsSource = names;
+                index = this.devices.Count;
+            }
+
             this.micBox.SelectedIndex = index < 0 ? 0 : index + 1;
         }
 
@@ -417,7 +439,8 @@ public sealed class DictationSettingsWindow : Window
         this.autoUpdate.IsChecked = this.working.CheckForUpdatesAutomatically;
         this.trayClickBox.SelectedIndex = Math.Max(0, Array.IndexOf(TrayClickValues, this.working.TrayClickBehavior));
         this.themeBox.SelectedIndex = (int)this.working.Theme;
-        this.baseline.Value = DictationStatsStore.NormalizeBaselineWpm(this.working.BaselineTypingSpeedWpm);
+        this.loadedBaseline = DictationStatsStore.NormalizeBaselineWpm(this.working.BaselineTypingSpeedWpm);
+        this.baseline.Value = this.loadedBaseline;
         this.hideOverlayIdle.IsChecked = this.working.HideOverlayWhenIdle;
         this.sendEnter.IsChecked = this.working.SendEnterAfterCommit;
         this.returnToStart.IsChecked = this.working.ReturnToStartTargetOnCommit;
@@ -426,7 +449,8 @@ public sealed class DictationSettingsWindow : Window
         this.wakeEnabled.IsChecked = this.working.EnableWakeWord;
         this.wakePhrase.Text = this.working.WakeWordPhrase;
         this.overlayBox.SelectedIndex = (int)this.working.OverlayMode;
-        this.sticky.IsChecked = this.working.IsOverlaySticky;
+        this.loadedSticky = this.working.IsOverlaySticky;
+        this.sticky.IsChecked = this.loadedSticky;
         this.LoadTranscriptionFields();
         this.shellRows.Children.Clear();
         this.shellEditors.Clear();
@@ -452,7 +476,8 @@ public sealed class DictationSettingsWindow : Window
         }
     }
 
-    private void ApplyLaunchAtLogin()
+    /// <summary>Returns false (and shows the problem in the window) when the change failed; the caller then keeps the window open and does not save, as the WPF app did.</summary>
+    private bool ApplyLaunchAtLogin()
     {
         var wanted = this.launchAtLogin.IsChecked != true ? LoginScope.Off
             : this.launch.SupportsAllUsers && this.launchEveryone.IsChecked == true ? LoginScope.AllUsers
@@ -463,7 +488,11 @@ public sealed class DictationSettingsWindow : Window
             var actual = this.launch.Scope;
             this.launchAtLogin.IsChecked = actual != LoginScope.Off;
             this.launchEveryone.IsChecked = actual == LoginScope.AllUsers;
+            this.status.Text = $"Not saved: {problem}";
+            return false;
         }
+
+        return true;
     }
 
     private void Save()
@@ -493,6 +522,11 @@ public sealed class DictationSettingsWindow : Window
             return;
         }
 
+        if (!this.ApplyLaunchAtLogin())
+        {
+            return;
+        }
+
         var s = this.working;
         if (customModel is not null)
         {
@@ -514,7 +548,10 @@ public sealed class DictationSettingsWindow : Window
         this.commands.Apply(s, phrases);
         this.ollama.Apply(s);
         s.TranscriptReplacements = this.replacements.Build();
-        s.SelectedInputDeviceId = this.micBox.SelectedIndex is > 0 and var di && di - 1 < this.devices.Count ? this.devices[di - 1].Id : null;
+        // Null (the Windows default) only when the user picked "System default"; an unplugged saved microphone stays selected.
+        s.SelectedInputDeviceId = this.micBox.SelectedIndex is > 0 and var di
+            ? (di - 1 < this.devices.Count ? this.devices[di - 1].Id : this.missingMicId)
+            : (this.audio is null ? s.SelectedInputDeviceId : null);
         s.InputGainMultiplier = this.gain.Value;
         s.AutoCommitSilenceSeconds = (int)(this.silence.Value ?? 3);
         s.PlayAudioCues = this.audioCues.IsChecked == true;
@@ -525,7 +562,6 @@ public sealed class DictationSettingsWindow : Window
             s.WhisperNetDevice = device;
         }
 
-        this.ApplyLaunchAtLogin();
         s.SendEnterAfterCommit = this.sendEnter.IsChecked == true;
         s.ReturnToStartTargetOnCommit = this.returnToStart.IsChecked == true;
         s.ExclusiveMicAccessWhileDictating = this.exclusiveMic.IsChecked == true;
@@ -533,12 +569,20 @@ public sealed class DictationSettingsWindow : Window
         s.EnableWakeWord = this.wakeEnabled.IsChecked == true;
         s.WakeWordPhrase = WakePhrase.Normalize(this.wakePhrase.Text);
         s.OverlayMode = (OverlayStyle)Math.Max(0, this.overlayBox.SelectedIndex);
-        s.IsOverlaySticky = this.sticky.IsChecked == true;
+        if ((this.sticky.IsChecked == true) != this.loadedSticky)
+        {
+            s.IsOverlaySticky = this.sticky.IsChecked == true;
+        }
+
         s.HideOverlayWhenIdle = this.hideOverlayIdle.IsChecked == true;
         s.CheckForUpdatesAutomatically = this.autoUpdate.IsChecked == true;
         s.TrayClickBehavior = TrayClickValues[Math.Clamp(this.trayClickBox.SelectedIndex, 0, TrayClickValues.Length - 1)];
         s.Theme = (AppTheme)Math.Clamp(this.themeBox.SelectedIndex, 0, 2);
-        s.BaselineTypingSpeedWpm = DictationStatsStore.NormalizeBaselineWpm((int)Math.Round(this.baseline.Value ?? DictationStatsStore.DefaultBaselineWpm));
+        var baselineShown = DictationStatsStore.NormalizeBaselineWpm((int)Math.Round(this.baseline.Value ?? DictationStatsStore.DefaultBaselineWpm));
+        if (baselineShown != this.loadedBaseline)
+        {
+            s.BaselineTypingSpeedWpm = baselineShown;
+        }
         if (this.resetOverlayPosition)
         {
             s.OverlayAnchorX = null;

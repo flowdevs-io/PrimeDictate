@@ -297,6 +297,14 @@ public interface IWindowsStartupFolder
     bool InstallerShortcutDisabledForUser { get; }
 
     void SetInstallerShortcutEnabledForUser(bool enabled);
+
+    /// <summary>
+    /// Deletes the all-users <c>PrimeDictate.lnk</c> (needs administrator rights). Turning launch at login off for all users removes it, as the
+    /// WPF app did, so the MSI's shortcut does not keep starting the app for everyone.
+    /// </summary>
+    void DeleteInstallerShortcut()
+    {
+    }
 }
 
 internal sealed class RegistryStartupFolder : IWindowsStartupFolder
@@ -313,6 +321,18 @@ internal sealed class RegistryStartupFolder : IWindowsStartupFolder
         if (OperatingSystem.IsWindows())
         {
             File.Delete(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), ShortcutName));
+        }
+    }
+
+    public void DeleteInstallerShortcut()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonStartup), ShortcutName);
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
         }
     }
 

@@ -25,7 +25,7 @@ public sealed class DictationSettings
     /// <summary>Model id from the WPF catalog (for example "base.en"); read together with <see cref="TranscriptionBackend"/>.</summary>
     public string? SelectedModelId { get; set; }
 
-    [JsonConverter(typeof(JsonStringEnumConverter))]
+    [JsonConverter(typeof(LegacyBackendConverter))]
     public LegacyBackend TranscriptionBackend { get; set; } = LegacyBackend.Whisper;
 
     /// <summary>
@@ -62,7 +62,7 @@ public sealed class DictationSettings
     /// The WPF app's compute setting (<c>Cpu</c>, <c>Gpu</c> or <c>Npu</c>), read from its <c>settings.json</c>. Null when the file had none.
     /// Only used for Whisper.net, and only until <see cref="WhisperNetDevice"/> is chosen in this app.
     /// </summary>
-    [JsonConverter(typeof(JsonStringEnumConverter))]
+    [JsonConverter(typeof(LegacyComputeInterfaceConverter))]
     public LegacyComputeInterface? TranscriptionComputeInterface { get; set; }
 
     /// <summary>Where Whisper.net models run: <c>auto</c>, <c>cpu</c> or <c>gpu</c>. Null follows the WPF value, else Auto. Applies at the next start; PRIMEDICTATE_WHISPERNET_DEVICE overrides it.</summary>
@@ -83,7 +83,7 @@ public sealed class DictationSettings
     /// <summary>Typing speed used for the time-saved figure. Valid range 20 to 120.</summary>
     public int BaselineTypingSpeedWpm { get; set; } = DictationStatsStore.DefaultBaselineWpm;
 
-    [JsonConverter(typeof(JsonStringEnumConverter))]
+    [JsonConverter(typeof(OverlayStyleConverter))]
     public OverlayStyle OverlayMode { get; set; } = OverlayStyle.CompactMicrophone;
 
     public bool IsOverlaySticky { get; set; }
@@ -147,6 +147,7 @@ public sealed class DictationSettings
 
     public string OllamaModel { get; set; } = "gemma:2b";
 
+    [JsonConverter(typeof(OllamaModeConverter))]
     public OllamaMode OllamaMode { get; set; } = OllamaMode.Default;
 
     /// <summary>New: allow a non-loopback Ollama endpoint. Off by default so speech stays on this computer.</summary>
@@ -167,6 +168,9 @@ public sealed class DictationSettings
         ReturnToStartTarget = this.ReturnToStartTargetOnCommit,
         ExclusiveMicAccess = this.ExclusiveMicAccessWhileDictating,
         TypeWithoutFocusGuard = this.TypeWithoutFocusGuard,
+        // The WPF app forced English for Whisper (sherpa-onnx and Whisper.net); a multilingual model would otherwise guess the language
+        // from each short dictation. The transcription workspace keeps its own explicit language choice and does not use these options.
+        Language = "en",
         Replacements = this.TranscriptReplacements
             .Where(r => !string.IsNullOrWhiteSpace(r.Find))
             .Select(r => new ReplacementRule(r.Find, r.Replace))
@@ -284,13 +288,20 @@ public sealed class DictationSettingsStore(AppDataPaths paths)
                 if (settings is not null)
                 {
                     settings.FirstRunCompleted ??= true;
+                    if (imported && settings.EnableOllamaPostProcessing && DictationSettingsValidator.IsRemoteEndpoint(settings.OllamaEndpoint))
+                    {
+                        // The WPF app posted to any endpoint; this app asks first. Someone who set a remote one up there keeps it working.
+                        settings.OllamaAllowRemoteEndpoint = true;
+                    }
+
                     DictationSettingsValidator.Normalize(settings);
                     return new DictationSettingsLoad(settings, imported, null);
                 }
             }
             catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
             {
-                return new DictationSettingsLoad(new DictationSettings { FirstRunCompleted = true }, false, $"Could not read {file}: {ex.Message}. Using defaults; the file was left untouched.");
+                // An unreadable file must not look like a finished setup: first run shows again so the user can choose a model and shortcuts.
+                return new DictationSettingsLoad(new DictationSettings { FirstRunCompleted = false }, false, $"Could not read {file}: {ex.Message}. Using defaults; the file was left untouched.");
             }
         }
 

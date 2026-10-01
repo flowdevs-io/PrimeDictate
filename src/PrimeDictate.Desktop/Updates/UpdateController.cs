@@ -35,16 +35,19 @@ public sealed class UpdateController : IUpdateMenu, IDisposable
     private readonly LaunchAtLogin launch;
     private readonly Func<Task> exit;
     private readonly Func<bool> automaticChecksEnabled;
+    private readonly Func<bool> firstRunCompleted;
+    private readonly CancellationTokenSource stopping = new();
     private readonly Version current;
     private bool busy;
 
-    public UpdateController(Version current, string downloadDirectory, UpdateCheckState state, LaunchAtLogin launch, Func<Task> exit, Func<bool>? automaticChecksEnabled = null)
+    public UpdateController(Version current, string downloadDirectory, UpdateCheckState state, LaunchAtLogin launch, Func<Task> exit, Func<bool>? automaticChecksEnabled = null, Func<bool>? firstRunCompleted = null)
     {
         this.current = current;
         this.state = state;
         this.launch = launch;
         this.exit = exit;
         this.automaticChecksEnabled = automaticChecksEnabled ?? (() => true);
+        this.firstRunCompleted = firstRunCompleted ?? (() => true);
         this.service = new GitHubUpdateService(current, downloadDirectory, message => System.Diagnostics.Trace.TraceInformation(message));
     }
 
@@ -54,14 +57,33 @@ public sealed class UpdateController : IUpdateMenu, IDisposable
 
     public event Action? MenuChanged;
 
-    public void Dispose() => this.service.Dispose();
+    public void Dispose()
+    {
+        this.stopping.Cancel();
+        this.stopping.Dispose();
+        this.service.Dispose();
+    }
 
     /// <summary>
     /// Checks once after a short delay when the last check is over 24 hours old, unless the "check for updates automatically" setting is off
     /// (read again when the delay is over, so turning it off in Settings right after launch is honored). A failure is only traced.
+    /// As in the WPF app, nothing is checked during first-run setup: the check waits until setup is finished (then runs once, as the
+    /// WPF app did when setup saved).
     /// </summary>
     public async Task CheckOnLaunchAsync()
     {
+        try
+        {
+            while (!this.firstRunCompleted())
+            {
+                await Task.Delay(TimeSpan.FromSeconds(2), this.stopping.Token).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException)
+        {
+            return;
+        }
+
         if (!this.automaticChecksEnabled())
         {
             return;

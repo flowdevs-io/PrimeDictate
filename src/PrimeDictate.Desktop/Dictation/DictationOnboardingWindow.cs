@@ -23,6 +23,7 @@ public sealed class DictationOnboardingWindow : Window
     private readonly NumericUpDown silence = new() { Minimum = 0, Maximum = 30, Increment = 1, FormatString = "0", Width = 120 };
     private readonly CheckBox sendEnter = FormParts.Check("Send Enter after committing the transcript (coding mode)");
     private readonly CheckBox audioCues = FormParts.Check("Play start and stop tones");
+    private readonly CheckBox autoUpdate = FormParts.Check("Check GitHub Releases for software updates automatically");
     private readonly ModelDownloadPanel downloads;
     private readonly CustomModelPanel customModel;
     private readonly CommandsPanel commands;
@@ -47,13 +48,14 @@ public sealed class DictationOnboardingWindow : Window
         this.MaxHeight = 900;
         this.WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
-        this.downloads = new ModelDownloadPanel(host, this.Populate);
+        this.downloads = new ModelDownloadPanel(host, id => this.Populate(id));
         this.customModel = new CustomModelPanel(host.ModelsFolder);
         this.commands = new CommandsPanel(host, host.Settings, message => this.status.Text = message);
         this.modelBox.SelectionChanged += (_, _) => this.ShowSelectedModelPath();
         this.silence.Value = host.Settings.AutoCommitSilenceSeconds;
         this.sendEnter.IsChecked = host.Settings.SendEnterAfterCommit;
         this.audioCues.IsChecked = host.Settings.PlayAudioCues;
+        this.autoUpdate.IsChecked = host.Settings.CheckForUpdatesAutomatically;
         this.steps = [this.BuildWelcome(), this.BuildModel(), this.BuildCommands(openSettings)];
 
         this.back.Click += (_, _) => this.Go(this.step - 1);
@@ -111,6 +113,7 @@ public sealed class DictationOnboardingWindow : Window
             FormParts.Row("Commit after this many seconds of silence (0 = shortcut only)", this.silence),
             this.sendEnter,
             this.audioCues,
+            this.autoUpdate,
             FormParts.Note("Emergency stop shortcuts and stop phrases discard the active capture without typing text. Use silence auto-commit or the start / stop shortcut when you want to commit."),
             FormParts.Note("You can revisit any of these settings from the tray icon later.")
         }
@@ -193,7 +196,7 @@ public sealed class DictationOnboardingWindow : Window
                 // The WPF wizard started the first download as you moved on; do the same when nothing is installed yet.
                 if (this.host.InstalledModels().Count == 0)
                 {
-                    this.downloads.StartDownload(this.Populate);
+                    this.downloads.StartDownload(id => this.Populate(id));
                 }
 
                 break;
@@ -214,7 +217,7 @@ public sealed class DictationOnboardingWindow : Window
         }
     }
 
-    private void Populate()
+    private void Populate(string? select = null)
     {
         this.checks.Children.Clear();
         this.Add(this.host.UnavailableReason is null, "Microphone", this.host.UnavailableReason ?? "A capture device is available.");
@@ -230,7 +233,7 @@ public sealed class DictationOnboardingWindow : Window
         var keep = this.modelBox.SelectedIndex is >= 0 and var i && i < this.shown.Count ? this.shown[i] : null;
         this.shown = models.Select(m => m.ModelId).ToList();
         this.modelBox.ItemsSource = models.Select(m => m.DisplayName).ToList();
-        var wanted = keep ?? this.host.WantedModelId();
+        var wanted = select ?? keep ?? this.host.WantedModelId();
         this.modelBox.SelectedIndex = models.Count == 0 ? -1 : Math.Max(0, this.shown.IndexOf(wanted ?? string.Empty));
         this.modelBox.IsEnabled = models.Count > 0;
         this.ShowSelectedModelPath();
@@ -323,6 +326,7 @@ public sealed class DictationOnboardingWindow : Window
         settings.AutoCommitSilenceSeconds = (int)(this.silence.Value ?? 3);
         settings.SendEnterAfterCommit = this.sendEnter.IsChecked == true;
         settings.PlayAudioCues = this.audioCues.IsChecked == true;
+        settings.CheckForUpdatesAutomatically = this.autoUpdate.IsChecked != false;
         this.commands.Apply(settings, phrases);
         settings.FirstRunCompleted = true;
         this.host.ApplySettings(settings);

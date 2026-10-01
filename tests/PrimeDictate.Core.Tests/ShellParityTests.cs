@@ -425,6 +425,8 @@ public sealed class ShellParityTests : IDisposable
         public void DeleteLegacyUserShortcut() => this.LegacyUserShortcutExists = false;
 
         public void SetInstallerShortcutEnabledForUser(bool enabled) => this.InstallerShortcutDisabledForUser = !enabled;
+
+        public void DeleteInstallerShortcut() => this.InstallerShortcutExists = false;
     }
 
     private const string Exe = @"C:\Program Files\PrimeDictate\PrimeDictate.exe";
@@ -639,6 +641,38 @@ public sealed class ShellParityTests : IDisposable
         Assert.True(LaunchAtLoginCli.TryHandle(["--disable-launch-at-login"], rig.Login, true, out exit));
         Assert.Equal(0, exit);
         Assert.Empty(rig.Machine.Values);
+    }
+
+    [Fact]
+    public void Disabling_all_users_also_deletes_the_msi_startup_shortcut_as_the_wpf_app_did()
+    {
+        var rig = this.Rig(admin: true);
+        rig.Startup.InstallerShortcutExists = true;
+        Assert.Null(rig.Login.Apply(LoginScope.AllUsers));
+        Assert.True(LaunchAtLoginCli.TryHandle(["--disable-launch-at-login", "--scope=all-users"], rig.Login, true, out var exit));
+        Assert.Equal(0, exit);
+        Assert.Empty(rig.Machine.Values);
+        Assert.False(rig.Startup.InstallerShortcutExists);
+    }
+
+    [Fact]
+    public void Disabling_all_users_with_only_the_shortcut_present_asks_for_the_elevated_helper()
+    {
+        var rig = this.Rig(admin: false);
+        rig.Startup.InstallerShortcutExists = true;
+        Assert.True(LaunchAtLoginCli.TryHandle(["--disable-launch-at-login", "--all-users"], rig.Login, false, out var exit));
+        Assert.Equal(0, exit);
+        Assert.Equal([LoginScopeDecision.MachineOffArgument], rig.Elevated);
+    }
+
+    [Fact]
+    public void Turning_off_for_the_current_user_leaves_the_msi_shortcut_in_place()
+    {
+        var rig = this.Rig(admin: false);
+        rig.Startup.InstallerShortcutExists = true;
+        Assert.Null(rig.Login.Apply(LoginScope.Off));
+        Assert.True(rig.Startup.InstallerShortcutExists);
+        Assert.Empty(rig.Elevated);
     }
 
     [Fact]

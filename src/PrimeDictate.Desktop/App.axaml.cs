@@ -103,7 +103,8 @@ public sealed class App : Application
             new UpdateCheckState(Path.Combine(root, "update-check.json"), Path.Combine(root, "settings.json")),
             launch,
             () => this.ExitAsync(desktop, window, shell),
-            () => shell.Host.Settings.CheckForUpdatesAutomatically);
+            () => shell.Host.Settings.CheckForUpdatesAutomatically,
+            () => !shell.Host.IsFirstRun);
         shell.UpdateMenu = this.updates;
         _ = this.updates.CheckOnLaunchAsync();
     }

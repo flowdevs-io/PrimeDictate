@@ -93,7 +93,7 @@ public static class DictationHistoryFilter
         var sb = new StringBuilder();
         sb.AppendLine($"Timestamp (UTC): {e.TimestampUtc:O}");
         sb.AppendLine($"Thread: {e.SessionId}");
-        sb.AppendLine($"Delivery: {e.Status}");
+        sb.AppendLine($"Delivery: {DeliveryDisplay(e.Status)}");
         sb.AppendLine($"Target app: {(AppName(e).Length > 0 ? AppName(e) : "Unknown app")}");
         sb.AppendLine($"Target window: {(WindowTitle(e).Length > 0 ? WindowTitle(e) : "Unknown window")}");
         sb.AppendLine($"Audio seconds: {e.AudioSeconds:N1}");
@@ -108,16 +108,29 @@ public static class DictationHistoryFilter
             sb.AppendLine("Original Transcript:");
             sb.AppendLine(e.OriginalTranscript);
             sb.AppendLine();
-            sb.AppendLine("Rewrite System Prompt:");
+            sb.AppendLine("Ollama System Prompt:");
             sb.AppendLine(e.RewriteSystemPrompt);
             sb.AppendLine();
-            sb.AppendLine("Final Transcript:");
+            sb.AppendLine("Final Injected Transcript:");
         }
 
         sb.AppendLine();
         sb.AppendLine(e.Transcript);
         return sb.ToString();
     }
+
+    /// <summary>The delivery wording of the WPF history window (it never printed the enum name); the two statuses only this app has are worded the same way.</summary>
+    public static string DeliveryDisplay(DictationDeliveryStatus status) => status switch
+    {
+        DictationDeliveryStatus.Injected => "Typed into app",
+        DictationDeliveryStatus.SkippedFocusChanged => "Skipped — focus changed",
+        DictationDeliveryStatus.SkippedNoFocusGuard => "Skipped — no focus check",
+        DictationDeliveryStatus.FailedToInject => "Failed to type",
+        DictationDeliveryStatus.Discarded => "Discarded",
+        DictationDeliveryStatus.CommandExecuted => "Command ran",
+        DictationDeliveryStatus.CommandFailed => "Command failed",
+        _ => status.ToString()
+    };
 
     private static IEnumerable<HistoryTargetOption> Known(IEnumerable<string> values) =>
         values.Where(v => v.Length > 0)
