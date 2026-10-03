@@ -41,6 +41,27 @@ public interface ITextInjector
     void TypeText(string text);
 
     void SendEnter();
+
+    /// <summary>How long the target needs, after the last <see cref="TypeText"/>, before Enter is pressed (see <see cref="EnterTiming"/>).</summary>
+    TimeSpan EnterDelay => TimeSpan.Zero;
+}
+
+/// <summary>
+/// The pause between typed keystrokes and coding-mode Enter. The target takes the keys in after they were sent (a browser
+/// queues them for the page), and a chat box that gets Enter before it has caught up, or before its "can send" state has
+/// followed the text, keeps the text and does not send (reported in Edge with a few hundred characters typed). Text put
+/// straight into an edit control is there when the call returns and needs no pause.
+/// </summary>
+public static class EnterTiming
+{
+    public static readonly TimeSpan Base = TimeSpan.FromMilliseconds(120);
+
+    public static readonly TimeSpan PerCharacter = TimeSpan.FromMicroseconds(1_500);
+
+    public static readonly TimeSpan Max = TimeSpan.FromMilliseconds(1_500);
+
+    public static TimeSpan AfterKeystrokes(int characters) =>
+        characters <= 0 ? TimeSpan.Zero : TimeSpan.FromTicks(Math.Min(Max.Ticks, Base.Ticks + (PerCharacter.Ticks * characters)));
 }
 
 public enum DictationDeliveryStatus
@@ -116,6 +137,19 @@ public static class TranscriptDelivery
         if (!options.SendEnterAfterCommit)
         {
             return new DeliveryResult(DictationDeliveryStatus.Injected, false, null);
+        }
+
+        // Let the target take the text in, then check again that it is in front: Enter must not go to a window the user
+        // switched to while the text was typed or during the pause.
+        var delay = injector.EnterDelay;
+        if (delay > TimeSpan.Zero)
+        {
+            Thread.Sleep(delay);
+        }
+
+        if (target is not null && !target.IsStillForeground())
+        {
+            return new DeliveryResult(DictationDeliveryStatus.Injected, false, "Text typed, but Enter was not sent because another window came to the front.");
         }
 
         try

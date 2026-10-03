@@ -321,6 +321,22 @@ public sealed class DictationLoopTests
     }
 
     [Fact]
+    public async Task An_unexpected_error_opening_the_microphone_gives_the_microphone_back()
+    {
+        // A kept lease would leave the wake word paused and make every later dictation report the microphone busy.
+        var notices = new List<string>();
+        var coordinator = new MicrophoneCoordinator();
+        await using var controller = new DictationController(new ThrowingSource(), () => new FakeProvider("x"), new FakeGuard(), new FakeInjector(), coordinator);
+        controller.Notice += notices.Add;
+
+        await controller.ToggleAsync();
+
+        Assert.False(controller.IsRecording);
+        Assert.Null(coordinator.CurrentOwner);
+        Assert.Contains("could not be opened", Assert.Single(notices));
+    }
+
+    [Fact]
     public void Audio_cues_are_valid_wav_files_of_the_expected_length()
     {
         foreach (var cue in new[] { DictationAudioCue.Start, DictationAudioCue.Stop })
@@ -649,6 +665,16 @@ public sealed class DictationLoopTests
             this.Lease = new FakeLease { AccessMode = access == MicAccessMode.Exclusive ? this.GrantsExclusive : MicAccessMode.Shared };
             return ValueTask.FromResult<IAudioCaptureLease>(this.Lease);
         }
+    }
+
+    /// <summary>A driver failing with something other than <see cref="AudioSourceException"/>.</summary>
+    private sealed class ThrowingSource : IAudioSource
+    {
+        public ValueTask<IReadOnlyList<AudioInputDevice>> ListDevicesAsync(CancellationToken cancellationToken) =>
+            ValueTask.FromResult<IReadOnlyList<AudioInputDevice>>([]);
+
+        public ValueTask<IAudioCaptureLease> OpenAsync(string? deviceId, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("driver hiccup");
     }
 
     private sealed class FakeLease : IAudioCaptureLease

@@ -191,15 +191,26 @@ public sealed class DictationController : IAsyncDisposable
                 CancellationToken.None).ConfigureAwait(false);
             Diagnostics.AppLog.Event("dictation", $"Microphone opened ({capture.AccessMode.ToString().ToLowerInvariant()} access{(opts.ExclusiveMicAccess && capture.AccessMode == MicAccessMode.Shared ? ", exclusive was requested" : string.Empty)}).");
         }
-        catch (Exception ex) when (ex is MicrophoneBusyException or AudioSourceException)
+        catch (Exception ex)
         {
+            // Whatever failed, give the microphone back: a lease kept here would leave the wake word paused and every
+            // later dictation "busy" until restart.
             if (micLease is not null)
             {
                 await micLease.DisposeAsync().ConfigureAwait(false);
             }
 
-            Diagnostics.AppLog.Event("dictation", $"Dictation did not start: {ex.Message}", Diagnostics.ActivityLevel.Error);
-            this.Notice?.Invoke(ex.Message);
+            if (ex is MicrophoneBusyException or AudioSourceException)
+            {
+                Diagnostics.AppLog.Event("dictation", $"Dictation did not start: {ex.Message}", Diagnostics.ActivityLevel.Error);
+                this.Notice?.Invoke(ex.Message);
+            }
+            else
+            {
+                Diagnostics.AppLog.Fault("dictation", ex);
+                this.Notice?.Invoke($"The microphone could not be opened: {ex.Message}");
+            }
+
             return;
         }
 

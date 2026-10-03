@@ -12,8 +12,12 @@ public sealed class SharpHookTextInjector : ITextInjector
 {
     private readonly EventSimulator simulator = new();
 
+    /// <summary>Set by <see cref="TypeText"/>: none after an edit-control insertion, else <see cref="EnterTiming.AfterKeystrokes"/>.</summary>
+    public TimeSpan EnterDelay { get; private set; }
+
     public void TypeText(string text)
     {
+        this.EnterDelay = TimeSpan.Zero;
         var target = text.Trim();
         if (target.Length == 0)
         {
@@ -24,6 +28,7 @@ public sealed class SharpHookTextInjector : ITextInjector
         {
             var route = WindowsSendInput.SendText(target);
             PrimeDictate.Core.Diagnostics.AppLog.Event("dictation", route);
+            this.EnterDelay = route == WindowsTextEntry.FocusedControlRoute ? TimeSpan.Zero : EnterTiming.AfterKeystrokes(target.Length);
             return;
         }
 
@@ -32,10 +37,19 @@ public sealed class SharpHookTextInjector : ITextInjector
         {
             throw new InvalidOperationException($"Text injection failed with status {result}.");
         }
+
+        this.EnterDelay = EnterTiming.AfterKeystrokes(target.Length);
     }
 
     public void SendEnter()
     {
+        if (OperatingSystem.IsWindows())
+        {
+            WindowsSendInput.SendEnter();
+            PrimeDictate.Core.Diagnostics.AppLog.Event("dictation", $"Enter sent {this.EnterDelay.TotalMilliseconds:0} ms after the text.");
+            return;
+        }
+
         var result = this.simulator.SimulateKeyStroke([KeyCode.VcEnter]);
         if (result != UioHookResult.Success)
         {

@@ -109,6 +109,45 @@ public sealed class TextDeliveryParityTests
     }
 
     [Fact]
+    public void Enter_waits_for_the_target_to_take_the_text_in_then_is_sent()
+    {
+        var injector = new Injector { EnterDelay = TimeSpan.FromMilliseconds(80) };
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        var r = TranscriptDelivery.Deliver("send it", new Target { Foreground = true }, new Guard(), injector, new DictationOptions { SendEnterAfterCommit = true });
+
+        Assert.True(stopwatch.Elapsed >= TimeSpan.FromMilliseconds(70));
+        Assert.Equal(DictationDeliveryStatus.Injected, r.Status);
+        Assert.True(r.EnterSent);
+        Assert.Equal(1, injector.Enters);
+    }
+
+    [Fact]
+    public void Enter_is_not_sent_when_another_window_came_to_the_front_after_typing()
+    {
+        // In front for the check before typing, then the user switched windows.
+        var target = new Target { Foreground = true, ForegroundChecksBeforeSwitch = 1 };
+        var injector = new Injector { EnterDelay = TimeSpan.FromMilliseconds(10) };
+
+        var r = TranscriptDelivery.Deliver("send it", target, new Guard(), injector, new DictationOptions { SendEnterAfterCommit = true });
+
+        Assert.Equal(DictationDeliveryStatus.Injected, r.Status);
+        Assert.False(r.EnterSent);
+        Assert.Contains("Enter was not sent", r.Error);
+        Assert.Equal(["send it"], injector.Typed);
+        Assert.Equal(0, injector.Enters);
+    }
+
+    [Fact]
+    public void Enter_delay_grows_with_the_typed_text_and_is_capped()
+    {
+        Assert.Equal(TimeSpan.Zero, EnterTiming.AfterKeystrokes(0));
+        Assert.Equal(TimeSpan.FromMilliseconds(270), EnterTiming.AfterKeystrokes(100));
+        Assert.True(EnterTiming.AfterKeystrokes(555) > EnterTiming.AfterKeystrokes(100));
+        Assert.Equal(EnterTiming.Max, EnterTiming.AfterKeystrokes(100_000));
+    }
+
+    [Fact]
     public void Windows_entry_prefers_the_focused_control_and_does_not_type_keys()
     {
         var keys = new List<string>();
@@ -142,7 +181,12 @@ public sealed class TextDeliveryParityTests
 
     private sealed class Target : IForegroundTarget
     {
-        public bool Foreground { get; init; } = true;
+        private int foregroundChecks;
+
+        public bool Foreground { get; set; } = true;
+
+        /// <summary>When set, another window comes to the front after this many foreground checks.</summary>
+        public int? ForegroundChecksBeforeSwitch { get; init; }
 
         public bool CanRestore { get; init; }
 
@@ -160,11 +204,25 @@ public sealed class TextDeliveryParityTests
 
         public string? WindowTitle => "notes.txt";
 
-        public bool IsStillForeground() => this.Foreground;
+        public bool IsStillForeground()
+        {
+            if (this.ForegroundChecksBeforeSwitch is { } checks && ++this.foregroundChecks > checks)
+            {
+                this.Foreground = false;
+            }
+
+            return this.Foreground;
+        }
 
         public bool TryRestore()
         {
             this.RestoreCalls++;
+            if (this.CanRestore)
+            {
+                // A restored window is the one in front, as WindowsForegroundGuard checks before reporting success.
+                this.Foreground = true;
+            }
+
             return this.CanRestore;
         }
 
@@ -196,6 +254,8 @@ public sealed class TextDeliveryParityTests
         public int Enters { get; private set; }
 
         public bool Fail { get; init; }
+
+        public TimeSpan EnterDelay { get; init; }
 
         public void TypeText(string text)
         {
