@@ -85,6 +85,9 @@ internal static class Win32
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     internal static extern short VkKeyScanEx(char character, IntPtr keyboardLayout);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    internal static extern uint MapVirtualKey(uint code, uint mapType);
+
     [DllImport("user32.dll")]
     internal static extern IntPtr GetKeyboardLayout(uint threadId);
 

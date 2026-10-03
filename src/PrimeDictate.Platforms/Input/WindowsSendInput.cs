@@ -22,6 +22,7 @@ internal static class WindowsSendInput
     private const int ShiftMod = 1;
     private const int CtrlMod = 2;
     private const int AltMod = 4;
+    private const uint MapVkToScanCode = 0;
     private const int MaxBatch = 128;
     private static readonly TimeSpan ModifierReleaseWait = TimeSpan.FromMilliseconds(750);
 
@@ -52,6 +53,17 @@ internal static class WindowsSendInput
         }
 
         Send(batch);
+    }
+
+    /// <summary>
+    /// Coding-mode Enter as the Enter key itself sends it: virtual key and scan code (pages that read
+    /// <c>KeyboardEvent.code</c> see "Enter"), and only once the hotkey modifiers are up, so it is not Ctrl+Enter or Shift+Enter.
+    /// </summary>
+    public static void SendEnter()
+    {
+        WaitForModifiersReleased();
+        var scan = (ushort)Win32.MapVirtualKey(VkReturn, MapVkToScanCode);
+        Send([Key(VkReturn, false, scan), Key(VkReturn, true, scan)]);
     }
 
     private static void AddCharacter(List<Win32.Input> inputs, char c, IntPtr layout)
@@ -126,10 +138,10 @@ internal static class WindowsSendInput
         Union = new Win32.InputUnion { Keyboard = new Win32.KeyboardInput { Scan = c, Flags = KeyUnicode | (up ? KeyUp : 0) } }
     };
 
-    private static Win32.Input Key(ushort vk, bool up) => new()
+    private static Win32.Input Key(ushort vk, bool up, ushort scan = 0) => new()
     {
         Type = InputKeyboard,
-        Union = new Win32.InputUnion { Keyboard = new Win32.KeyboardInput { VirtualKey = vk, Flags = up ? KeyUp : 0 } }
+        Union = new Win32.InputUnion { Keyboard = new Win32.KeyboardInput { VirtualKey = vk, Scan = scan, Flags = up ? KeyUp : 0 } }
     };
 
     private static void WaitForModifiersReleased()

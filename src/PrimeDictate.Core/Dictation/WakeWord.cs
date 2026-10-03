@@ -77,8 +77,19 @@ public static class WakePhrase
 /// Registers as a <see cref="IMicrophoneConsumer"/> so a transcription session or a dictation takes the microphone
 /// and this resumes afterwards.
 /// </summary>
+/// <remarks>
+/// The listener keeps one microphone stream open for hours, so it watches that stream. A microphone that is recording
+/// delivers audio every few milliseconds, silence included, but a stream can stop without any error (a wireless headset
+/// that powers off, a driver reset). Without audio for <see cref="DefaultStallTimeout"/>, or when the stream ends, the
+/// microphone is reopened; before this the listener kept checking its last two seconds and never heard the phrase again
+/// until a dictation reopened the microphone.
+/// </remarks>
 public sealed class WakeWordListener : IMicrophoneConsumer, IAsyncDisposable
 {
+    /// <summary>No audio at all for this long means the stream died, not that the room is quiet.</summary>
+    public static readonly TimeSpan DefaultStallTimeout = TimeSpan.FromSeconds(5);
+
+    private static readonly TimeSpan MaxStallTimeout = TimeSpan.FromMinutes(1);
     private static readonly TimeSpan RollingBuffer = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan SlideInterval = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(300);
@@ -89,6 +100,8 @@ public sealed class WakeWordListener : IMicrophoneConsumer, IAsyncDisposable
 
     private readonly IAudioSource audioSource;
     private readonly Func<ReadOnlyMemory<float>, CancellationToken, ValueTask<string>> transcribe;
+    private readonly TimeSpan stallTimeout;
+    private readonly TimeSpan retryAfterFailure;
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly object sync = new();
     private bool enabled;
@@ -98,10 +111,24 @@ public sealed class WakeWordListener : IMicrophoneConsumer, IAsyncDisposable
     private double gain = 1.0;
     private Running? running;
 
-    public WakeWordListener(IAudioSource audioSource, Func<ReadOnlyMemory<float>, CancellationToken, ValueTask<string>> transcribe)
+    /// <summary>Reopenings in a row that brought no lasting audio; each one doubles the wait before the next.</summary>
+    private int stalls;
+
+    private int openFailureReported;
+    private int retryPending;
+
+    /// <param name="stallTimeout">No audio for this long reopens the microphone (<see cref="DefaultStallTimeout"/>).</param>
+    /// <param name="retryAfterFailure">When the microphone would not open at all, how long until the next try (30 s).</param>
+    public WakeWordListener(
+        IAudioSource audioSource,
+        Func<ReadOnlyMemory<float>, CancellationToken, ValueTask<string>> transcribe,
+        TimeSpan? stallTimeout = null,
+        TimeSpan? retryAfterFailure = null)
     {
         this.audioSource = audioSource;
         this.transcribe = transcribe;
+        this.stallTimeout = stallTimeout ?? DefaultStallTimeout;
+        this.retryAfterFailure = retryAfterFailure ?? TimeSpan.FromSeconds(30);
     }
 
     public string Name => "Wake word listening";
@@ -279,13 +306,21 @@ public sealed class WakeWordListener : IMicrophoneConsumer, IAsyncDisposable
             {
                 lease = await this.audioSource.OpenAsync(device, CancellationToken.None).ConfigureAwait(false);
             }
-            catch (AudioSourceException ex)
+            catch (Exception ex)
             {
+                // AudioSourceException is the usual failure, but a driver can throw others; any of them escaping would
+                // leave the listener off with nothing saying so (and break the resume after a dictation).
                 if (attempt >= OpenRetryDelays.Length)
                 {
-                    Diagnostics.AppLog.Error("wake-word", $"Stopped listening: the microphone did not open after {attempt + 1} tries: {ex.Message}");
+                    // Said once, not again on each later retry while the microphone stays unavailable.
+                    if (Interlocked.Exchange(ref this.openFailureReported, 1) == 0)
+                    {
+                        Diagnostics.AppLog.Error("wake-word", $"Stopped listening: the microphone did not open after {attempt + 1} tries: {ex.Message}");
+                        this.Notice?.Invoke($"Wake word listening could not open the microphone: {ex.Message}");
+                    }
+
                     this.SetFailed(true);
-                    this.Notice?.Invoke($"Wake word listening could not open the microphone: {ex.Message}");
+                    this.RetryLater();
                     return;
                 }
 
@@ -295,6 +330,11 @@ public sealed class WakeWordListener : IMicrophoneConsumer, IAsyncDisposable
         }
 
         this.SetFailed(false);
+        if (Interlocked.Exchange(ref this.openFailureReported, 0) == 1)
+        {
+            Diagnostics.AppLog.Event("wake-word", "The microphone opened again; listening for the wake phrase.");
+        }
+
         var run = new Running(lease);
         run.Loop = Task.Run(() => this.ListenAsync(run));
         lock (this.sync)
@@ -359,20 +399,31 @@ public sealed class WakeWordListener : IMicrophoneConsumer, IAsyncDisposable
                         {
                             buffer.RemoveRange(0, buffer.Count - maxSamples);
                         }
+
+                        run.Heard(samples.Length);
                     }
                 }
             }
             catch (Exception ex) when (ex is OperationCanceledException or AudioSourceException or ObjectDisposedException)
             {
+                // The stream is over. Unless this run is being stopped, the loop below notices and reopens the microphone.
             }
         });
 
         var nextSlide = DateTime.MinValue;
+        var transcribedAt = -1L;
         try
         {
             while (!token.IsCancellationRequested)
             {
                 await Task.Delay(PollInterval, token).ConfigureAwait(false);
+                if (this.StreamProblem(run, reader) is { } problem)
+                {
+                    // Off this loop: reopening stops this run and waits for the loop to finish.
+                    _ = Task.Run(() => this.ReopenAsync(run, problem));
+                    return;
+                }
+
                 var now = DateTime.UtcNow;
                 if (now < nextSlide)
                 {
@@ -380,15 +431,22 @@ public sealed class WakeWordListener : IMicrophoneConsumer, IAsyncDisposable
                 }
 
                 float[] snapshot;
+                long heard;
                 lock (bufferLock)
                 {
                     snapshot = [.. buffer];
+                    heard = run.Samples;
                 }
 
-                if (snapshot.Length < MinAudioForAttempt.TotalSeconds * SampleRate || !SpeechActivityTracker.ContainsLikelySpeech(snapshot))
+                // Only new audio is worth a look: the window repeats only when nothing arrived since the last attempt.
+                if (heard == transcribedAt ||
+                    snapshot.Length < MinAudioForAttempt.TotalSeconds * SampleRate ||
+                    !SpeechActivityTracker.ContainsLikelySpeech(snapshot))
                 {
                     continue;
                 }
+
+                transcribedAt = heard;
 
                 // Advance from the attempt start so recognition latency does not shrink the overlap between windows.
                 nextSlide = now + SlideInterval;
@@ -422,6 +480,8 @@ public sealed class WakeWordListener : IMicrophoneConsumer, IAsyncDisposable
 
                 if (WakePhrase.Matches(transcript, current))
                 {
+                    Diagnostics.AppLog.Event("wake-word", "Wake phrase heard; starting dictation.");
+
                     // Release the microphone before dictation opens it, then hand off without blocking this loop.
                     _ = Task.Run(async () =>
                     {
@@ -441,12 +501,126 @@ public sealed class WakeWordListener : IMicrophoneConsumer, IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// How long without audio counts as a dead stream: <paramref name="first"/>, doubled for each reopening in a row that
+    /// brought no lasting audio (a headset left switched off), up to a minute.
+    /// </summary>
+    internal static TimeSpan StallTimeoutAfter(int stalls, TimeSpan first)
+    {
+        var cap = first > MaxStallTimeout ? first : MaxStallTimeout;
+        var limit = first;
+        for (var i = 0; i < stalls && limit < cap; i++)
+        {
+            limit *= 2;
+        }
+
+        return limit < cap ? limit : cap;
+    }
+
+    /// <summary>Why the run's stream looks dead, or null while audio arrives. Also notices when a reopened stream is healthy again.</summary>
+    private string? StreamProblem(Running run, Task reader)
+    {
+        var stallsNow = Volatile.Read(ref this.stalls);
+        var quiet = run.SinceLastAudio;
+        var limit = StallTimeoutAfter(stallsNow, this.stallTimeout);
+
+        // An ended stream is reopened at once the first time; a device whose stream keeps ending waits like a silent one.
+        if (reader.IsCompleted && (stallsNow == 0 || quiet >= limit))
+        {
+            return "the microphone stream ended";
+        }
+
+        if (quiet >= limit)
+        {
+            return $"no audio from the microphone for {quiet.TotalSeconds:0} s";
+        }
+
+        if (stallsNow > 0 && run.Samples >= this.stallTimeout.TotalSeconds * SampleRate && Interlocked.Exchange(ref this.stalls, 0) > 0)
+        {
+            Diagnostics.AppLog.Event("wake-word", "Microphone audio is arriving again; listening for the wake phrase.");
+        }
+
+        return null;
+    }
+
+    /// <summary>Reopens the microphone for a run whose stream died, unless that run was stopped or replaced meanwhile.</summary>
+    private async Task ReopenAsync(Running dead, string problem)
+    {
+        await this.gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            lock (this.sync)
+            {
+                if (!ReferenceEquals(this.running, dead))
+                {
+                    return;
+                }
+            }
+
+            // Said once per outage, not on every retry while a headset stays off.
+            if (Interlocked.Increment(ref this.stalls) == 1)
+            {
+                Diagnostics.AppLog.Event("wake-word", $"Reopening the microphone: {problem}.", Diagnostics.ActivityLevel.Warning);
+            }
+
+            await this.StopLockedAsync().ConfigureAwait(false);
+            await this.StartLockedAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Closing the dead stream threw. The listener is stopped by now, so say so instead of looking alive, and try later.
+            Diagnostics.AppLog.Fault("wake-word", ex);
+            this.SetFailed(true);
+            this.Notice?.Invoke($"Wake word listening stopped: {ex.Message}");
+            this.RetryLater();
+        }
+        finally
+        {
+            this.gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// After the microphone would not open (or the dead stream would not close): try again later, so a microphone that comes
+    /// back brings the wake word back without a dictation or a Settings change. One retry is pending at a time; starting
+    /// does nothing while the wake word is off, suspended or already running.
+    /// </summary>
+    private void RetryLater()
+    {
+        if (Interlocked.Exchange(ref this.retryPending, 1) == 1)
+        {
+            return;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(this.retryAfterFailure).ConfigureAwait(false);
+            Volatile.Write(ref this.retryPending, 0);
+            await this.EnsureRunningAsync().ConfigureAwait(false);
+        });
+    }
+
     private sealed class Running(IAudioCaptureLease lease)
     {
+        private long lastAudio = Environment.TickCount64;
+        private long samples;
+
         public IAudioCaptureLease Lease { get; } = lease;
 
         public CancellationTokenSource Cts { get; } = new();
 
         public Task Loop { get; set; } = Task.CompletedTask;
+
+        /// <summary>16 kHz samples received since this run opened the microphone.</summary>
+        public long Samples => Interlocked.Read(ref this.samples);
+
+        /// <summary>Time since audio last arrived, or since the microphone opened when none has yet.</summary>
+        public TimeSpan SinceLastAudio => TimeSpan.FromMilliseconds(Environment.TickCount64 - Interlocked.Read(ref this.lastAudio));
+
+        public void Heard(int count)
+        {
+            Interlocked.Add(ref this.samples, count);
+            Interlocked.Exchange(ref this.lastAudio, Environment.TickCount64);
+        }
     }
 }

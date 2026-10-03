@@ -42,7 +42,8 @@ This file orients coding agents and future maintainers. It is not an end-user ma
 - **Hotkey handler**: The hook runs on SharpHook's thread; work is offloaded with `Task.Run` and `await` the dictation path carefully to avoid re-entrancy issues. `DictationController` uses a `SemaphoreSlim` for toggle mutual exclusion.
 - **Text injection**: **Do not** reintroduce "set clipboard + simulate paste + immediately restore old clipboard" without solving async paste delivery (delay, flush, or full clipboard snapshot/restore). The vetted baseline is final-only target `SimulateTextEntry` (see product README for rationale).
 - **Editor stability**: Live updates belong in the overlay, not in the target editor. Do not reintroduce live backspace/re-type correction into the focused app without a robust target/caret/completion strategy.
-- **Coding mode Enter**: The optional Enter key is sent only after final text injection succeeds and the foreground-window guard passes.
+- **Coding mode Enter**: The optional Enter key is sent only after final text injection succeeds and the foreground-window guard passes. After typed keystrokes it waits `EnterTiming.AfterKeystrokes` (a browser chat box takes the keys in after they are sent and ignores an Enter that arrives first), then checks the guard again; on Windows it is the Enter key's virtual key and scan code through `SendInput`.
+- **Wake word listener**: It holds the microphone for hours, and a stream can stop delivering audio without an error (a wireless headset powering off). With no audio for 5 s, or when the stream ends, it reopens the microphone, waiting longer each time while the device stays silent. Keep that watchdog when changing capture.
 - **Model path**: Keep model-folder validation and download layout in the model catalog classes; do not scatter model filename assumptions through UI or engine code.
 
 ## Dependencies (NuGet)

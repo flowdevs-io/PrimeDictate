@@ -90,7 +90,7 @@ See how FlowDevs builds practical automation systems at [FlowDevs](https://flowd
 - **History and recovery**: Every committed transcript is saved locally with metadata and delivery status.
 - **Impact stats**: Tracks local productivity metrics, milestones, average speaking pace in WPM, and recent usage history.
 - **Model picker and downloads**: First-run setup and Settings can download supported models or browse to existing local folders.
-- **Optional coding mode**: Sends Enter after a successful final injection.
+- **Optional coding mode**: Sends Enter after a successful final injection, once the target has caught up with the typed text and is still the window in front.
 - **Launch at login**: Installers enable launch at login by default; MSI and winget installs can opt out.
 - **Built-in updater**: Checks GitHub Releases, downloads the matching MSI, verifies checksums, and hands off to Windows Installer.
 - **Local rewrite modes**: Optional Ollama integration can post-process dictated text with context-aware prompt modes.

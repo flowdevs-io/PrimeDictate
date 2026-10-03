@@ -59,6 +59,12 @@ public sealed class WindowsTextDeliveryRealRunTests
             _ = WaitFor(() => GetText(edit) == KeysSentence ? "ok" : null, TimeSpan.FromSeconds(5));
             Assert.Equal(KeysSentence, GetText(edit));
 
+            // 3b. Coding-mode Enter through the same SendInput path: a line break follows the text, nothing else.
+            WindowsSendInput.SendEnter();
+            _ = WaitFor(() => TextLength(edit) > KeysSentence.Length ? "ok" : null, TimeSpan.FromSeconds(5));
+            Assert.True(TextLength(edit) > KeysSentence.Length);
+            Assert.Equal(KeysSentence, GetText(edit).TrimEnd('\n'));
+
             // 4. The full injector: must pick the focused-control route for an edit control.
             SetText(edit, string.Empty);
             EnsureForeground(window);
@@ -173,6 +179,9 @@ public sealed class WindowsTextDeliveryRealRunTests
         _ = SendMessage(edit, 0x000D, new IntPtr(buffer.Capacity), buffer); // WM_GETTEXT
         return buffer.ToString().Replace("\r", string.Empty);
     }
+
+    /// <summary>Length with line breaks as the control stores them (a bare CR counts).</summary>
+    private static int TextLength(IntPtr edit) => (int)SendMessage(edit, 0x000E, IntPtr.Zero, IntPtr.Zero); // WM_GETTEXTLENGTH
 
     private static void SetText(IntPtr edit, string text) => SendMessage(edit, 0x000C, IntPtr.Zero, text); // WM_SETTEXT
 

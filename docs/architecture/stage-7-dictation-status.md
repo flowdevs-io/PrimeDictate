@@ -43,7 +43,7 @@ Branch `claude/dictation-parity-4k0tl9`, following `stage-7-parity-plan.md`. "Ra
 
 ## Rules kept from AGENTS.md
 
-Final-only typing, no clipboard, no live retyping into the target, Enter only after a guarded successful commit, hook thread only raises an event and work is offloaded, one gate serializes toggle/commit/discard.
+Final-only typing, no clipboard, no live retyping into the target, Enter only after a guarded successful commit (and, after typed keystrokes, a short pause and a second guard check), hook thread only raises an event and work is offloaded, one gate serializes toggle/commit/discard.
 
 ## Platform behavior
 
@@ -55,6 +55,16 @@ Final-only typing, no clipboard, no live retyping into the target, Enter only af
     wake listener opened the default microphone 3 s after launch.
   - `app.log` also records why dictation did not start, why a transcript was not typed, when the wake word stops
     listening, and hook failures. Never recognized text.
+  - 6.1.0 follow-up (2026-10-02, Justin's PC): after hours of idle listening the wake word stopped hearing the phrase,
+    and worked again after a hotkey dictation (which closes and reopens the microphone). The Arctis endpoint never
+    changed state in the Windows audio log, and nothing in the capture path reports a stream that stops delivering audio
+    (the miniaudio lease neither ends nor throws), so a dead stream leaves the listener checking a frozen two-second
+    buffer. It now reopens the microphone after 5 s without audio or when the stream ends (`WakeWordListener`, logged as
+    "Reopening the microphone"), and never transcribes the same audio twice. The cause on his PC is inferred, not caught
+    in the act: that build had no wake logging.
+  - Same day: coding-mode Enter was recorded as sent but did not send in Edge chat pages (a few hundred characters
+    typed). Enter now follows typed keystrokes after `EnterTiming.AfterKeystrokes` (120 ms plus 1.5 ms per character, at
+    most 1.5 s), re-checks the foreground window, and is sent as the Enter key's virtual key and scan code.
 - **macOS, Linux**: no foreground check exists yet, so dictation does **not** type unless the user turns on "Type even when the app cannot check which window is in front". This follows the parity plan. macOS also needs Accessibility permission for hotkeys; Wayland has no global hotkeys and the app says so.
 - Closing the main window hides it to the tray on Windows and macOS; on Linux it quits (no guaranteed tray host).
 
