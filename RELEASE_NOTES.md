@@ -1,3 +1,12 @@
+# PrimeDictate 6.1.1
+
+## Fixes
+
+- Wake word: after hours of listening it could stop hearing the wake phrase until the next hotkey dictation. This happened when the microphone stopped sending audio without reporting an error, for example a wireless headset powering off. It now notices within 5 seconds and reopens the microphone. If the microphone will not open, it tries again every 30 seconds instead of staying off, and says so once.
+- Wake word: while nothing new is heard it no longer runs the speech model on the same audio again, which saves CPU.
+- Coding mode: after a long dictation, Enter could arrive before a browser chat box (in Edge, for example) had taken in the text, so the text was typed but not sent. Enter now waits a moment that grows with the length of the text, at most 1.5 seconds. It is sent only if the same window is still in front, and is sent as the real Enter key.
+- An unexpected microphone error when dictation starts no longer leaves the microphone reserved. Before, that could pause the wake word and make every later dictation say the microphone was busy.
+
 # PrimeDictate 6.1.0
 
 ## Highlights
