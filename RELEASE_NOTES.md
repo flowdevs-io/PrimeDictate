@@ -1,3 +1,17 @@
+# PrimeDictate 6.1.2
+
+## Fixes
+
+- Meetings: if you opened another session during a recording and came back to it, Stop did not make the transcript, and the meeting stayed empty. Stop now always finishes the recording, whichever session is on screen.
+- Meetings: when the transcript after Stop was canceled, or the app closed while making it (to install an update, for example), it was never tried again. It now runs again the next time PrimeDictate starts.
+- A rerun that is canceled or fails no longer takes the transcript off the screen.
+- While a meeting is being transcribed after Stop, the status line keeps saying so instead of showing "Completed".
+
+## Improvements
+
+- Rerun now works on recordings, not only imported files, however the session ended. A meeting keeps You and the other people apart, and labels speakers when the Nemotron diarizer is installed. A meeting left empty by the problems above can still get its transcript this way.
+- A session with no text now offers "Transcribe with this model" and says why it is empty, and its badge reads "Recorded only" instead of "Whisper on none". When a transcript could not be made, the status line gives the reason.
+
 # PrimeDictate 6.1.1
 
 ## Fixes
