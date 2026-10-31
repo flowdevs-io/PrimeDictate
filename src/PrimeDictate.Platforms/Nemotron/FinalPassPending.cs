@@ -2,8 +2,8 @@ namespace PrimeDictate.Platforms.Nemotron;
 
 /// <summary>
 /// A marker file in a session's media folder meaning "this meeting still needs its after-Stop pass". It is written when a two-pass
-/// recording starts and removed when the pass ends, however it ends (done, failed, canceled, or skipped with a note). If the app
-/// exits before the pass ran, the marker survives and the next launch finishes the transcript.
+/// recording starts and removed when the pass has had its turn (done, failed, or skipped with a note). If the pass is canceled, or
+/// the app exits before or during it, the marker survives and the next launch finishes the transcript.
 /// </summary>
 public static class FinalPassPending
 {

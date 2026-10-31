@@ -31,6 +31,8 @@ Meeting v1 passes when every item passes. Any failure becomes a bug with the ses
 15. **Long silence.** Mute both sides for 2 minutes, then speak on each side: both are transcribed within 5 s and no wedge or restart notice is left unexplained (upstream NeMo-Speech.cpp issue 48). PASS/FAIL
 16. **CUDA fallback.** Once on purpose, launch the app with the CUDA `bin\x64` folder removed from `PATH` and `CUDA_PATH` unset (or with `PRIMEDICTATE_NEMO_DEVICE=cuda:0` and no cuda folder): the app shows a visible message, falls back to CPU, still transcribes, and the badge says CPU. Nothing fails silently. PASS/FAIL
 17. **Stop and delete.** Stop while a remote person is speaking keeps everything spoken so far; deleting a finished session works and does not crash. PASS/FAIL
+18. **Browse while recording.** During a record-only meeting, open an older session and come back, then press Stop: the status says the recording is being transcribed, and the transcript appears. PASS/FAIL
+19. **Recover a recording.** Cancel the pass after Stop on a record-only meeting: the next launch finishes it. On a meeting with no transcript, "Transcribe with this model" makes one with You and the other people apart. PASS/FAIL
 
 ## Result
 

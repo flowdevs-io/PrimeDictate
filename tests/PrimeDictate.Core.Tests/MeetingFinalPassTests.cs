@@ -495,6 +495,63 @@ public sealed class SystemChannelTests : IDisposable
         Assert.Contains("redone by speaker turn", result.ChannelReport);
     }
 
+    [Fact]
+    public async Task A_model_without_word_times_goes_straight_to_speaker_turns_and_labels_them()
+    {
+        Directory.CreateDirectory(this.root);
+        var path = Path.Combine(this.root, "stereo.wav");
+        using (var writer = new WavFileWriter(path, 16_000, 2))
+        {
+            var samples = new float[10 * 16_000 * 2];
+            for (var i = 0; i < 10 * 16_000; i++)
+            {
+                samples[(i * 2) + 1] = i / 16_000d is >= 2 and < 8 ? 0.1f * MathF.Sin(i * 0.07f) : 0f;
+            }
+
+            writer.Write(samples);
+        }
+
+        var store = SqliteTranscriptionSessionStore.Create(new AppDataPaths(this.root));
+        await store.InitializeAsync(CancellationToken.None);
+        var doc = NewDocument() with { SourceType = TranscriptSourceType.Meeting, Duration = TimeSpan.FromSeconds(10) };
+        doc = TranscriptDocumentReducer.Apply(doc, new SessionStarted(doc.SessionId, Run(1, "record-only")), Now);
+        doc = TranscriptDocumentReducer.Apply(doc, new SessionCompleted(doc.SessionId, TimeSpan.FromSeconds(10)), Now);
+        var host = new SessionDocumentHost(doc, store);
+        var provider = new TextOnlyProvider();
+
+        var result = await new MeetingFinalPass(new ModelLeaseScheduler()).RunAsync(
+            host, path, provider, _ => Task.FromResult<(DiarizationOverlay?, string?)>((new DiarizationOverlay([new("speaker_1", 2.0, 4.0), new("speaker_2", 5.5, 8.0)]), null)), "en-US", this.root, null, default);
+
+        await store.DisposeAsync();
+        SqliteConnection.ClearAllPools();
+        // One call per turn: the 10 s window was never sent as a whole, which would only have been redone.
+        Assert.Equal(2, provider.Calls);
+        Assert.Equal(["speaker-1", "speaker-2"], host.Document.ActiveSegments.Select(s => s.Speakers[0].SpeakerId));
+        Assert.Contains("redone by speaker turn", result.ChannelReport);
+    }
+
+    /// <summary>Text for each window and no word times, like every model but Nemotron.</summary>
+    private sealed class TextOnlyProvider : ITranscriptionProvider
+    {
+        public int Calls;
+
+        public string ModelId => "fake:model";
+
+        public TranscriptionProviderCapabilities Capabilities { get; } = new(true, LiveRecognitionMode.BufferedWindows, TimingCapabilities.SegmentTimestamps, false, null, TimeSpan.FromSeconds(30), ["en"], 16_000);
+
+        public EffectiveRuntime Runtime { get; } = new("fake", "1", "cpu", "cpu", null);
+
+        public ValueTask<IReadOnlyList<RecognizedSegment>> RecognizeWindowAsync(ReadOnlyMemory<float> samples, string? language, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref this.Calls);
+            return ValueTask.FromResult<IReadOnlyList<RecognizedSegment>>([new RecognizedSegment(TimeSpan.Zero, TimeSpan.FromSeconds(samples.Length / 16_000d), "some words", null, null, null, TimingProvenance.ApproximateChunk)]);
+        }
+
+        public ValueTask<IStreamingRecognitionSession> StartStreamingAsync(string? language, bool diarize, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
     /// <summary>Like the faithful recognizer, but a long window comes back as text only, with no word times.</summary>
     private sealed class NoWordsForLongWindows : ITranscriptionProvider
     {

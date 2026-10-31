@@ -53,6 +53,7 @@ public sealed partial class MainWindow : Window
     private int refreshQueued;
     private bool stickToBottom = true;
     private bool scrollingProgrammatically;
+    private readonly string? noSessionText;
 
     public TranscriptionWorkspaceService Workspace => this.workspace;
 
@@ -94,6 +95,7 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         this.InitializeComponent();
+        this.noSessionText = this.EmptyText.Text;
         this.PlatformText.Text = $"{RuntimeInformation.OSDescription} · {RuntimeInformation.ProcessArchitecture} · .NET {Environment.Version}";
         var dataDir = Environment.GetEnvironmentVariable("PRIMEDICTATE_DATA_DIR");
         this.workspace = new TranscriptionWorkspaceService(string.IsNullOrWhiteSpace(dataDir) ? null : new AppDataPaths(dataDir));
@@ -292,7 +294,16 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var model = run.AsrModelId.StartsWith("nemotron:", StringComparison.Ordinal) ? "Nemotron" : "Whisper";
+        if (run.AsrModelId == RecordOnlyProvider.Id)
+        {
+            this.BackendText.Text = "Recorded only";
+            this.BackendBadge.Opacity = 0.8;
+            return;
+        }
+
+        var model = run.AsrModelId.StartsWith("nemotron:", StringComparison.Ordinal)
+            ? "Nemotron"
+            : this.models.FirstOrDefault(m => m.ModelId == run.AsrModelId)?.DisplayName ?? "Whisper";
         var fellBack = !string.Equals(run.RequestedBackend, run.EffectiveBackend, StringComparison.OrdinalIgnoreCase) && run.RequestedBackend != "cpu";
         this.BackendText.Text = $"{model} on {run.EffectiveBackend}" + (fellBack ? $" (wanted {run.RequestedBackend})" : string.Empty);
         this.BackendBadge.Opacity = fellBack ? 1 : 0.8;
@@ -580,14 +591,16 @@ public sealed partial class MainWindow : Window
         this.UpdateJumpButton();
         var has = document is not null && document.ActiveSegments.Any();
         this.EmptyText.IsVisible = this.rows.Count == 0;
+        this.EmptyText.Text = this.EmptyMessage(document, has);
         this.CopyButton.IsEnabled = has;
         this.ExportButton.IsEnabled = has;
         var recording = this.Live is not null;
         var busy = recording || this.jobCancel is not null;
         this.DeleteButton.IsEnabled = document is not null && !busy;
-        this.RerunButton.IsEnabled = document is not null && !busy && this.SelectedModel is not null
-            && document.Audio.Count > 0 && document.SourceType == TranscriptSourceType.ImportedFile;
-        if (document is not null && (busy || document.Status is TranscriptSessionStatus.Failed or TranscriptSessionStatus.Interrupted))
+        this.RerunButton.IsEnabled = document is not null && !busy && this.SelectedModel is not null && document.Audio.Count > 0;
+        this.RerunButton.Content = document is null || has ? "Rerun with this model" : "Transcribe with this model";
+        // A meeting stays Completed during a rerun or the pass after Stop, so while that runs "Completed" would only hide what is going on.
+        if (document is not null && document.Status != TranscriptSessionStatus.Completed && (busy || document.Status is TranscriptSessionStatus.Failed or TranscriptSessionStatus.Interrupted))
         {
             this.StatusText.Text = $"{document.Title}: {document.Status}";
         }
@@ -597,6 +610,16 @@ public sealed partial class MainWindow : Window
             this.LevelText.Text = $"Recorded {(int)session.Elapsed.TotalMinutes}:{session.Elapsed.Seconds:00}" + (session.Backlog > TimeSpan.FromSeconds(5) ? $" · model is {session.Backlog.TotalSeconds:0}s behind" : string.Empty);
         }
     }
+
+    /// <summary>What the empty transcript area says, so a session without text explains itself.</summary>
+    private string? EmptyMessage(TranscriptDocument? document, bool hasText) => document switch
+    {
+        null => this.noSessionText,
+        _ when hasText => "No line matches this search.",
+        _ when this.Live?.Host?.Document.SessionId == document.SessionId => "Recording. The transcript will appear here.",
+        { Audio.Count: > 0 } when this.jobCancel is null => "No transcript yet. The audio is saved, so Transcribe with this model can make one.",
+        _ => "No transcript yet."
+    };
 
     private readonly Dictionary<string, TextBox> speakerBoxes = new(StringComparer.Ordinal);
 
@@ -848,8 +871,14 @@ public sealed partial class MainWindow : Window
 
     private async Task RerunAsync()
     {
-        if (this.host is null || this.SelectedModel is not { } model || this.jobCancel is not null)
+        if (this.host is not { } target || this.SelectedModel is not { } model || this.jobCancel is not null)
         {
+            return;
+        }
+
+        if (this.workspace.HasMeetingChannels(target.Document))
+        {
+            await this.FinalPassAsync(target, model);
             return;
         }
 
@@ -857,7 +886,6 @@ public sealed partial class MainWindow : Window
         {
             this.jobCancel = new CancellationTokenSource();
             this.SetJobUi(active: true, canStop: true);
-            var target = this.host;
             this.Say($"Rerunning with {model.DisplayName}; earlier results and edits are kept.");
             var progress = new Progress<ProgressChanged>(p => this.Progress.Value = p.Fraction ?? 0);
             await this.FinishJobAsync(this.workspace.RerunAsync(target, model, progress, this.jobCancel.Token), target);
@@ -1024,61 +1052,68 @@ public sealed partial class MainWindow : Window
 
     private async Task StopRecordingAsync()
     {
-        if (this.Live is null)
+        if (this.Live?.Host is not { } target)
         {
             this.jobCancel?.Cancel();
             return;
         }
 
-        var target = this.host;
         this.Say("Finishing the last words…");
         this.StopButton.IsEnabled = false;
         await this.workspace.StopLiveAsync(CancellationToken.None);
         this.Live = null;
         this.StopButton.IsEnabled = true;
         this.EndJob();
-        this.Say(target?.Document.Status == TranscriptSessionStatus.Completed ? "Saved." : $"Stopped: {target?.Document.Status}. What was captured is kept.");
-        await this.ReloadSessionsAsync(target?.Document.SessionId);
-        if (target is { Document.SourceType: TranscriptSourceType.Meeting } finalPassTarget && this.twoPassPlanned && target.Document.Status is TranscriptSessionStatus.Completed or TranscriptSessionStatus.Failed)
+        this.Say(target.Document.Status == TranscriptSessionStatus.Completed ? "Saved." : $"Stopped: {target.Document.Status}. What was captured is kept.");
+        await this.ReloadSessionsAsync(target.Document.SessionId);
+        if (target.Document.SourceType == TranscriptSourceType.Meeting && this.twoPassPlanned && target.Document.Status is TranscriptSessionStatus.Completed or TranscriptSessionStatus.Failed)
         {
-            await this.RunSafelyAsync(() => this.FinalPassAsync(finalPassTarget));
+            await this.RunSafelyAsync(() => this.FinalPassAsync(target));
         }
-        else if (target is { Document.SourceType: TranscriptSourceType.Meeting } meeting)
+        else if (target.Document.SourceType == TranscriptSourceType.Meeting)
         {
             this.Say("Saved. Redrawing the speaker timeline…");
-            await this.RunSafelyAsync(() => this.RefineTimelineAsync(meeting));
+            await this.RunSafelyAsync(() => this.RefineTimelineAsync(target));
             this.Say("Saved.");
         }
     }
 
     private bool twoPassPlanned;
 
-    /// <summary>Second pass of a two-pass meeting: the final transcript with speaker labels replaces the live draft.</summary>
-    private async Task FinalPassAsync(SessionDocumentHost target)
+    /// <summary>
+    /// Reads a meeting's recording channel by channel. Without <paramref name="model"/> it is the second pass of a two-pass meeting:
+    /// Nemotron with speaker labels replaces the live draft. With one it is a rerun, by that model.
+    /// </summary>
+    private async Task FinalPassAsync(SessionDocumentHost target, SpeechModelChoice? model = null)
     {
         this.jobCancel = new CancellationTokenSource();
         this.SetJobUi(active: true, canStop: true);
         this.Progress.IsIndeterminate = false;
         this.Progress.Value = 0;
-        this.Say("Recording saved. Transcribing it and labeling speakers…");
+        this.Say(model is null ? "Recording saved. Transcribing it and labeling speakers…" : $"Transcribing the recording with {model.DisplayName}; earlier results and edits are kept.");
         this.Progress.IsVisible = true;
         try
         {
             var progress = new Progress<double>(f => this.Progress.Value = f);
-            var result = await this.workspace.RunFinalPassAsync(target, progress, this.jobCancel.Token);
-            if (result is not null && ReferenceEquals(this.host, target))
+            var result = await this.workspace.RunFinalPassAsync(target, model, progress, this.jobCancel.Token);
+            if (result is null)
             {
-                this.Timeline.SetOverlay(result.Overlay?.MapTo(target.Document));
-                this.Say(result.Describe());
+                // The note says why, and this is the only place the window shows it.
+                this.Say(target.Document.Notes.LastOrDefault() ?? "The transcript stays as it was.");
             }
             else
             {
-                this.Say("Kept the live draft. The session notes say why the final pass did not replace it.");
+                if (ReferenceEquals(this.host, target))
+                {
+                    this.Timeline.SetOverlay(result.Overlay?.MapTo(target.Document));
+                }
+
+                this.Say(result.Describe());
             }
         }
         catch (OperationCanceledException)
         {
-            this.Say("Canceled. The live draft is kept.");
+            this.Say(model is null ? "Canceled. It runs again the next time PrimeDictate starts." : "Canceled. The transcript stays as it was.");
         }
         finally
         {
@@ -1089,7 +1124,7 @@ public sealed partial class MainWindow : Window
 
     private async Task DiscardRecordingAsync()
     {
-        var id = this.host?.Document.SessionId;
+        var id = this.Live?.Host?.Document.SessionId;
         await this.workspace.DiscardLiveAsync();
         this.Live = null;
         this.EndJob();

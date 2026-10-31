@@ -43,6 +43,12 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     private LiveTranscriptionSession? starting;
     // Set while a stop is in flight: StopLiveAsync clears live first, and exit must still reach that session.
     private LiveTranscriptionSession? stopping;
+    // One document per session, for as long as anything holds it. A second copy loaded from the database misses what the first
+    // does next, and saving it writes its old state back over the session: a meeting clicked away from and back to while it
+    // recorded came out of Stop as a stale Running copy, which skipped its after-Stop pass.
+    private readonly Dictionary<Guid, WeakReference<SessionDocumentHost>> openHosts = [];
+    // Set once the app is leaving: an exit takes the worker down under a running pass, which then looks like a failure.
+    private volatile bool closing;
 
     public TranscriptionWorkspaceService(AppDataPaths? paths = null, IAudioSource? audioSource = null, bool probeMicrophone = true)
     {
@@ -84,6 +90,9 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     public bool CanRecordSystemAudio => this.systemAudioSource is not null;
 
     public string? SystemAudioUnavailableReason { get; private set; }
+
+    /// <summary>Tests only: stands in for an installed speech model.</summary>
+    internal Func<SpeechModelChoice, ITranscriptionProvider?>? ProviderOverride { get; set; }
 
     public LiveTranscriptionSession? ActiveLiveSession => this.live;
 
@@ -306,10 +315,39 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     public ValueTask<IReadOnlyList<TranscriptSessionSummary>> ListSessionsAsync(CancellationToken cancellationToken) =>
         this.store.ListAsync(0, 200, cancellationToken);
 
+    /// <summary>The session's document: the one already in use when it is recording or being transcribed, else loaded from the database.</summary>
     public async ValueTask<SessionDocumentHost?> OpenSessionAsync(Guid id, CancellationToken cancellationToken)
     {
+        if (this.OpenHost(id) is { } open)
+        {
+            return open;
+        }
+
         var document = await this.store.LoadAsync(id, cancellationToken).ConfigureAwait(false);
-        return document is null ? null : new SessionDocumentHost(document, this.store);
+        return document is null ? null : this.Keep(new SessionDocumentHost(document, this.store));
+    }
+
+    private SessionDocumentHost? OpenHost(Guid id)
+    {
+        lock (this.openHosts)
+        {
+            return this.openHosts.TryGetValue(id, out var known) && known.TryGetTarget(out var host) ? host : null;
+        }
+    }
+
+    private SessionDocumentHost Keep(SessionDocumentHost host)
+    {
+        lock (this.openHosts)
+        {
+            var id = host.Document.SessionId;
+            if (this.OpenHost(id) is { } open)
+            {
+                return open;
+            }
+
+            this.openHosts[id] = new WeakReference<SessionDocumentHost>(host);
+            return host;
+        }
     }
 
     public async Task<MediaProbeResult> ProbeAsync(string path, CancellationToken cancellationToken) =>
@@ -345,6 +383,11 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
             if (model.ModelId == RecordOnlyProvider.Id)
             {
                 return new RecordOnlyProvider();
+            }
+
+            if (this.ProviderOverride?.Invoke(model) is { } standIn)
+            {
+                return standIn;
             }
 
             if (this.providers.TryGetValue(model.ModelId, out var existing))
@@ -413,7 +456,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         // The media directory depends on the session id, which exists only after creation; the runner
         // receives it in the request used for the run, so create the session first.
         var probeRequest = new FileJobRequest(path, Path.GetFileNameWithoutExtension(path), options, stream.Index, true, string.Empty);
-        var host = await this.runner.CreateSessionAsync(probeRequest, this.decoder, cancellationToken).ConfigureAwait(false);
+        var host = this.Keep(await this.runner.CreateSessionAsync(probeRequest, this.decoder, cancellationToken).ConfigureAwait(false));
         var request = probeRequest with { SessionMediaDirectory = this.store.GetSessionMediaDirectory(host.Document.SessionId) };
         var completion = this.RunAsync(host, request, model, progress, cancellationToken);
         return (host, completion);
@@ -474,6 +517,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
             await session.StartAsync(cancellationToken).ConfigureAwait(false);
             if (session.Host is { } liveHost)
             {
+                this.Keep(liveHost);
                 NoteFallback(liveHost, await this.ProviderAsync(model, cancellationToken).ConfigureAwait(false));
             }
         }
@@ -557,22 +601,27 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     /// <summary>True when Nemotron and its diarizer are installed, so a finished meeting can get a final pass with speaker labels.</summary>
     public bool FinalPassAvailable => this.nemotron.Any(n => n.Files.DiarizerPath is not null);
 
+    /// <summary>True for a meeting recorded with its two channels: a rerun keeps them apart, the way the pass after Stop does.</summary>
+    public bool HasMeetingChannels(TranscriptDocument document) =>
+        document.SourceType == TranscriptSourceType.Meeting && File.Exists(Path.Combine(this.store.GetSessionMediaDirectory(document.SessionId), "recording-16k-stereo.wav"));
+
     /// <summary>
-    /// The second pass of a two-pass meeting: reads the saved stereo recording with Nemotron and the whole-recording
-    /// diarizer and replaces the live draft with the final transcript, speaker labels and overlap. The notes say what
-    /// happened and are saved. A failure leaves the draft as it was.
+    /// Reads a meeting's saved stereo recording one channel at a time and replaces its transcript with the result, speaker labels
+    /// and overlap included. Without <paramref name="model"/> this is the second pass of a two-pass meeting: Nemotron and the
+    /// whole-recording diarizer. With one it is a rerun by that model, and the diarizer is used when it is installed. The notes
+    /// say what happened and are saved. A failure leaves the transcript as it was.
     /// </summary>
-    public async Task<FinalPassResult?> RunFinalPassAsync(SessionDocumentHost host, IProgress<double>? progress, CancellationToken cancellationToken)
+    public async Task<FinalPassResult?> RunFinalPassAsync(SessionDocumentHost host, SpeechModelChoice? model, IProgress<double>? progress, CancellationToken cancellationToken)
     {
-        try
+        var result = await this.RunFinalPassCoreAsync(host, model, progress, cancellationToken).ConfigureAwait(false);
+        // The marker goes once the pass has had its turn. One that was canceled never gets here, and one the app took down on its
+        // way out only looks failed, so both keep it for the next launch. A failed rerun leaves the marker as it found it.
+        if (result is not null || (model is null && !this.closing))
         {
-            return await this.RunFinalPassCoreAsync(host, progress, cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            // Whatever happened, the pass has had its turn; only an app exit before it ran leaves the marker for the next launch.
             this.ClearFinalPassPending(host.Document.SessionId);
         }
+
+        return result;
     }
 
     /// <summary>Remembers that this meeting still needs its after-Stop pass, so an exit before it runs does not leave a draft forever.</summary>
@@ -608,7 +657,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     {
         var probe = await this.decoder.ProbeAsync(stereo, cancellationToken).ConfigureAwait(false);
         var duration = probe.Duration ?? TimeSpan.Zero;
-        if (host.Document.Status == TranscriptSessionStatus.Failed)
+        if (host.Document.Status is TranscriptSessionStatus.Failed or TranscriptSessionStatus.Canceled)
         {
             host.SetStatus(TranscriptSessionStatus.Running);
         }
@@ -620,7 +669,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         await host.CheckpointAsync(CancellationToken.None).ConfigureAwait(false);
     }
 
-    private async Task<FinalPassResult?> RunFinalPassCoreAsync(SessionDocumentHost host, IProgress<double>? progress, CancellationToken cancellationToken)
+    private async Task<FinalPassResult?> RunFinalPassCoreAsync(SessionDocumentHost host, SpeechModelChoice? model, IProgress<double>? progress, CancellationToken cancellationToken)
     {
         async Task NoteAsync(string text)
         {
@@ -631,53 +680,61 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
         var document = host.Document;
         var directory = this.store.GetSessionMediaDirectory(document.SessionId);
         var stereo = Path.Combine(directory, "recording-16k-stereo.wav");
-        if (document.SourceType == TranscriptSourceType.Meeting && document.Status is TranscriptSessionStatus.Interrupted or TranscriptSessionStatus.Failed && File.Exists(stereo))
+        if (document.SourceType == TranscriptSourceType.Meeting && document.Status is TranscriptSessionStatus.Interrupted or TranscriptSessionStatus.Failed or TranscriptSessionStatus.Canceled && File.Exists(stereo))
         {
             await this.FinishCutShortRecordingAsync(host, stereo, cancellationToken).ConfigureAwait(false);
             document = host.Document;
         }
 
-        var choice = this.AvailableModels().FirstOrDefault(m => m.ModelId.StartsWith("nemotron:", StringComparison.Ordinal) && m.DetectsSpeakers);
-        var setup = choice is null ? null : this.nemotron.FirstOrDefault(n => $"nemotron:{n.Asr.Id}" == choice.ModelId);
-        if (document.SourceType != TranscriptSourceType.Meeting || document.Status != TranscriptSessionStatus.Completed || !File.Exists(stereo) || choice is null || setup is null)
+        var labeling = this.AvailableModels().FirstOrDefault(m => m.ModelId.StartsWith("nemotron:", StringComparison.Ordinal) && m.DetectsSpeakers);
+        var setup = labeling is null ? null : this.nemotron.FirstOrDefault(n => $"nemotron:{n.Asr.Id}" == labeling.ModelId);
+        var choice = model ?? labeling;
+        if (document.SourceType != TranscriptSourceType.Meeting || document.Status != TranscriptSessionStatus.Completed || !File.Exists(stereo) || choice is null || (model is null && setup is null))
         {
             await NoteAsync("Final pass with speaker labels was not run: it needs a finished meeting with a stereo recording and Nemotron with its diarizer installed.").ConfigureAwait(false);
             return null;
         }
 
-        if (document.Speakers.Any(s => s.Id is not ("local" or "remote")))
+        if (model is null && document.Speakers.Any(s => s.Id is not ("local" or "remote")))
         {
             await NoteAsync("Final pass with speaker labels was not run: this meeting already has speaker labels from a live diarized pass.").ConfigureAwait(false);
             return null;
         }
 
+        var label = model is null ? "Final pass" : "Rerun";
         try
         {
-            await NoteAsync($"Improving the transcript with speaker labels after Stop (running). The live text stays as the draft until it is done.").ConfigureAwait(false);
-            await this.ProviderAsync(choice, cancellationToken).ConfigureAwait(false); // starts the worker if it is not running
-            var worker = this.nemotronWorker ?? throw new InvalidOperationException("The Nemotron worker is not running.");
-            await using var asr = new NemotronProvider(worker, choice.ModelId, false);
+            await NoteAsync(model is null
+                ? "Improving the transcript with speaker labels after Stop (running). The live text stays as the draft until it is done."
+                : $"Rerunning the recording with {model.DisplayName} (running). The transcript stays as it is until it is done.").ConfigureAwait(false);
+            var chosen = await this.ProviderAsync(choice, cancellationToken).ConfigureAwait(false); // starts the worker if it is not running
+            // Words only, from Nemotron too: speakers come from the whole-recording diarizer, not from each window.
+            await using var wordsOnly = chosen is NemotronProvider
+                ? new NemotronProvider(this.nemotronWorker ?? throw new InvalidOperationException("The Nemotron worker is not running."), choice.ModelId, false)
+                : null;
+            ITranscriptionProvider asr = wordsOnly ?? chosen;
+            NoteFallback(host, asr);
             var result = await new MeetingFinalPass(this.scheduler).RunAsync(
                 host,
                 stereo,
                 asr,
-                async ct => await this.RunDiarizerAsync(setup, stereo, directory, ct).ConfigureAwait(false),
+                async ct => setup is null ? (null, "The Nemotron diarizer is not installed.") : await this.RunDiarizerAsync(setup, stereo, directory, ct).ConfigureAwait(false),
                 choice.Language ?? this.Language,
                 directory,
                 progress,
                 cancellationToken).ConfigureAwait(false);
-            await NoteAsync($"Final pass ({asr.Runtime.EffectiveBackend}): {result.MicrophoneLines} lines from the microphone, {result.SystemLines} from the system audio, {result.SpeakerCount} system speakers ({result.Overlay?.Mode ?? "no"} diarization), {result.OverlapSeconds:0.#} s of overlapping speech. These rows replace the live draft, which is kept as the earlier result. Channels: {result.ChannelReport}."
+            await NoteAsync($"{label} ({asr.Runtime.EffectiveBackend}): {result.MicrophoneLines} lines from the microphone, {result.SystemLines} from the system audio, {result.SpeakerCount} system speakers ({result.Overlay?.Mode ?? "no"} diarization), {result.OverlapSeconds:0.#} s of overlapping speech. These rows replace the earlier result, which is kept. Channels: {result.ChannelReport}."
                 + (result.DiarizerProblem is { } problem ? $" Speakers could not be told apart: {problem}" : result.SystemLines == 0 ? " " + result.Describe() : string.Empty)).ConfigureAwait(false);
             return result;
         }
         catch (OperationCanceledException)
         {
-            await NoteAsync("Final pass canceled, so the live draft is kept.").ConfigureAwait(false);
+            await NoteAsync($"{label} canceled, so the transcript stays as it was.").ConfigureAwait(false);
             throw;
         }
         catch (Exception ex)
         {
-            await NoteAsync($"Final pass failed, so the live draft is kept: {ex.Message}").ConfigureAwait(false);
+            await NoteAsync($"{label} failed, so the transcript stays as it was: {ex.Message}").ConfigureAwait(false);
             return null;
         }
     }
@@ -769,6 +826,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
     /// </summary>
     public async Task StopLiveForExitAsync(TimeSpan timeout)
     {
+        this.closing = true;
         var session = this.live ?? this.stopping ?? this.starting;
         if (session is not null)
         {
@@ -873,6 +931,11 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
             await this.DiscardLiveAsync().ConfigureAwait(false);
         }
 
+        lock (this.openHosts)
+        {
+            this.openHosts.Remove(id);
+        }
+
         return await this.store.DeleteAsync(id, cancellationToken).ConfigureAwait(false);
     }
 
@@ -884,6 +947,7 @@ public sealed class TranscriptionWorkspaceService : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        this.closing = true;
         await this.DiscardLiveAsync().ConfigureAwait(false);
         if ((this.stopping ?? this.starting) is { } inFlight)
         {

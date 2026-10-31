@@ -76,7 +76,8 @@ public sealed class FileTranscriptionRunner(ModelLeaseScheduler scheduler, ITran
 
     /// <summary>
     /// Runs recognition into <paramref name="host"/>. A rerun on an existing session uses a new
-    /// result version and leaves earlier results and their edits in place.
+    /// result version and leaves earlier results and their edits in place. A rerun that does not
+    /// finish leaves the transcript that was on screen there.
     /// </summary>
     public async Task RunAsync(
         SessionDocumentHost host,
@@ -86,8 +87,9 @@ public sealed class FileTranscriptionRunner(ModelLeaseScheduler scheduler, ITran
         IProgress<ProgressChanged>? progress,
         CancellationToken cancellationToken)
     {
-        var sessionId = host.Document.SessionId;
-        var resultVersion = host.Document.Runs.Count == 0 ? 1 : host.Document.Runs.Max(r => r.ResultVersion) + 1;
+        var earlier = host.Document;
+        var sessionId = earlier.SessionId;
+        var resultVersion = earlier.Runs.Count == 0 ? 1 : earlier.Runs.Max(r => r.ResultVersion) + 1;
         var run = new RecognitionRunInfo(
             resultVersion,
             provider.ModelId,
@@ -202,7 +204,11 @@ public sealed class FileTranscriptionRunner(ModelLeaseScheduler scheduler, ITran
         catch (OperationCanceledException)
         {
             writer?.Flush();
-            host.SetStatus(TranscriptSessionStatus.Canceled);
+            if (!KeepEarlierResult(host, earlier))
+            {
+                host.SetStatus(TranscriptSessionStatus.Canceled);
+            }
+
             await host.CheckpointAsync(CancellationToken.None).ConfigureAwait(false);
             throw;
         }
@@ -211,7 +217,15 @@ public sealed class FileTranscriptionRunner(ModelLeaseScheduler scheduler, ITran
             writer?.Flush();
             var code = ex is MediaDecodeException m ? m.ErrorCode : "transcription-failed";
             // Message is technical. It never contains transcript text.
-            host.Apply(new SessionFailed(sessionId, code, $"{ex.GetType().Name}: {ex.Message}", Recoverable: true));
+            if (KeepEarlierResult(host, earlier))
+            {
+                host.AddNote($"The rerun failed, so the transcript stays as it was: {ex.GetType().Name}: {ex.Message}");
+            }
+            else
+            {
+                host.Apply(new SessionFailed(sessionId, code, $"{ex.GetType().Name}: {ex.Message}", Recoverable: true));
+            }
+
             await host.CheckpointAsync(CancellationToken.None).ConfigureAwait(false);
             throw;
         }
@@ -219,6 +233,21 @@ public sealed class FileTranscriptionRunner(ModelLeaseScheduler scheduler, ITran
         {
             writer?.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Puts the session back as it was when there was a transcript before this run, so an unfinished rerun does not take it off
+    /// the screen. What the rerun got so far stays stored under its own result version.
+    /// </summary>
+    private static bool KeepEarlierResult(SessionDocumentHost host, TranscriptDocument earlier)
+    {
+        if (!earlier.ActiveSegments.Any())
+        {
+            return false;
+        }
+
+        host.Modify(d => d with { Status = earlier.Status, ActiveResultVersion = earlier.ActiveResultVersion, Language = earlier.Language });
+        return true;
     }
 
     private static SpeechChunkerOptions ChunkerFor(ITranscriptionProvider provider)
