@@ -136,7 +136,8 @@ public class TranscriptTests
     [InlineData(TranscriptSessionStatus.Paused, TranscriptSessionStatus.Running, true)]
     [InlineData(TranscriptSessionStatus.Running, TranscriptSessionStatus.Completed, false)]
     [InlineData(TranscriptSessionStatus.Finalizing, TranscriptSessionStatus.Completed, true)]
-    [InlineData(TranscriptSessionStatus.Canceled, TranscriptSessionStatus.Running, false)]
+    [InlineData(TranscriptSessionStatus.Canceled, TranscriptSessionStatus.Running, true)]
+    [InlineData(TranscriptSessionStatus.Canceled, TranscriptSessionStatus.Finalizing, false)]
     [InlineData(TranscriptSessionStatus.Interrupted, TranscriptSessionStatus.Finalizing, true)]
     [InlineData(TranscriptSessionStatus.Completed, TranscriptSessionStatus.Running, true)]
     public void State_machine_allows_only_defined_transitions(TranscriptSessionStatus from, TranscriptSessionStatus to, bool allowed)

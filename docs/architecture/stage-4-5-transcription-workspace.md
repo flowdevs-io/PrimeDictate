@@ -8,7 +8,8 @@ The Avalonia shell (`src/PrimeDictate.Desktop`) now has a working Transcription 
 - **Record**: microphone capture (miniaudio through SoundFlow), Pause, Resume, Stop, Discard. Recording captures your voice only, not other people on a call.
 - **Buffered Live**: silence ends an utterance, never the session. The current utterance is re-recognized about every 1.5 s and shown grayed, then replaced in place by the final text. Audio is written to a recoverable WAV as it arrives.
 - **Edit, search, copy, export**: edits are stored apart from the recognizer text. Export formats are text, Markdown, JSON, SRT and WebVTT. Copy puts text on the clipboard and never types it anywhere.
-- **Sessions**: SQLite under `%LocalAppData%\PrimeDictate\transcription` (or the platform equivalent). Rerun with another model adds a new result version and keeps earlier results and edits. Deleting a session removes audio the app owns and never the original file.
+- **Sessions**: SQLite under `%LocalAppData%\PrimeDictate\transcription` (or the platform equivalent). Rerun with another model adds a new result version and keeps earlier results and edits, on an import or a recording, however the session ended; a session with no text calls it "Transcribe with this model". A rerun that does not finish leaves the transcript that was on screen. Deleting a session removes audio the app owns and never the original file.
+- **One document per session**: `TranscriptionWorkspaceService.OpenSessionAsync` returns the document already in use while a session records or is transcribed. A copy loaded from the database would miss what the first does next, and saving it would write its old status over the session. The window can show one session while recording another, so the recording's own document comes from `Live.Host`, not from what is on screen.
 - Transcription never types into other apps, matches voice commands, runs commands from transcript text, or logs transcript text.
 
 ## Verified on Linux (not on Windows)
@@ -101,6 +102,13 @@ recognizer and a stand-in diarizer on Linux, not on Windows with the real worker
    - Nothing is written until everything succeeded. The rows become a new result version and replace the draft; the draft
      stays stored as the earlier result. The overlap segments are saved as `system-diarization.json` and drive the timeline.
    - The session notes say when the pass started and what it produced or why it failed.
+   - `final-pass-pending` in the session's media folder means the pass is still owed, and the next launch runs it (newest
+     first, one per launch). The pass removes it when it has had its turn: done, failed, or skipped with a note. A canceled
+     pass keeps it, and so does one the app took down while exiting, since an exit kills the worker under the pass.
+3. **Rerun** of a meeting with both channels is this same pass by the model in the picker, so You and the other people stay
+   apart. The diarizer is used when it is installed; without it the system side is one "Remote" speaker. Every model but
+   Nemotron returns text without word times, so with a diarizer the system channel goes straight to speaker turns. A meeting
+   whose `final-pass-pending` was lost, or that was never meant to get the pass, is recovered this way.
 
 Live Nemotron (two streams) stays available; it is chosen by picking a Nemotron model, and it keeps the existing
 after-Stop timeline redraw.

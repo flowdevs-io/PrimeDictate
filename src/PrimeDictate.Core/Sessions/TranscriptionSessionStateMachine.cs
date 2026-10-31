@@ -23,7 +23,8 @@ public static class TranscriptionSessionStateMachine
         [TranscriptSessionStatus.Completed] = [TranscriptSessionStatus.Running],
         [TranscriptSessionStatus.Failed] = [TranscriptSessionStatus.Running, TranscriptSessionStatus.Canceled],
         [TranscriptSessionStatus.Interrupted] = [TranscriptSessionStatus.Running, TranscriptSessionStatus.Finalizing, TranscriptSessionStatus.Canceled],
-        [TranscriptSessionStatus.Canceled] = []
+        // Canceling keeps the audio, so a rerun can still make a transcript from it.
+        [TranscriptSessionStatus.Canceled] = [TranscriptSessionStatus.Running]
     };
 
     public static bool CanTransition(TranscriptSessionStatus from, TranscriptSessionStatus to) =>

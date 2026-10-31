@@ -34,7 +34,8 @@ public sealed record FinalPassResult(int ResultVersion, int MicrophoneLines, int
 /// is transcribed and each word takes the speaker the whole-recording diarizer heard at that moment. Speaker numbers
 /// therefore mean the same person across the whole meeting, which per-window diarization cannot promise. The rows are cut
 /// from each channel's words (see <see cref="BuildRows"/>) and shown as they are. Nothing is written until everything has
-/// succeeded, so a failure leaves the draft untouched; the draft stays stored as the earlier result.
+/// succeeded, so a failure leaves the draft untouched; the draft stays stored as the earlier result. Rerunning a meeting
+/// is this same pass, by the model the user chose.
 /// </summary>
 public sealed class MeetingFinalPass(ModelLeaseScheduler scheduler)
 {
@@ -57,6 +58,7 @@ public sealed class MeetingFinalPass(ModelLeaseScheduler scheduler)
         // Long windows give the recognizer the most context; each word then takes the diarizer speaker at its time. Only a window
         // that comes back without word times is redone turn by turn (needs the audio, so it is kept when a diarizer ran).
         var keepPcm = diar.Count > 0;
+        var hasWordTimes = asr.Capabilities.Timing.HasFlag(TimingCapabilities.WordTimestamps);
         var systemPcm = keepPcm ? new List<short>() : null;
         var fallbackWindows = new List<(double Start, double End)>();
         var turnCounter = 0;
@@ -93,6 +95,13 @@ public sealed class MeetingFinalPass(ModelLeaseScheduler scheduler)
                 stats[channel] = st;
                 if (!chunk.ContainsSpeech)
                 {
+                    continue;
+                }
+
+                // A model without word times could only redo this window by speaker turn, so it goes straight there.
+                if (channel == 1 && keepPcm && !hasWordTimes)
+                {
+                    fallbackWindows.Add((chunk.Start.TotalSeconds, (chunk.Start + chunk.Duration).TotalSeconds));
                     continue;
                 }
 

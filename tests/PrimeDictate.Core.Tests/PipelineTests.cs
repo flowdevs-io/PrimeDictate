@@ -250,6 +250,81 @@ public sealed class PipelineTests : IDisposable
     }
 
     [Fact]
+    public async Task A_canceled_rerun_leaves_the_transcript_on_screen_and_can_be_run_again()
+    {
+        var paths = new AppDataPaths(this.root);
+        await using var store = SqliteTranscriptionSessionStore.Create(paths);
+        await store.InitializeAsync(default);
+        var original = Path.Combine(this.root, "original.wav");
+        await File.WriteAllTextAsync(original, "x");
+        var runner = new FileTranscriptionRunner(new ModelLeaseScheduler(), store);
+        var decoder = new FakeDecoder(Join(Tone(20), Silence(0.8), Tone(20)));
+        var request = new FileJobRequest(original, "Call", Options(AudioRetention.KeepAudio), 0, false, this.root);
+        var host = await runner.CreateSessionAsync(request, decoder, default);
+        await runner.RunAsync(host, request, decoder, new FakeProvider(_ => "first"), null, default);
+        using var cts = new CancellationTokenSource();
+        var cancels = new FakeProvider(n =>
+        {
+            cts.Cancel();
+            return $"partial {n}";
+        });
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => runner.RunAsync(host, request, decoder, cancels, null, cts.Token));
+
+        Assert.Equal(TranscriptSessionStatus.Completed, host.Document.Status);
+        Assert.All(host.Document.ActiveSegments, s => Assert.Equal("first", s.RawText));
+        var saved = await store.LoadAsync(host.Document.SessionId, default);
+        Assert.Equal(1, saved!.ActiveResultVersion);
+
+        await runner.RunAsync(host, request, decoder, new FakeProvider(_ => "third"), null, default);
+        Assert.All(host.Document.ActiveSegments, s => Assert.Equal("third", s.RawText));
+    }
+
+    [Fact]
+    public async Task A_failed_rerun_leaves_the_transcript_on_screen_and_says_why()
+    {
+        var paths = new AppDataPaths(this.root);
+        await using var store = SqliteTranscriptionSessionStore.Create(paths);
+        await store.InitializeAsync(default);
+        var original = Path.Combine(this.root, "original.wav");
+        await File.WriteAllTextAsync(original, "x");
+        var runner = new FileTranscriptionRunner(new ModelLeaseScheduler(), store);
+        var decoder = new FakeDecoder(Tone(5));
+        var request = new FileJobRequest(original, "Call", Options(AudioRetention.KeepAudio), 0, false, this.root);
+        var host = await runner.CreateSessionAsync(request, decoder, default);
+        await runner.RunAsync(host, request, decoder, new FakeProvider(_ => "first"), null, default);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => runner.RunAsync(host, request, decoder, new FakeProvider(_ => throw new InvalidOperationException("no model")), null, default));
+
+        Assert.Equal(TranscriptSessionStatus.Completed, host.Document.Status);
+        Assert.Equal("first", host.Document.ActiveSegments.Single().RawText);
+        Assert.Contains("no model", host.Document.Notes.Single(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_session_canceled_before_it_had_a_transcript_can_be_run_again()
+    {
+        var paths = new AppDataPaths(this.root);
+        await using var store = SqliteTranscriptionSessionStore.Create(paths);
+        await store.InitializeAsync(default);
+        var original = Path.Combine(this.root, "o.wav");
+        await File.WriteAllTextAsync(original, "x");
+        var runner = new FileTranscriptionRunner(new ModelLeaseScheduler(), store);
+        var decoder = new FakeDecoder(Join(Tone(20), Silence(0.8), Tone(20)));
+        var request = new FileJobRequest(original, "Call", Options(AudioRetention.KeepAudio), 0, false, this.root);
+        var host = await runner.CreateSessionAsync(request, decoder, default);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => runner.RunAsync(host, request, decoder, new FakeProvider(_ => "x"), null, cts.Token));
+        Assert.Equal(TranscriptSessionStatus.Canceled, host.Document.Status);
+
+        await runner.RunAsync(host, request, decoder, new FakeProvider(_ => "done"), null, default);
+
+        Assert.Equal(TranscriptSessionStatus.Completed, host.Document.Status);
+        Assert.All(host.Document.ActiveSegments, s => Assert.Equal("done", s.RawText));
+    }
+
+    [Fact]
     public async Task Transcript_only_retention_deletes_owned_audio_but_never_the_original()
     {
         var paths = new AppDataPaths(this.root);

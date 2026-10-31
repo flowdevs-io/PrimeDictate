@@ -66,7 +66,8 @@
           <Button x:Name="PauseButton" Content="Pause" IsVisible="False" />
           <Button x:Name="StopButton" Content="Stop" IsVisible="False" />
           <Button x:Name="DiscardButton" Content="Discard" IsVisible="False" />
-          <Button x:Name="RerunButton" Content="Rerun with this model" IsEnabled="False" />
+          <Button x:Name="RerunButton" Content="Rerun with this model" IsEnabled="False"
+                  ToolTip.Tip="Makes a new transcript from this session's saved audio. Earlier results and your edits are kept. A meeting keeps You and the other people apart." />
           <ProgressBar x:Name="Progress" Width="140" Minimum="0" Maximum="1" IsVisible="False" VerticalAlignment="Center" />
         </StackPanel>
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,8">
