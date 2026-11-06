@@ -1,3 +1,5 @@
+using PrimeDictate.Core.Diagnostics;
+using PrimeDictate.Core.Dictation;
 using PrimeDictate.Core.Providers;
 using PrimeDictate.Core.Transcripts;
 using SherpaOnnx;
@@ -48,7 +50,7 @@ public abstract class SherpaOfflineProvider : ITranscriptionProvider
         try
         {
             var copy = samples.ToArray();
-            var text = await Task.Run(() => this.Decode(copy, language), cancellationToken).ConfigureAwait(false);
+            var text = await Task.Run(() => this.DecodeWindow(copy, language), cancellationToken).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(text))
             {
                 return [];
@@ -80,7 +82,10 @@ public abstract class SherpaOfflineProvider : ITranscriptionProvider
         }
     }
 
-    private string Decode(float[] samples, string? language)
+    /// <summary>Decodes one window. Runs under the gate on a worker thread.</summary>
+    protected virtual string DecodeWindow(float[] samples, string? language) => this.Decode(samples, language);
+
+    protected string Decode(float[] samples, string? language)
     {
         var recognizer = this.recognizer ??= this.Load(language);
         using var stream = recognizer.CreateStream();
@@ -128,6 +133,36 @@ public sealed class SherpaWhisperProvider(InstalledWhisperModel model)
         // English-only models must be told "en"; multilingual models detect the language when it is empty.
         config.ModelConfig.Whisper.Language = model.IsEnglishOnly ? "en" : (language is null or "auto" ? string.Empty : language.Split('-')[0].ToLowerInvariant());
         config.ModelConfig.Whisper.Task = "transcribe";
+    }
+
+    /// <summary>
+    /// Whisper can lock onto one word and repeat it to the end of the window, losing the rest of the speech. When that happens the window is
+    /// decoded again in two halves, split at a quiet point, which usually gets the speech back; any loop left over is collapsed to one occurrence.
+    /// </summary>
+    protected override string DecodeWindow(float[] samples, string? language)
+    {
+        var text = this.Decode(samples, language);
+        var looped = RepetitionLoops.LoopedWordCount(text);
+        if (looped == 0)
+        {
+            return text;
+        }
+
+        var seconds = samples.Length / 16_000d;
+        var retried = looped;
+        if (seconds >= 4)
+        {
+            var halves = AudioChunker.Split(samples, TimeSpan.FromSeconds((seconds / 2) + 1));
+            var again = string.Join(' ', halves.Select(half => this.Decode(half.ToArray(), language)).Where(t => t.Length > 0));
+            retried = RepetitionLoops.LoopedWordCount(again);
+            if (retried < looped)
+            {
+                text = again;
+            }
+        }
+
+        AppLog.Event("whisper", $"Repetition loop in a {seconds:0.0} s window ({looped} repeated words); split decode left {Math.Min(looped, retried)}.");
+        return RepetitionLoops.Collapse(text);
     }
 }
 
