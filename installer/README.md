@@ -52,7 +52,7 @@ PrimeDictate publishes to winget from the same tagged release pipeline as the MS
 2. Push the "Release <version>" commit to `main`. Merging into `main` publishes nothing by itself.
 3. Create and push tag `v<version>` (for example `v6.0.0`).
 4. The `build.yml` tag run will:
-   - build x64 and ARM64 publish payloads + online MSIs, signed when the Azure Key Vault secrets are set,
+   - build x64 and ARM64 publish payloads + online MSIs, signed when the Azure Key Vault secrets are set (see Code signing below),
    - attach both MSIs and checksum files to the matching GitHub Release,
    - pack and push the Chocolatey package (it then waits in Chocolatey moderation),
    - generate and validate winget manifests from those MSI artifacts,
@@ -61,6 +61,10 @@ PrimeDictate publishes to winget from the same tagged release pipeline as the MS
 If `WINGET_CREATE_GITHUB_TOKEN` is missing, the workflow still builds assets and publishes to GitHub Releases, but skips winget submission.
 
 The winget and Chocolatey steps never fail the release, so a green run can still hide a warning: check both steps' logs after every release.
+
+### Code signing
+
+Tag builds run in the `release` GitHub environment, which only `v*` tags can use. The `codesign` Entra app has a federated credential for exactly that (subject `repo:flowdevs-io/PrimeDictate:environment:release`), so the run signs in to Azure with OIDC and there is no client secret to expire. The repository secrets `AZURESIGNTOOL_KEYVAULT_URL`, `AZURESIGNTOOL_CLIENT_ID`, `AZURESIGNTOOL_TENANT_ID` and `AZURESIGNTOOL_CERT_NAME` say where to sign; `AZURESIGNTOOL_TIMESTAMP_URL` is optional. Pull request and branch builds are never signed.
 
 ### When the winget step warns
 
