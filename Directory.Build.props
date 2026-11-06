@@ -2,8 +2,8 @@
   <PropertyGroup>
     <!-- ONNX Runtime used by the Qualcomm QNN path (Microsoft.ML.OnnxRuntime.QNN). Keep it equal to the version inside the sherpa-onnx package. -->
     <OnnxRuntimeVersion>1.24.4</OnnxRuntimeVersion>
-    <Version>6.1.2</Version>
-    <AssemblyVersion>6.1.2.0</AssemblyVersion>
-    <FileVersion>6.1.2.0</FileVersion>
+    <Version>6.1.3</Version>
+    <AssemblyVersion>6.1.3.0</AssemblyVersion>
+    <FileVersion>6.1.3.0</FileVersion>
   </PropertyGroup>
 </Project>

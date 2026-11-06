@@ -1,3 +1,9 @@
+# PrimeDictate 6.1.3
+
+## Fixes
+
+- Dictation with Whisper: on longer dictations Whisper could get stuck typing one word over and over ("like, like, like...") and lose what you said after it. PrimeDictate now notices the repeat, transcribes that stretch again in two shorter pieces to get your words back, and removes any repeats left over.
+
 # PrimeDictate 6.1.2
 
 ## Fixes
