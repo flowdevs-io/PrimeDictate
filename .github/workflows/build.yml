@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write # Azure sign-in for code signing (OIDC), no client secret
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.sha }}
@@ -27,6 +28,8 @@ concurrency:
 jobs:
   dotnet:
     runs-on: windows-latest
+    # Tag builds run in the "release" environment (v* tags only); the codesign Entra app trusts exactly that, through a federated credential.
+    environment: ${{ startsWith(github.ref, 'refs/tags/v') && 'release' || '' }}
     env:
       PUBLISH_ROOT: ${{ github.workspace }}\artifacts
       INSTALLER_DIR: ${{ github.workspace }}\artifacts\installer
@@ -103,14 +106,13 @@ jobs:
           AZURESIGNTOOL_KEYVAULT_URL: ${{ secrets.AZURESIGNTOOL_KEYVAULT_URL }}
           AZURESIGNTOOL_CLIENT_ID: ${{ secrets.AZURESIGNTOOL_CLIENT_ID }}
           AZURESIGNTOOL_TENANT_ID: ${{ secrets.AZURESIGNTOOL_TENANT_ID }}
-          AZURESIGNTOOL_CLIENT_SECRET: ${{ secrets.AZURESIGNTOOL_CLIENT_SECRET }}
           AZURESIGNTOOL_CERT_NAME: ${{ secrets.AZURESIGNTOOL_CERT_NAME }}
         run: |
-          $signingEnabled = -not (
+          # Signing signs in to Azure through OIDC, which only the release environment (tag builds) is trusted for.
+          $signingEnabled = $env:GITHUB_REF -like "refs/tags/v*" -and -not (
             [string]::IsNullOrWhiteSpace($env:AZURESIGNTOOL_KEYVAULT_URL) -or
             [string]::IsNullOrWhiteSpace($env:AZURESIGNTOOL_CLIENT_ID) -or
             [string]::IsNullOrWhiteSpace($env:AZURESIGNTOOL_TENANT_ID) -or
-            [string]::IsNullOrWhiteSpace($env:AZURESIGNTOOL_CLIENT_SECRET) -or
             [string]::IsNullOrWhiteSpace($env:AZURESIGNTOOL_CERT_NAME)
           )
 
@@ -158,26 +160,34 @@ jobs:
         shell: pwsh
         run: dotnet tool install --global AzureSignTool
 
+      - name: Azure sign-in for code signing (OIDC)
+        if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || !inputs.submit_winget_only) && steps.signing.outputs.enabled == 'true'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURESIGNTOOL_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURESIGNTOOL_TENANT_ID }}
+          allow-no-subscriptions: true
+
       - name: Sign publish payload binaries (Azure Key Vault)
         if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || !inputs.submit_winget_only) && steps.signing.outputs.enabled == 'true'
         shell: pwsh
         env:
           AZURESIGNTOOL_KEYVAULT_URL: ${{ secrets.AZURESIGNTOOL_KEYVAULT_URL }}
-          AZURESIGNTOOL_CLIENT_ID: ${{ secrets.AZURESIGNTOOL_CLIENT_ID }}
-          AZURESIGNTOOL_TENANT_ID: ${{ secrets.AZURESIGNTOOL_TENANT_ID }}
-          AZURESIGNTOOL_CLIENT_SECRET: ${{ secrets.AZURESIGNTOOL_CLIENT_SECRET }}
           AZURESIGNTOOL_CERT_NAME: ${{ secrets.AZURESIGNTOOL_CERT_NAME }}
           AZURESIGNTOOL_TIMESTAMP_URL: ${{ secrets.AZURESIGNTOOL_TIMESTAMP_URL }}
         run: |
           if (
             [string]::IsNullOrWhiteSpace($env:AZURESIGNTOOL_KEYVAULT_URL) -or
-            [string]::IsNullOrWhiteSpace($env:AZURESIGNTOOL_CLIENT_ID) -or
-            [string]::IsNullOrWhiteSpace($env:AZURESIGNTOOL_TENANT_ID) -or
-            [string]::IsNullOrWhiteSpace($env:AZURESIGNTOOL_CLIENT_SECRET) -or
             [string]::IsNullOrWhiteSpace($env:AZURESIGNTOOL_CERT_NAME)
           ) {
             throw "Signing secrets are missing. Configure AZURESIGNTOOL_* repository secrets."
           }
+
+          $accessToken = az account get-access-token --resource https://vault.azure.net --query accessToken -o tsv
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($accessToken)) {
+            throw "Could not get a Key Vault access token from the Azure sign-in."
+          }
+          Write-Host "::add-mask::$accessToken"
 
           $timestampUrl = if ([string]::IsNullOrWhiteSpace($env:AZURESIGNTOOL_TIMESTAMP_URL)) { "http://timestamp.globalsign.com/tsa/advanced" } else { $env:AZURESIGNTOOL_TIMESTAMP_URL }
 
@@ -198,9 +208,7 @@ jobs:
 
             azuresigntool sign `
               -kvu $env:AZURESIGNTOOL_KEYVAULT_URL `
-              -kvi $env:AZURESIGNTOOL_CLIENT_ID `
-              -kvt $env:AZURESIGNTOOL_TENANT_ID `
-              -kvs $env:AZURESIGNTOOL_CLIENT_SECRET `
+              -kva $accessToken `
               -kvc $env:AZURESIGNTOOL_CERT_NAME `
               -tr $timestampUrl `
               -td sha256 `
@@ -223,21 +231,21 @@ jobs:
         shell: pwsh
         env:
           AZURESIGNTOOL_KEYVAULT_URL: ${{ secrets.AZURESIGNTOOL_KEYVAULT_URL }}
-          AZURESIGNTOOL_CLIENT_ID: ${{ secrets.AZURESIGNTOOL_CLIENT_ID }}
-          AZURESIGNTOOL_TENANT_ID: ${{ secrets.AZURESIGNTOOL_TENANT_ID }}
-          AZURESIGNTOOL_CLIENT_SECRET: ${{ secrets.AZURESIGNTOOL_CLIENT_SECRET }}
           AZURESIGNTOOL_CERT_NAME: ${{ secrets.AZURESIGNTOOL_CERT_NAME }}
           AZURESIGNTOOL_TIMESTAMP_URL: ${{ secrets.AZURESIGNTOOL_TIMESTAMP_URL }}
         run: |
           if (
             [string]::IsNullOrWhiteSpace($env:AZURESIGNTOOL_KEYVAULT_URL) -or
-            [string]::IsNullOrWhiteSpace($env:AZURESIGNTOOL_CLIENT_ID) -or
-            [string]::IsNullOrWhiteSpace($env:AZURESIGNTOOL_TENANT_ID) -or
-            [string]::IsNullOrWhiteSpace($env:AZURESIGNTOOL_CLIENT_SECRET) -or
             [string]::IsNullOrWhiteSpace($env:AZURESIGNTOOL_CERT_NAME)
           ) {
             throw "Signing secrets are missing. Configure AZURESIGNTOOL_* repository secrets."
           }
+
+          $accessToken = az account get-access-token --resource https://vault.azure.net --query accessToken -o tsv
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($accessToken)) {
+            throw "Could not get a Key Vault access token from the Azure sign-in."
+          }
+          Write-Host "::add-mask::$accessToken"
 
           $timestampUrl = if ([string]::IsNullOrWhiteSpace($env:AZURESIGNTOOL_TIMESTAMP_URL)) { "http://timestamp.globalsign.com/tsa/advanced" } else { $env:AZURESIGNTOOL_TIMESTAMP_URL }
           $msis = Get-ChildItem -Path $env:INSTALLER_DIR -Filter *.msi -File -ErrorAction SilentlyContinue
@@ -248,9 +256,7 @@ jobs:
           foreach ($msi in $msis) {
             azuresigntool sign `
               -kvu $env:AZURESIGNTOOL_KEYVAULT_URL `
-              -kvi $env:AZURESIGNTOOL_CLIENT_ID `
-              -kvt $env:AZURESIGNTOOL_TENANT_ID `
-              -kvs $env:AZURESIGNTOOL_CLIENT_SECRET `
+              -kva $accessToken `
               -kvc $env:AZURESIGNTOOL_CERT_NAME `
               -tr $timestampUrl `
               -td sha256 `
